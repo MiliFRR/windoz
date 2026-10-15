@@ -1,0 +1,9 @@
+# windoz: normalise line endings; CI runs the shell scripts on macOS.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.a binary
+*.xz binary

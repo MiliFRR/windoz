@@ -1,0 +1,17 @@
+# windoz build inputs and outputs (never committed)
+work/
+build/
+*.ipa
+.DS_Store
+Thumbs.db
+
+# The owner's local projects and experiments — not part of windoz
+CalculatorApp/
+IPAManager/
+MadeiraFork/
+Madeira/
+ipafrfr/
+multi-ipa/
+blox-fruits-autofarm.lua
+patch_madeira.py
+pr-description.md

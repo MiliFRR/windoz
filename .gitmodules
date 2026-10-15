@@ -1,0 +1,3 @@
+[submodule "madeira"]
+	path = madeira
+	url = https://github.com/willfaust/Madeira.git

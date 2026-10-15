@@ -1,0 +1,78 @@
+name: Build windoz IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: IPA (macOS, unsigned)
+    runs-on: macos-26
+    timeout-minutes: 350
+    env:
+      LLVM_COMMIT: 8dfdcc7b7bf66834a761bd8de445840ef68e4d1a
+    steps:
+      - name: Check out windoz + Madeira + runtime forks
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select newest Xcode
+        run: |
+          set -e
+          ls /Applications | grep -i xcode || true
+          XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
+
+      - name: Install build tools
+        run: |
+          set -e
+          brew install cmake ninja meson bison sevenzip
+          command -v rustup >/dev/null 2>&1 || brew install rustup
+          rustup target add aarch64-apple-ios || true
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+
+      - name: Cache LLVM
+        id: llvmcache
+        uses: actions/cache@v4
+        with:
+          path: |
+            madeira/toolchains/llvm-project
+            madeira/toolchains/llvm-host-build
+            madeira/toolchains/llvm-ios-build
+          key: llvm-${{ env.LLVM_COMMIT }}-v1
+
+      - name: Build LLVM for iOS
+        if: steps.llvmcache.outputs.cache-hit != 'true'
+        run: ./scripts/build-llvm.sh
+
+      - name: Fetch llvm-mingw toolchain
+        run: ./scripts/fetch-llvm-mingw.sh
+
+      - name: Fetch VC++ x64 runtime DLLs
+        run: ./scripts/fetch-vcruntime.sh
+
+      - name: Build runtime (Wine / FEX / DXMT / D3D12)
+        run: ./scripts/build-runtime.sh
+
+      - name: Build app (Debug, unsigned)
+        run: ./scripts/build-app.sh
+
+      - name: Assemble IPA
+        run: ./scripts/assemble-ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: windoz-unsigned-ipa
+          path: windoz.ipa
+          if-no-files-found: error
+          retention-days: 14

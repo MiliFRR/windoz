@@ -1,0 +1,5 @@
+// windoz overlay for Madeira's Xcode project — Phase 0 minimal rebrand.
+// Gives windoz its own bundle identifier (with the JIT helper following it,
+// per Madeira docs/JIT.md) so it can coexist with stock Madeira on device.
+// App display name and full visual rebrand land in later phases.
+MADEIRA_BUNDLE_IDENTIFIER = com.milifrr.windoz
