@@ -56,8 +56,20 @@ run bash "$ROOT/scripts/build-wineserver-base.sh"
 run bash build/wineserver/build.sh
 
 # --- Wine unix sides (need gnutls/ffmpeg/freetype + the wine build trees)
-run bash build/ntdll-unix/build.sh
-run bash build/win32u-unix/build.sh
+if ! bash build/ntdll-unix/build.sh; then
+  echo "=== ntdll-unix per-file compile errors ==="
+  for e in build/ntdll-unix/obj/*.err; do
+    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -60 "$e"; fi
+  done
+  exit 1
+fi
+if ! bash build/win32u-unix/build.sh; then
+  echo "=== win32u-unix per-file compile errors ==="
+  for e in build/win32u-unix/obj/*.err; do
+    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -60 "$e"; fi
+  done
+  exit 1
+fi
 
 # --- FEX
 run bash build/fex-ios/build.sh
