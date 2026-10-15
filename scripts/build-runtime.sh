@@ -86,6 +86,23 @@ if ! bash build/win32u-unix/build.sh; then
 fi
 
 # --- FEX
+# fex-ios/build.sh configures on first run, but two of FEX's CMake defaults
+# break under an iOS cross-configure on a clean machine (CI run #13):
+#  - CMAKE_SYSTEM_PROCESSOR comes up EMPTY -> "Unsupported processor type ."
+#  - TUNE_CPU=native probes /proc/cpuinfo, which "aborts the configure on
+#    macOS" (FEX's own comment in build/fex-arm64ec/build.sh)
+# Pre-configure here with exactly the script's options plus those two fixes;
+# the script then skips its own configure and builds.
+if [ ! -f FEX/build-ios/CMakeCache.txt ]; then
+  cmake -S FEX -B FEX/build-ios \
+    -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF \
+    -DBUILD_FEX_LINUX_TESTS=OFF -DENABLE_FEX_ALLOCATOR=OFF \
+    -DENABLE_ASSERTIONS=OFF -DENABLE_CLANG_THUNKS=ON -DENABLE_CCACHE=ON \
+    -DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78
+fi
 run bash build/fex-ios/build.sh
 run bash build/fex-arm64ec/build.sh
 

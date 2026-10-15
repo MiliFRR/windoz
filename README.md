@@ -188,6 +188,16 @@ order from a clean recursive clone.
   the use is inside a diagnostics-only process-stats log line. Fixed:
   idempotent build-time patch zeroes that one cosmetic term. Per-file error
   dumps widened to 400 lines so any further SDK surprises are visible at once.
+- **CI run #13 failed** at `fex-ios` configure: `Unsupported processor type .`
+  — with `-DCMAKE_SYSTEM_NAME=iOS`, CMake leaves `CMAKE_SYSTEM_PROCESSOR`
+  empty, so FEX's architecture check fails; and FEX's default
+  `TUNE_CPU=native` probes `/proc/cpuinfo`, which "aborts the configure on
+  macOS" (FEX's own comment). **Progress note: run #13 completed the entire
+  Wine layer** (ntdll-unix with the SDK patch, win32u-unix with freetype,
+  all wineserver pieces) — the Wine side of the runtime is proven. Fixed:
+  the pipeline pre-configures `FEX/build-ios` with the script's exact options
+  plus `-DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78`; the script
+  then skips its own configure and builds.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
