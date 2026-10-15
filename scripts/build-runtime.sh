@@ -157,6 +157,20 @@ run bash "$ROOT/scripts/build-dxmt-combined.sh"
 # (madeira/dxmt) and expects the llvm-mingw toolchain at dxmt/toolchains/
 # (CI run #16) — alias it to the real one, exactly like the build-macos alias.
 [ -e dxmt/toolchains ] || ln -s ../toolchains dxmt/toolchains
+# dxmt/src/winemetal/meson.build searches the WINE BUILD TREE for winecrt0,
+# ntdll and dbghelp under <build>/dlls/<m>/arm64ec-windows/ (CI run #17):
+#  - libwinecrt0.a actually lives in libs/wine/ — stage a copy where it looks;
+#  - dbghelp is not in GAME_MODULES and was never built — build it now
+#    (build-modules also refreshes the tracked farm copy, which is fine).
+if [ ! -f wine/build-arm64ec/libs/wine/libwinecrt0.a ]; then
+  run make -C wine/build-arm64ec -j "$JOBS" libs/wine
+fi
+mkdir -p wine/build-arm64ec/dlls/winecrt0/arm64ec-windows
+cp -f wine/build-arm64ec/libs/wine/libwinecrt0.a \
+      wine/build-arm64ec/dlls/winecrt0/arm64ec-windows/libwinecrt0.a
+if [ ! -f wine/build-arm64ec/dlls/dbghelp/arm64ec-windows/dbghelp.dll ]; then
+  run bash build/wine-pe/build-modules.sh dbghelp
+fi
 if [ ! -d dxmt/build-arm64ec ]; then
   run meson setup dxmt/build-arm64ec dxmt \
     -Dbuildtype=release \

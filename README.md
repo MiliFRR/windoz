@@ -228,6 +228,14 @@ order from a clean recursive clone.
   `build-dxmt-combined.sh` produced `libdxmt_combined.a`. Fixed: symlink
   `dxmt/toolchains` → `../toolchains` before the meson setup (same alias
   pattern as `wine/build-macos`).
+- **CI run #17 failed** at dxmt winemetal meson setup:
+  `C shared or static library 'winecrt0' not found` — the meson file searches
+  the WINE BUILD TREE at `<build>/dlls/winecrt0|ntdll|dbghelp/arm64ec-windows/`.
+  wine's actual `libwinecrt0.a` lives in `libs/wine/` (searched paths miss
+  it), and dbghelp was never built (not in GAME_MODULES). Fixed: build
+  `libs/wine`, stage `libwinecrt0.a` into the searched location, and build
+  dbghelp via `build/wine-pe/build-modules.sh dbghelp` (also refreshes the
+  tracked farm copy).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
