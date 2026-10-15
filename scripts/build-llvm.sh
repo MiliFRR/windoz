@@ -34,6 +34,9 @@ if [ ! -x llvm-host-build/bin/llvm-tblgen ]; then
 fi
 
 # iOS build, per the recorded options.
+# Note: iOS treats executables as app bundles, so LLVM's install rules for its
+# build tools would fail configure. We never install LLVM (DXMT links the
+# build-tree libraries), so we skip all install rules.
 if [ ! -f llvm-ios-build/CMakeCache.txt ]; then
   cmake -S llvm-project/llvm -B llvm-ios-build -G Ninja \
     -DCMAKE_SYSTEM_NAME=iOS \
@@ -48,6 +51,7 @@ if [ ! -f llvm-ios-build/CMakeCache.txt ]; then
     -DLLVM_BUILD_TOOLS=Off \
     -DLLVM_INCLUDE_TESTS=Off \
     -DLLVM_ENABLE_ZLIB=Off \
+    -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON \
     -DLLVM_TABLEGEN="$PWD/llvm-host-build/bin/llvm-tblgen" \
     -DLLVM_NATIVE_TOOL_DIR="$PWD/llvm-host-build/bin"
 fi

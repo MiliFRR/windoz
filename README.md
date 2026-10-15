@@ -97,6 +97,12 @@ order from a clean recursive clone.
   (pre-17). Fixed: host build now produces `llvm-tblgen` only, and the iOS
   cross build receives it explicitly via `-DLLVM_TABLEGEN` (this LLVM also
   predates `LLVM_NATIVE_TOOL_DIR` support; the flag is kept as harmless).
+- **CI run #2 failed** at "Build LLVM for iOS" configure: `install TARGETS
+  given no BUNDLE DESTINATION for MACOSX_BUNDLE executable target
+  "llvm-tblgen"` — building with `CMAKE_SYSTEM_NAME=iOS`, CMake wants iOS
+  executables installed as app bundles, and LLVM's tablegen install rule has
+  no bundle destination. Fixed: `-DLLVM_INSTALL_TOOLCHAIN_ONLY=ON` skips all
+  install rules (DXMT links the build-tree libraries; nothing is installed).
 - Later failures will be recorded here as they are diagnosed and fixed.
 - If `macos-26` is not yet a valid GitHub runner label, switch to
   `macos-15` + newest Xcode 26.
