@@ -19,6 +19,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/madeira"
 export PATH="$ROOT/madeira/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+# Wine's configure needs bison 3; macOS ships 2.3, so prefer Homebrew's.
+if command -v brew >/dev/null 2>&1; then
+  BISON_BIN="$(brew --prefix bison 2>/dev/null || true)/bin"
+  if [ -d "$BISON_BIN" ]; then export PATH="$BISON_BIN:$PATH"; fi
+fi
 JOBS="$(sysctl -n hw.ncpu)"
 
 run() { echo "=== $* ==="; "$@"; }

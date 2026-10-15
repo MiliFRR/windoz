@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Supply Microsoft's Visual C++ 2015-2022 x64 runtime DLLs, which Madeira
-# never distributes (docs/BUILDING.md, tools/fetch-vcruntime.md). We download
-# Microsoft's official vc_redist.x64.exe, unpack it, and keep only the 64-bit
-# (PE32+) DLLs the app needs. These are redistributed under Microsoft's own
-# terms — they are NOT committed to any repository.
+# never distributes (docs/BUILDING.md, tools/fetch-vcruntime.md).
+#
+# Source: the "vc-runtime-inputs" release asset on this repository — the DLLs
+# were copied from C:\Windows\System32 of the owner's licensed Windows
+# install (CRT 14.44). Redistribution is permitted under Microsoft's Visual
+# Studio Redistributable terms; the DLLs are NOT part of the GPL source tree.
+# The zip is hash-pinned here so the build stops on any substitution.
+#
+# NOTE: 7-Zip can no longer extract Microsoft's 2022 vc_redist.x64.exe burn
+# container (WiX 4 format), which is why the pre-extracted asset is used.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,39 +18,29 @@ if [ -f "$DEST/.complete" ]; then
   exit 0
 fi
 
+ZIP_SHA256="d19d19533aebe4632eff325e40443a3c908904376e0d7c03165be54865530e1a"
+URL="https://github.com/MiliFRR/windoz/releases/download/vc-runtime-inputs/x64-vcruntime.zip"
+
 WORK="$ROOT/work/vcredist"
 rm -rf "$WORK"
-mkdir -p "$DEST" "$WORK/unpacked"
+mkdir -p "$DEST" "$WORK"
 cd "$WORK"
 
-curl -fL --retry 3 -o vc_redist.x64.exe "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-7zz x -y -ounpacked vc_redist.x64.exe >/dev/null
+curl -fL --retry 3 -o x64-vcruntime.zip "$URL"
+echo "${ZIP_SHA256}  x64-vcruntime.zip" | shasum -a 256 -c -
 
-# The burn bundle contains .cab packages; extract each one.
-find unpacked -iname "*.cab" | while read -r cab; do
-  outdir="cab-$(basename "$cab")"
-  mkdir -p "$outdir"
-  7zz x -y -o"$outdir" "$cab" >/dev/null || true
-done
+unzip -q x64-vcruntime.zip -d dlls
+cp dlls/*.dll "$DEST/"
 
-COPIED=0
-for name in concrt140.dll msvcp140.dll msvcp140_1.dll msvcp140_2.dll msvcp140_3.dll \
-            vcamp140.dll vccorlib140.dll vcruntime140.dll vcruntime140_1.dll; do
-  hit="$(find . -name "$name" -type f | while read -r f; do
-    if file "$f" | grep -q "PE32+"; then
-      echo "$f"
-      break
-    fi
-  done | head -n 1)"
-  if [ -n "$hit" ]; then
-    cp "$hit" "$DEST/"
-    COPIED=$((COPIED + 1))
-  fi
-done
+cat > "$DEST/PROVENANCE.txt" <<'EOF'
+Microsoft Visual C++ 2015-2022 x64 runtime DLLs (CRT 14.44).
+Source: copied from C:\Windows\System32 of the windoz owner's licensed
+Windows install; distributed from the repository's "vc-runtime-inputs"
+release. Redistribution permitted under Microsoft's Visual Studio
+Redistributable terms (https://visualstudio.microsoft.com/license-terms/).
+These DLLs are not covered by the GPL of the surrounding project.
+EOF
 
-echo "copied $COPIED VC++ runtime DLLs into app/Madeira/x86_64-vcruntime"
-if [ "$COPIED" -lt 5 ]; then
-  echo "ERROR: too few VC++ runtime DLLs found; check the extraction layout" >&2
-  exit 1
-fi
+echo "VC++ x64 runtime staged into app/Madeira/x86_64-vcruntime:"
+ls -la "$DEST"/*.dll
 touch "$DEST/.complete"

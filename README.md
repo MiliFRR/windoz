@@ -153,6 +153,16 @@ order from a clean recursive clone.
   makes its CMake treat iOS as Apple (`HandleLLVMOptions.cmake`,
   `AddLLVM.cmake`); documented here, applied after checkout in
   `scripts/build-llvm.sh`.
+- **CI run #7 failed** AFTER LLVM COMPLETED (the iOS patches work!) at
+  "Fetch VC++ x64 runtime DLLs": 7-Zip can no longer extract Microsoft's
+  2022 `vc_redist.x64.exe` (WiX 4 burn container). Fixed: the DLLs ship as
+  the `vc-runtime-inputs` release asset on this repo (from the owner's
+  licensed Windows System32, redistribution permitted by Microsoft's
+  redist terms), downloaded hash-verified by the fetch script. Provenance
+  note staged alongside the DLLs.
+- **Backup CI**: `azure-pipelines.yml` mirrors the GitHub Actions build
+  (same scripts, Azure-hosted Mac). Requires the free hosted-parallelism
+  grant for public projects (approval is not instant — see README).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
@@ -182,7 +192,7 @@ Inherited from Madeira, included in every windoz build:
 | StikJIT | MPL-2.0 | Notices |
 | idevice, zstd (BSD-3), LLVM | MIT / BSD / Apache-2.0 | Notices |
 | Apple Metal Shader Converter | Apple proprietary (agreement) | Apple devices only; dlopen; keep agreement + NOTICE |
-| VC++ runtime DLLs | Microsoft redistributable terms | Never committed; fetched at build time from Microsoft |
+| VC++ runtime DLLs | Microsoft redistributable terms | Distributed as the `vc-runtime-inputs` release asset (from the owner's licensed Windows install, SHA-256 pinned in the fetch script); never committed to the tree |
 
 Rules: keep the licence bundle and per-file headers; do not push AI-assisted
 fork changes upstream to FEX-Emu (their policy); never add DRM-circumvention

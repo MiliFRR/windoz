@@ -1,0 +1,77 @@
+# Azure Pipelines mirror of the GitHub Actions build (backup CI).
+# Same 7 scripts; requires the free hosted-parallelism grant for public
+# projects (see README). Produces the same unsigned IPA artifact.
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: macos-15
+
+variables:
+  LLVM_COMMIT: 8dfdcc7b7bf66834a761bd8de445840ef68e4d1a
+
+jobs:
+  - job: build
+    displayName: IPA (macOS, unsigned)
+    timeoutInMinutes: 350
+    steps:
+      - checkout: self
+        submodules: recursive
+
+      - bash: |
+          set -e
+          ls /Applications | grep -i xcode || true
+          XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "iPhoneOS SDK: $SDK_PATH"
+          case "$SDK_PATH" in
+            *iPhoneOS26*|*iPhoneOS27*) echo "iOS 26+ SDK OK" ;;
+            *) echo "##vso[task.logissue type=error]No iOS 26+ SDK on this image (got: $SDK_PATH)"; exit 1 ;;
+          esac
+        displayName: Select newest Xcode
+
+      - bash: |
+          set -e
+          brew install cmake ninja meson bison sevenzip ccache
+          command -v rustup >/dev/null 2>&1 || brew install rustup
+          rustup target add aarch64-apple-ios || true
+        displayName: Install build tools
+
+      - task: Cache@2
+        displayName: Cache LLVM
+        inputs:
+          key: 'llvm | "$(LLVM_COMMIT)" | v3'
+          path: |
+            madeira/toolchains/llvm-project
+            madeira/toolchains/llvm-host-build
+            madeira/toolchains/llvm-ios-build
+          cacheHitVar: LLVM_CACHE_RESTORED
+
+      - bash: ./scripts/build-llvm.sh
+        displayName: Build LLVM for iOS
+        condition: ne(variables['LLVM_CACHE_RESTORED'], 'true')
+
+      - bash: ./scripts/fetch-llvm-mingw.sh
+        displayName: Fetch llvm-mingw toolchain
+
+      - bash: ./scripts/fetch-vcruntime.sh
+        displayName: Fetch VC++ x64 runtime DLLs
+
+      - bash: ./scripts/build-runtime.sh
+        displayName: Build runtime (Wine / FEX / DXMT / D3D12)
+
+      - bash: ./scripts/build-app.sh
+        displayName: Build app (Debug, unsigned)
+
+      - bash: ./scripts/assemble-ipa.sh
+        displayName: Assemble IPA
+
+      - task: PublishPipelineArtifact@1
+        displayName: Upload IPA
+        inputs:
+          targetPath: $(Build.SourcesDirectory)/windoz.ipa
+          artifact: windoz-unsigned-ipa
