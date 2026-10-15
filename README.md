@@ -137,6 +137,12 @@ order from a clean recursive clone.
   linked fine at this point. Fixed: `-DLLVM_ENABLE_PLUGINS=OFF` (no loadable
   modules are needed; DXMT links LLVM statically). Also fixed the Wine
   `dlls/dwrite` header build to use Madeira's own `make -C <dir>` pattern.
+- **CI runs #5 (both attempts) never executed**: GitHub's macOS ARM64 fleet
+  could not provide a `macos-26` runner ("The job was not acquired by Runner
+  … capacity constraints"), so the jobs were cancelled in queue/after ~15 min
+  with zero steps run. Not a build issue. Fixed: switched to the
+  higher-capacity `macos-15` image, with a hard guard that fails loudly if
+  Xcode 26 (iOS 26+ SDK) is missing from the image.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)

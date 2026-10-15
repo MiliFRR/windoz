@@ -14,7 +14,7 @@ concurrency:
 jobs:
   build:
     name: IPA (macOS, unsigned)
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 350
     env:
       LLVM_COMMIT: 8dfdcc7b7bf66834a761bd8de445840ef68e4d1a
@@ -31,6 +31,16 @@ jobs:
           XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
           if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
           xcodebuild -version
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "iPhoneOS SDK: $SDK_PATH"
+          case "$SDK_PATH" in
+            *iPhoneOS26*|*iPhoneOS27*) echo "iOS 26+ SDK OK" ;;
+            *)
+              echo "::error::This image has no iOS 26+ SDK (got: $SDK_PATH)."
+              echo "::error::windoz needs Xcode 26+ — switch runs-on or wait for image updates."
+              exit 1
+              ;;
+          esac
 
       - name: Install build tools
         run: |
