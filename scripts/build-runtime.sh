@@ -126,6 +126,24 @@ fi
 run bash build/fex-arm64ec/build.sh
 
 # --- DXMT unix side (LLVM headers + vendored converter via deps.sh)
+# The airconv sources include three embedded-shader headers (air_msad.h,
+# air_samplepos.h, air_tessellation.h) that upstream DXMT generates with its
+# meson chain (root meson.build: xcrun metal -> xcrun metallib -> xxd -i).
+# They are not tracked in the fork and Madeira's script only generates
+# dxmt_command.h (CI run #15), so replicate the exact chain into the
+# shader-headers directory the build already includes.
+mkdir -p build/dxmt-ios/shader-headers
+for sh in air_msad air_samplepos air_tessellation; do
+  H="build/dxmt-ios/shader-headers/$sh.h"
+  if [ ! -f "$H" ]; then
+    echo "=== generating $sh.h (metal -> air -> metallib -> xxd) ==="
+    (cd build/dxmt-ios/shader-headers \
+      && xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0 \
+           -o "$sh.air" -c "$ROOT/madeira/dxmt/src/airconv/shaders/$sh.metal" \
+      && xcrun -sdk macosx metallib -o "$sh.metallib" "$sh.air" \
+      && xxd -n "$sh" -i "$sh.metallib" "$sh.h")
+  fi
+done
 if ! bash build/dxmt-ios/build.sh; then
   echo "=== dxmt-ios per-file compile errors ==="
   for e in build/dxmt-ios/obj/*.err; do
