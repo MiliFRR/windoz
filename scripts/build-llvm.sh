@@ -19,6 +19,28 @@ git fetch --filter=blob:none origin "$LLVM_COMMIT"
 git checkout --force "$LLVM_COMMIT"
 cd ..
 
+# LLVM 16's CMake treats only CMAKE_SYSTEM_NAME == "Darwin" as Apple; iOS has
+# its own name, so GNU-only flags (-Wl,-z,defs) and Windows .def export files
+# leak into iOS links. Patch the checks to include iOS (idempotent; see README
+# "Known issues").
+python3 - <<'PY'
+import pathlib
+base = pathlib.Path("llvm-project/llvm/cmake/modules")
+h = base / "HandleLLVMOptions.cmake"
+s = h.read_text()
+n = s.replace('CMAKE_SYSTEM_NAME MATCHES "Darwin|FreeBSD',
+              'CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS|FreeBSD')
+if n != s:
+    h.write_text(n)
+    print("patched HandleLLVMOptions.cmake: iOS skips -Wl,-z,defs")
+a = base / "AddLLVM.cmake"
+s = a.read_text()
+n = s.replace('MATCHES "Darwin")', 'MATCHES "Darwin|iOS")')
+if n != s:
+    a.write_text(n)
+    print("patched AddLLVM.cmake: iOS uses Apple export-list linking")
+PY
+
 NPROC="$(sysctl -n hw.ncpu)"
 
 # Host build: only the native tablegen tools the cross build needs.

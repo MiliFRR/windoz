@@ -143,6 +143,16 @@ order from a clean recursive clone.
   with zero steps run. Not a build issue. Fixed: switched to the
   higher-capacity `macos-15` image, with a hard guard that fails loudly if
   Xcode 26 (iOS 26+ SDK) is missing from the image.
+- **CI run #6 failed** at "Build LLVM for iOS" linking `lib/libLTO.dylib`:
+  `ld: unknown options: -z` (`-Wl,-z,defs`) and `ld: unknown file type in
+  'LTO.def'` — the same Apple/iOS mismatch as runs #2/#4, one layer deeper:
+  LLVM 16 treats only `CMAKE_SYSTEM_NAME == "Darwin"` as Apple, and iOS is a
+  separate name, so shared libraries got GNU linker flags and Windows `.def`
+  export files. (Note: the macos-15 image carried Xcode 26.3 / iPhoneOS26.2 —
+  the SDK guard passed.) Fixed: a small idempotent patch to the LLVM checkout
+  makes its CMake treat iOS as Apple (`HandleLLVMOptions.cmake`,
+  `AddLLVM.cmake`); documented here, applied after checkout in
+  `scripts/build-llvm.sh`.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
