@@ -104,6 +104,25 @@ if [ ! -f FEX/build-ios/CMakeCache.txt ]; then
     -DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78
 fi
 run bash build/fex-ios/build.sh
+# fex-arm64ec: pre-configure with the script's exact options (BUILDING.md:
+# "the options the madeira-bcd fork's macOS CI has built xtajit64.dll with
+# since 2026-09-26") plus CMAKE_DISABLE_FIND_PACKAGE for fmt and range-v3 —
+# CI run #14: Homebrew's fmt was found by find_package and its macOS dylib
+# cannot satisfy the Windows-style cross build ("IMPORTED_IMPLIB not set for
+# imported target fmt::fmt"); disabling the search makes FEX use its bundled
+# copies, which is what machines without those brew formulae get anyway.
+if [ ! -f FEX/build-arm64ec/CMakeCache.txt ]; then
+  cmake -S FEX -B FEX/build-arm64ec -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/FEX/Data/CMake/toolchain_mingw.cmake" \
+    -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DTUNE_CPU=cortex-a78 \
+    -DFEX_IOS_HOST_BUILD=ON -DCMAKE_C_FLAGS=-DFEX_IOS_HOST=1 \
+    -DCMAKE_CXX_FLAGS=-DFEX_IOS_HOST=1 -DCMAKE_ASM_FLAGS=-DFEX_IOS_HOST=1 \
+    -DENABLE_LTO=OFF -DENABLE_FEX_ALLOCATOR=ON -DENABLE_JEMALLOC_GLIBC_ALLOC=ON \
+    -DENABLE_OFFLINE_RUNTIME=ON -DBUILD_FEXCONFIG=ON -DENABLE_CLANG_THUNKS=ON \
+    -DENABLE_CCACHE=ON -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DENABLE_ASSERTIONS=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_fmt=TRUE -DCMAKE_DISABLE_FIND_PACKAGE_range-v3=TRUE
+fi
 run bash build/fex-arm64ec/build.sh
 
 # --- DXMT unix side (LLVM headers + vendored converter via deps.sh)

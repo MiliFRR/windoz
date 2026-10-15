@@ -198,6 +198,16 @@ order from a clean recursive clone.
   the pipeline pre-configures `FEX/build-ios` with the script's exact options
   plus `-DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78`; the script
   then skips its own configure and builds.
+- **CI run #14 failed** at `fex-arm64ec` (fex-ios PASSED ✅): repeated
+  `CMake Error: IMPORTED_IMPLIB not set for imported target "fmt::fmt"` —
+  Homebrew's `fmt` on the runner image is found by `find_package(fmt)`, and a
+  macOS dylib cannot satisfy FEX's Windows-style ARM64EC cross build, which
+  needs an import library. Fixed: the pipeline pre-configures
+  `FEX/build-arm64ec` with the script's exact recorded options plus
+  `-DCMAKE_DISABLE_FIND_PACKAGE_fmt=TRUE` (and `range-v3`, same trap), making
+  FEX use its bundled copies. The workflow now also saves the LLVM cache even
+  when a run fails, removing the ~25 min LLVM rebuild tax from every
+  iteration until a run succeeds.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)

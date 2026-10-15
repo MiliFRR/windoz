@@ -50,9 +50,9 @@ jobs:
           rustup target add aarch64-apple-ios || true
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
 
-      - name: Cache LLVM
+      - name: Restore LLVM cache
         id: llvmcache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             madeira/toolchains/llvm-project
@@ -63,6 +63,16 @@ jobs:
       - name: Build LLVM for iOS
         if: steps.llvmcache.outputs.cache-hit != 'true'
         run: ./scripts/build-llvm.sh
+
+      - name: Save LLVM cache (even on later failures)
+        if: always() && steps.llvmcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            madeira/toolchains/llvm-project
+            madeira/toolchains/llvm-host-build
+            madeira/toolchains/llvm-ios-build
+          key: llvm-${{ env.LLVM_COMMIT }}-v3
 
       - name: Fetch llvm-mingw toolchain
         run: ./scripts/fetch-llvm-mingw.sh
