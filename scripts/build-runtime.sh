@@ -65,6 +65,7 @@ run bash build/fex-arm64ec/build.sh
 
 # --- DXMT unix side (LLVM headers + vendored converter via deps.sh)
 run bash build/dxmt-ios/build.sh
+run bash "$ROOT/scripts/build-dxmt-combined.sh"
 # --- DXMT PE side (needs the wine arm64ec tree)
 if [ ! -d dxmt/build-arm64ec ]; then
   run meson setup dxmt/build-arm64ec dxmt \

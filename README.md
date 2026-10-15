@@ -125,10 +125,13 @@ order from a clean recursive clone.
     library); `llvm-mingw`'s bin is on PATH for the whole chain (wineserver's
     objcopy symbol-rename sweep needs it);
   - `ccache` added to the CI brew install (FEX builds pass ENABLE_CCACHE=ON).
-- **Open watch-item:** nothing in the audited scripts creates the initial
-  `app/Madeira/libdxmt_combined.a` (the DXMT script only refreshes it). If
-  the Xcode app build fails on it, the merge step lives in the app project's
-  build phases and will be handled then.
+- **Open watch-item RETIRED (pre-fixed after inspecting the Xcode project):**
+  nothing in the audited scripts creates the initial
+  `app/Madeira/libdxmt_combined.a` (the project only links it; the DXMT
+  script only refreshes an existing copy). New
+  `scripts/build-dxmt-combined.sh` selects the LLVM archives airconv needs
+  by symbol closure from `libdxmt_unix.a` and merges them with Apple's
+  `libtool -static`.
 - **CI run #4 failed** at "Build LLVM for iOS" link: `FAILED:
   lib/LLVMHello.dylib` — `ld: unknown file type in '.../LLVMHello.def'`.
   LLVM's export-file logic uses `APPLE` in some places (true on iOS) and
