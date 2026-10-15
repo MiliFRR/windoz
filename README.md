@@ -163,6 +163,18 @@ order from a clean recursive clone.
 - **Backup CI**: `azure-pipelines.yml` mirrors the GitHub Actions build
   (same scripts, Azure-hosted Mac). Requires the free hosted-parallelism
   grant for public projects (approval is not instant — see README).
+- **CI run #8 failed** in "Build runtime" at `dlls/ntdll/ntdll.so`:
+  `ld: symbol(s) not found for architecture arm64` — `Undefined: _ios_avail_phys`.
+  Madeira's `build/wine-pe/build-ntdll.sh` runs `make -C dlls/ntdll`, whose
+  default target also builds the host unix side (`ntdll.so`); that side was
+  replaced by Madeira's own `libntdll_unix.a` and the stock one references
+  their private iOS symbol, so it can never link from a clean checkout. The
+  dev machine never saw this because its tree was already built. Fixed: new
+  `scripts/build-wine-ntdll.sh` builds ONLY the PE target
+  (`dlls/ntdll/arm64ec-windows/ntdll.dll`) and replicates the strip+pad
+  post-processing verbatim; `dlls/dwrite` now builds the same way (its PE
+  file target), matching the pattern `build-modules.sh` itself documents
+  ("DLL file targets, not dlls/<name>/all").
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)

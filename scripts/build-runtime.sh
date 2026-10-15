@@ -39,11 +39,14 @@ if [ ! -d research/freetype ]; then
 fi
 run bash build/freetype-ios/build.sh
 
-# --- Wine: ARM64EC PE tree (configures wine/build-arm64ec on first run)
-run bash build/wine-pe/build-ntdll.sh
-# widl-generated public headers (dwrite.h etc.) live in the build tree only
-# after the corresponding DLL target builds:
-run make -C wine/build-arm64ec/dlls/dwrite -j "$JOBS"
+# --- Wine: ARM64EC PE tree. ntdll is built via our PE-only replica (the
+# stock script's `make -C dlls/ntdll` also builds the host unix ntdll.so,
+# which cannot link on a clean checkout — see README, run #8):
+run bash "$ROOT/scripts/build-wine-ntdll.sh"
+# widl-generated public headers (dwrite.h) live in the build tree only after
+# the corresponding PE DLL target builds (file target, NOT the directory —
+# the directory default would also build dwrite's unix side):
+run make -C wine/build-arm64ec -j "$JOBS" dlls/dwrite/arm64ec-windows/dwrite.dll
 # unix-side scripts read wine/build-macos — alias it to the arm64ec tree:
 [ -e wine/build-macos ] || ln -s build-arm64ec wine/build-macos
 run bash build/wine-pe/build-modules.sh
