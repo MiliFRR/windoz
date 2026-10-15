@@ -56,17 +56,31 @@ run bash "$ROOT/scripts/build-wineserver-base.sh"
 run bash build/wineserver/build.sh
 
 # --- Wine unix sides (need gnutls/ffmpeg/freetype + the wine build trees)
+# SDK 26.2 (macos-15 image) removed rusage_info_v6.ri_page_wait_time_mach,
+# which server_ios.c's process-stats log line uses. Patch it to 0 (cosmetic
+# instrumentation, idempotent); the full .err dump below catches anything else.
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path("build/ntdll-unix/server_ios.c")
+s = p.read_text()
+n = s.replace(
+    "XP_MS( ru.ri_page_wait_time_mach - pru.ri_page_wait_time_mach )",
+    "XP_MS( 0 )")
+if n != s:
+    p.write_text(n)
+    print("patched server_ios.c: ri_page_wait_time_mach absent in this SDK; profile term zeroed")
+PY
 if ! bash build/ntdll-unix/build.sh; then
   echo "=== ntdll-unix per-file compile errors ==="
   for e in build/ntdll-unix/obj/*.err; do
-    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -60 "$e"; fi
+    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -400 "$e"; fi
   done
   exit 1
 fi
 if ! bash build/win32u-unix/build.sh; then
   echo "=== win32u-unix per-file compile errors ==="
   for e in build/win32u-unix/obj/*.err; do
-    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -60 "$e"; fi
+    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -400 "$e"; fi
   done
   exit 1
 fi

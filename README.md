@@ -182,6 +182,12 @@ order from a clean recursive clone.
     tracked upstream (built by the UNVERIFIED wine-i386/fex-wow64 chain), so
     the pipeline creates an empty placeholder folder for the Xcode reference.
     64-bit games are unaffected.
+- **CI run #12 failed** at `server_ios.c:2582`:
+  `no member named 'ri_page_wait_time_mach' in 'struct rusage_info_v6'` —
+  the iPhoneOS 26.2 SDK (macos-15 image) lacks a field that the 26.5 SDK had;
+  the use is inside a diagnostics-only process-stats log line. Fixed:
+  idempotent build-time patch zeroes that one cosmetic term. Per-file error
+  dumps widened to 400 lines so any further SDK surprises are visible at once.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
