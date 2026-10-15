@@ -153,6 +153,10 @@ if ! bash build/dxmt-ios/build.sh; then
 fi
 run bash "$ROOT/scripts/build-dxmt-combined.sh"
 # --- DXMT PE side (needs the wine arm64ec tree)
+# The cross file resolves @GLOBAL_SOURCE_ROOT@ to the DXMT project root
+# (madeira/dxmt) and expects the llvm-mingw toolchain at dxmt/toolchains/
+# (CI run #16) — alias it to the real one, exactly like the build-macos alias.
+[ -e dxmt/toolchains ] || ln -s ../toolchains dxmt/toolchains
 if [ ! -d dxmt/build-arm64ec ]; then
   run meson setup dxmt/build-arm64ec dxmt \
     -Dbuildtype=release \

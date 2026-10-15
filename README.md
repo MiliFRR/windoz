@@ -219,6 +219,15 @@ order from a clean recursive clone.
   `build/dxmt-ios/shader-headers/` (already on the compile include path).
   Verified the d3d9 "generated" thunk files ARE tracked in the fork — no
   other missing generated artifacts exist.
+- **CI run #16 failed** at the DXMT PE meson setup:
+  `Unknown compiler(s): [...dxmt/toolchains/llvm-mingw.../arm64ec-w64-mingw32-clang]`
+  — the cross file's `@GLOBAL_SOURCE_ROOT@` resolves to the DXMT project root,
+  so it expects the llvm-mingw toolchain at `dxmt/toolchains/`. Huge progress
+  first: **the entire DXMT unix side compiled** (airconv, DXBCParser, the
+  native D3D9 frontend, `libdxmt_unix.a` archived) and
+  `build-dxmt-combined.sh` produced `libdxmt_combined.a`. Fixed: symlink
+  `dxmt/toolchains` → `../toolchains` before the meson setup (same alias
+  pattern as `wine/build-macos`).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
