@@ -129,6 +129,14 @@ order from a clean recursive clone.
   `app/Madeira/libdxmt_combined.a` (the DXMT script only refreshes it). If
   the Xcode app build fails on it, the merge step lives in the app project's
   build phases and will be handled then.
+- **CI run #4 failed** at "Build LLVM for iOS" link: `FAILED:
+  lib/LLVMHello.dylib` — `ld: unknown file type in '.../LLVMHello.def'`.
+  LLVM's export-file logic uses `APPLE` in some places (true on iOS) and
+  `CMAKE_SYSTEM_NAME MATCHES "Darwin"` in others (false on iOS); the module
+  branch emitted a Windows `.def` file to Apple's linker. Every LLVM *tool*
+  linked fine at this point. Fixed: `-DLLVM_ENABLE_PLUGINS=OFF` (no loadable
+  modules are needed; DXMT links LLVM statically). Also fixed the Wine
+  `dlls/dwrite` header build to use Madeira's own `make -C <dir>` pattern.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)

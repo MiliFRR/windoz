@@ -38,7 +38,7 @@ run bash build/freetype-ios/build.sh
 run bash build/wine-pe/build-ntdll.sh
 # widl-generated public headers (dwrite.h etc.) live in the build tree only
 # after the corresponding DLL target builds:
-run make -C wine/build-arm64ec -j "$JOBS" dlls/dwrite
+run make -C wine/build-arm64ec/dlls/dwrite -j "$JOBS"
 # unix-side scripts read wine/build-macos — alias it to the arm64ec tree:
 [ -e wine/build-macos ] || ln -s build-arm64ec wine/build-macos
 run bash build/wine-pe/build-modules.sh

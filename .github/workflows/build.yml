@@ -48,7 +48,7 @@ jobs:
             madeira/toolchains/llvm-project
             madeira/toolchains/llvm-host-build
             madeira/toolchains/llvm-ios-build
-          key: llvm-${{ env.LLVM_COMMIT }}-v2
+          key: llvm-${{ env.LLVM_COMMIT }}-v3
 
       - name: Build LLVM for iOS
         if: steps.llvmcache.outputs.cache-hit != 'true'

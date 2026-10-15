@@ -53,6 +53,7 @@ if [ ! -f llvm-ios-build/CMakeCache.txt ]; then
     -DLLVM_ENABLE_ZLIB=Off \
     -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON \
     -DLLVM_NO_DEAD_STRIP=ON \
+    -DLLVM_ENABLE_PLUGINS=OFF \
     -DLLVM_TABLEGEN="$PWD/llvm-host-build/bin/llvm-tblgen" \
     -DLLVM_NATIVE_TOOL_DIR="$PWD/llvm-host-build/bin"
 fi
