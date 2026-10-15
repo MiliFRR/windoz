@@ -76,7 +76,13 @@ run bash build/fex-ios/build.sh
 run bash build/fex-arm64ec/build.sh
 
 # --- DXMT unix side (LLVM headers + vendored converter via deps.sh)
-run bash build/dxmt-ios/build.sh
+if ! bash build/dxmt-ios/build.sh; then
+  echo "=== dxmt-ios per-file compile errors ==="
+  for e in build/dxmt-ios/obj/*.err; do
+    if [ -s "$e" ]; then echo "--- ${e##*/}"; head -60 "$e"; fi
+  done
+  exit 1
+fi
 run bash "$ROOT/scripts/build-dxmt-combined.sh"
 # --- DXMT PE side (needs the wine arm64ec tree)
 if [ ! -d dxmt/build-arm64ec ]; then
@@ -106,6 +112,12 @@ run python3 tools/build-stub-dlls.py wine build/stub-dlls \
   "toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/llvm-readobj" \
   app/Madeira/arm64ec-windows
 run bash build/faultrep/build.sh
+
+# The Xcode project references the i386-windows folder (32-bit WoW64), which
+# is not tracked and is deliberately NOT built yet (32-bit games are deferred;
+# the whole wine-i386 + fex-wow64 chain is UNVERIFIED upstream). An empty
+# folder satisfies the folder reference; 64-bit games are unaffected.
+mkdir -p app/Madeira/i386-windows
 
 # --- Madeira Dock (becomes Doz Dock in Phase 5). Non-fatal in Phase 0:
 # without it the Steam library stays off, but the app builds and runs.

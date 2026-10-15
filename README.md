@@ -178,6 +178,10 @@ order from a clean recursive clone.
   post-processing verbatim; `dlls/dwrite` now builds the same way (its PE
   file target), matching the pattern `build-modules.sh` itself documents
   ("DLL file targets, not dlls/<name>/all").
+  - 32-bit (WoW64) support is deferred: `app/Madeira/i386-windows` is not
+    tracked upstream (built by the UNVERIFIED wine-i386/fex-wow64 chain), so
+    the pipeline creates an empty placeholder folder for the Xcode reference.
+    64-bit games are unaffected.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
