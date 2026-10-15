@@ -95,15 +95,56 @@ order from a clean recursive clone.
 - **CI run #1 failed** at "Build LLVM for iOS": `ninja: error: unknown target
   'llvm-min-tblgen'` — that target doesn't exist in the pinned LLVM revision
   (pre-17). Fixed: host build now produces `llvm-tblgen` only, and the iOS
-  cross build receives it explicitly via `-DLLVM_TABLEGEN` (this LLVM also
-  predates `LLVM_NATIVE_TOOL_DIR` support; the flag is kept as harmless).
+  cross build receives it explicitly via `-DLLVM_TABLEGEN`.
 - **CI run #2 failed** at "Build LLVM for iOS" configure: `install TARGETS
   given no BUNDLE DESTINATION for MACOSX_BUNDLE executable target
-  "llvm-tblgen"` — building with `CMAKE_SYSTEM_NAME=iOS`, CMake wants iOS
-  executables installed as app bundles, and LLVM's tablegen install rule has
-  no bundle destination. Fixed: `-DLLVM_INSTALL_TOOLCHAIN_ONLY=ON` skips all
-  install rules (DXMT links the build-tree libraries; nothing is installed).
+  "llvm-tblgen"` — iOS CMake wants executables installed as app bundles.
+  Fixed: `-DLLVM_INSTALL_TOOLCHAIN_ONLY=ON`.
+- **CI run #3 failed** at "Build LLVM for iOS" link: `ld: unknown options:
+  --gc-sections` — LLVM's `add_link_opts()` checks
+  `CMAKE_SYSTEM_NAME MATCHES "Darwin"`, which is false for iOS, so Apple
+  targets got the GNU dead-strip flag; Xcode 26's linker rejects it. Fixed:
+  `-DLLVM_NO_DEAD_STRIP=ON` (we never install or size-optimize the tools).
+- **Full clean-build audit (after run #3).** Every remaining script was read
+  and the pipeline reordered to honour dependencies Madeira's build record
+  did not state (their dev machine had these trees lying around):
+  - `wine/build-macos` (configured Wine tree) must exist before the unix-side
+    builds — created as a symlink alias to `wine/build-arm64ec` after the
+    latter is configured;
+  - widl-generated headers (`dwrite.h`) require building `dlls/dwrite` before
+    `build/ntdll-unix/build.sh`;
+  - `build/freetype-ios/build.sh` requires a freetype 2.13.3 clone in
+    `research/freetype` (not vendored) — the pipeline clones the pinned tag;
+  - `build/wineserver/build.sh` patches an existing `libwineserver.a` base
+    archive that is not tracked — `scripts/build-wineserver-base.sh` now
+    compiles it from `wine/server/*.c` first;
+  - `build/madeira-d3d12/fetch-converter.sh` requires Apple's installer
+    package and is NOT run (the iOS converter dylib and headers are tracked
+    and hash-verified via `deps.sh` already);
+  - the DXMT PE build precedes `madeira-d3d12/build-pe.sh` (winemetal import
+    library); `llvm-mingw`'s bin is on PATH for the whole chain (wineserver's
+    objcopy symbol-rename sweep needs it);
+  - `ccache` added to the CI brew install (FEX builds pass ENABLE_CCACHE=ON).
+- **Open watch-item:** nothing in the audited scripts creates the initial
+  `app/Madeira/libdxmt_combined.a` (the DXMT script only refreshes it). If
+  the Xcode app build fails on it, the merge step lives in the app project's
+  build phases and will be handled then.
 - Later failures will be recorded here as they are diagnosed and fixed.
+
+## Built-in JIT (in-app)
+
+Inherited from Madeira, included in every windoz build:
+
+- **Built-in StikJIT** — a bundled app extension (`JITHelper.appex`) enables
+  JIT without the separate StikDebug app. Requires iOS 26+, a normal
+  sideloaded install, and **LocalDevVPN** (App Store) for the loopback.
+- **Pairing**: on iOS 27 the app can pair with the iPhone by itself (in-app);
+  on iOS 26 a pairing file made on a computer (e.g. JitterbugPair on Windows)
+  is imported in Settings → JIT → JIT setup.
+- **StikDebug** remains supported as an alternative method.
+- Sideload with SideStore/AltStore/Sideloadly **keeping app extensions** (the
+  helper must survive); the bundle id is `com.milifrr.windoz` and the helper
+  follows it automatically.
 - If `macos-26` is not yet a valid GitHub runner label, switch to
   `macos-15` + newest Xcode 26.
 

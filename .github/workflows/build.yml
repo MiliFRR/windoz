@@ -35,7 +35,7 @@ jobs:
       - name: Install build tools
         run: |
           set -e
-          brew install cmake ninja meson bison sevenzip
+          brew install cmake ninja meson bison sevenzip ccache
           command -v rustup >/dev/null 2>&1 || brew install rustup
           rustup target add aarch64-apple-ios || true
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
@@ -48,7 +48,7 @@ jobs:
             madeira/toolchains/llvm-project
             madeira/toolchains/llvm-host-build
             madeira/toolchains/llvm-ios-build
-          key: llvm-${{ env.LLVM_COMMIT }}-v1
+          key: llvm-${{ env.LLVM_COMMIT }}-v2
 
       - name: Build LLVM for iOS
         if: steps.llvmcache.outputs.cache-hit != 'true'
