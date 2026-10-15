@@ -30,7 +30,7 @@ if [ ! -x llvm-host-build/bin/llvm-tblgen ]; then
     -DLLVM_BUILD_TOOLS=Off \
     -DLLVM_INCLUDE_TESTS=Off \
     -DLLVM_ENABLE_ZLIB=Off
-  cmake --build llvm-host-build --target llvm-tblgen llvm-min-tblgen -j "$NPROC"
+  cmake --build llvm-host-build --target llvm-tblgen -j "$NPROC"
 fi
 
 # iOS build, per the recorded options.
@@ -48,6 +48,7 @@ if [ ! -f llvm-ios-build/CMakeCache.txt ]; then
     -DLLVM_BUILD_TOOLS=Off \
     -DLLVM_INCLUDE_TESTS=Off \
     -DLLVM_ENABLE_ZLIB=Off \
+    -DLLVM_TABLEGEN="$PWD/llvm-host-build/bin/llvm-tblgen" \
     -DLLVM_NATIVE_TOOL_DIR="$PWD/llvm-host-build/bin"
 fi
 cmake --build llvm-ios-build -j "$NPROC"

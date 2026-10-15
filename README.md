@@ -92,9 +92,12 @@ order from a clean recursive clone.
 
 ## Known issues
 
-- First CI run is expected to fail somewhere: Madeira's own build record
-  marks several steps UNVERIFIED from clean (ffmpeg's macOS path, Wine's
-  clean configure, the LLVM recipe). Each failure is fixed and recorded here.
+- **CI run #1 failed** at "Build LLVM for iOS": `ninja: error: unknown target
+  'llvm-min-tblgen'` — that target doesn't exist in the pinned LLVM revision
+  (pre-17). Fixed: host build now produces `llvm-tblgen` only, and the iOS
+  cross build receives it explicitly via `-DLLVM_TABLEGEN` (this LLVM also
+  predates `LLVM_NATIVE_TOOL_DIR` support; the flag is kept as harmless).
+- Later failures will be recorded here as they are diagnosed and fixed.
 - If `macos-26` is not yet a valid GitHub runner label, switch to
   `macos-15` + newest Xcode 26.
 
