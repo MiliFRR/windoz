@@ -64,7 +64,7 @@ jobs:
       - bash: ./scripts/build-runtime.sh
         displayName: Build runtime (Wine / FEX / DXMT / D3D12)
 
-      - bash: ./scripts/build-app.sh
+      - bash: ./scripts/build-windoz-app.sh
         displayName: Build app (Debug, unsigned)
 
       - bash: ./scripts/assemble-ipa.sh

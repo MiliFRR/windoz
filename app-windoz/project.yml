@@ -1,0 +1,92 @@
+name: Windoz
+options:
+  bundleIdPrefix: com.milifrr
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "26.0"
+
+settings:
+  base:
+    SWIFT_OBJC_BRIDGING_HEADER: Sources/Support/Windoz-Bridging-Header.h
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SWIFT_VERSION: "5.0"
+    # Engine static libraries (built by scripts/build-runtime.sh into the
+    # madeira submodule tree) — all linked with -l via these search paths.
+    OTHER_LDFLAGS: "$(inherited) -L../madeira/app/Madeira -L../madeira/FEX/build-ios/FEXCore/Source -L../madeira/FEX/build-ios/External/fmt -L../madeira/FEX/build-ios/External/cephes -L../madeira/FEX/build-ios/External/xxhash/cmake_unofficial -L../madeira/FEX/build-ios/External/SoftFloat-3e"
+    GCC_PREPROCESSOR_DEFINITIONS: "$(inherited)"
+
+targets:
+  Windoz:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # --- engine binding layer (ObjC/C glue that drives the forks; GPL,
+      #     attributed to the Madeira/FEX authors — see Engine/README.md)
+      - path: ../madeira/app/Madeira/WineProcessBridge.m
+      - path: ../madeira/app/Madeira/FEXBridge.mm
+      - path: ../madeira/app/Madeira/WineServerBridge.m
+      - path: ../madeira/app/Madeira/JITAllocator.c
+      - path: ../madeira/app/Madeira/PrefixExtractor.c
+      - path: ../madeira/app/Madeira/wine_stubs.c
+      - path: ../madeira/app/Madeira/IOSDisplayShim.m
+      - path: ../madeira/app/Madeira/Winios/Winios.m
+      - path: ../madeira/app/Madeira/Winios/WiniosGamepad.c
+      - path: ../madeira/app/Madeira/Winios/WiniosCursor.c
+      - path: ../madeira/app/Madeira/PadOutput.m
+      # --- engine static libraries
+      - path: ../madeira/app/Madeira/libwineserver.a
+      - path: ../madeira/app/Madeira/libntdll_unix.a
+      - path: ../madeira/app/Madeira/libwin32u_unix.a
+      - path: ../madeira/app/Madeira/libdxmt_combined.a
+      - path: ../madeira/app/Madeira/libgnutls.a
+      - path: ../madeira/app/Madeira/libhogweed.a
+      - path: ../madeira/app/Madeira/libnettle.a
+      - path: ../madeira/app/Madeira/libgmp.a
+      - path: ../madeira/app/Madeira/libavformat.a
+      - path: ../madeira/app/Madeira/libavcodec.a
+      - path: ../madeira/app/Madeira/libswresample.a
+      - path: ../madeira/app/Madeira/libavutil.a
+      - path: ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore.a
+      - path: ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+      - path: ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a
+      - path: ../madeira/FEX/build-ios/External/fmt/libfmt.a
+      - path: ../madeira/FEX/build-ios/External/cephes/libcephes_128bit.a
+      - path: ../madeira/FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a
+      - path: ../madeira/FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a
+      # --- engine resources (DLL farm, prefix template, licences, certs)
+      - path: ../madeira/app/Madeira/arm64ec-windows
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/x86_64-vcruntime
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/nls
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/licenses
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/legal
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/d3d12
+        type: folder
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/prefix-template.tar.gz
+        buildPhase: resources
+      - path: ../madeira/app/Madeira/cacert.pem
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.milifrr.windoz
+        GENERATE_INFOPLIST_FILE: YES
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.0"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        ENABLE_BITCODE: "NO"
+        HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils/include ../madeira/build/ntdll-unix/shims"
+        SUPPORTS_MACCATALYST: "NO"
+```

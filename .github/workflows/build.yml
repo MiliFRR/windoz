@@ -84,7 +84,7 @@ jobs:
         run: ./scripts/build-runtime.sh
 
       - name: Build app (Debug, unsigned)
-        run: ./scripts/build-app.sh
+        run: ./scripts/build-windoz-app.sh
 
       - name: Assemble IPA
         run: ./scripts/assemble-ipa.sh

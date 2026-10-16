@@ -294,6 +294,13 @@ order from a clean recursive clone.
   SUCCEEDED past all symbols** — the allocator hooks and terminfo stubs
   resolved everything. Fixed: `build/stage-licenses.sh` runs before the app
   build.
+- **REWORK (2026-10-16):** the app is being rewritten from scratch per the
+  owner's spec — original UI, stores, downloads and settings; the engine
+  forks stay pinned as submodules behind the `WindozEngine` boundary
+  (`app-windoz/`, XcodeGen project). JIT v1 = StikDebug deep link + on-device
+  probe; built-in helper comes later. Session hosting (game rendering +
+  input) is being ported behind the engine API incrementally — until that
+  port completes, Play honestly reports "engine core only".
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
