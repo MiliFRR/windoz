@@ -340,6 +340,35 @@ the fix that is still in the tree.*
   for `libFEXCore.a` (its LTO members need unconditional pulling); an original
   `WiniosShims.c` implements the stall dumper (Mach thread walk + dladdr
   symbolisation).
+- **CI run #4 (this repository, `main` = `102826f`) passed "Build runtime"** —
+  Wine/ARM64EC, wineserver, FEX (iOS + arm64ec), the DXMT unix and PE sides,
+  Wine Mono, the Rust pairing library, native D3D12, the stub DLLs and the
+  licence staging all built — and **failed at "Build app"** with 7 undefined
+  symbols, all from `dxmt::runOptimizationPasses` in
+  `libdxmt_combined.a(airconv_context.o)`:
+  `llvm::PassBuilder::PassBuilder(llvm::TargetMachine*, …)`,
+  `llvm::PassBuilder::register{Module,CGSCC,Function,Loop}Analyses(…)`,
+  `llvm::PassBuilder::crossRegisterProxies(…)` and
+  `llvm::PipelineTuningOptions::PipelineTuningOptions()`. Root cause: on a clean
+  checkout nothing creates `libdxmt_combined.a`, so `scripts/build-dxmt-combined.sh`
+  built it from a *symbol closure* of `libdxmt_unix.a`'s undefined symbols —
+  which resolved 30 of the ~70 LLVM archives but never reached
+  `libLLVMPasses.a`, the archive those seven symbols live in (airconv's new pass
+  manager is reached through other LLVM members, not directly from one DXMT
+  object). Fixed: the script now follows `build/dxmt-ios/README.md`'s documented
+  recipe — `libtool -static` over the DXMT objects plus **every** archive in
+  `toolchains/llvm-ios-build/lib` — still printing the old closure as
+  information only, and failing loudly if `libLLVMPasses.a` is absent. Linking
+  member-by-member means unused archives cost nothing.
+- **Same run, non-fatal warnings worth knowing:** the app was linked with
+  Xcode 26's *debug dylib* mode (`Windoz.app/Windoz.debug.dylib`). An unsigned
+  IPA with a second Mach-O gives sideloading tools — LiveContainer included —
+  something else to re-sign for no benefit, so `project.yml` now sets
+  `ENABLE_DEBUG_DYLIB: NO` and links one ordinary app binary. `ld` also warns
+  that the LLVM archives were built for iOS 26.5 while the app targets 26.0
+  (harmless: only the SDK's minimum-version stamp), and that Swift autolinks
+  `SwiftUICore`, `CoreAudioTypes` and the private `UIUtilities` — all three are
+  "cannot link directly with" warnings from Apple's own SDKs, not errors.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

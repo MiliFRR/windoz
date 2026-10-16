@@ -128,6 +128,11 @@ targets:
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
         ENABLE_BITCODE: "NO"
+        # Xcode 26 splits a Debug build into a stub executable plus
+        # Windoz.debug.dylib. That second Mach-O has to be re-signed on its own
+        # by sideloading tools (LiveContainer included) and buys nothing in CI,
+        # so link a single ordinary app binary.
+        ENABLE_DEBUG_DYLIB: "NO"
         HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils ../madeira/FEX/CodeEmitter ../madeira/FEX/External/fmt/include ../madeira/FEX/External/range-v3/include ../madeira/FEX/External/unordered_dense/include ../madeira/FEX/build-ios ../madeira/FEX/build-ios/include ../madeira/FEX/build-ios/FEXCore/Source ../madeira/FEX ../madeira/build/ntdll-unix/shims"
         SUPPORTS_MACCATALYST: "NO"
         # Engine static libraries, linked explicitly in dependency order.

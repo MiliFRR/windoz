@@ -2,18 +2,37 @@
 # Create app/Madeira/libdxmt_combined.a = libdxmt_unix.a + the LLVM static
 # archives that airconv (the DXBC -> AIR shader compiler) needs.
 #
-# Madeira's build/dxmt-ios/build.sh only REFRESHES this archive when it
-# already exists; nothing upstream creates it on a clean checkout, and the
-# Xcode app target links it (CI runs: see README watch-item). The LLVM
-# archives are chosen by SYMBOL CLOSURE: start from libdxmt_unix.a's
-# undefined symbols, add every archive that defines one, repeat until stable.
-# Static archives are linked member-by-member, so including an archive is
-# always safe — the final app link only pulls the members it references.
+# Madeira's build/dxmt-ios/build.sh only REFRESHES this archive when it already
+# exists; nothing upstream creates it on a clean checkout, and the Xcode app
+# target links it. Madeira's build/dxmt-ios/README.md prescribes what to put in
+# it:
+#
+#   xcrun -sdk iphoneos libtool -static -o libdxmt_combined.a \
+#       obj/*.o ../../toolchains/llvm-ios-build/lib/*.a
+#
+# i.e. the DXMT objects plus EVERY LLVM iOS archive. That is deliberate: a
+# static archive is linked member-by-member, so an unused archive costs nothing
+# but the link pulls exactly the members the referenced objects need — including
+# the LLVM members that are only reachable *from* other LLVM members (the new
+# pass manager is one such chain: dxmt::runOptimizationPasses ->
+# llvm::PassBuilder -> LLVM's own analyses/passes).
+#
+# An earlier version of this script tried to be clever: compute the archive
+# closure from libdxmt_unix.a's undefined symbols and include only those. That
+# produced a linkable-looking 55 MB archive that still failed the app link:
+#
+#   Undefined symbols for architecture arm64:
+#     "llvm::PassBuilder::PassBuilder(llvm::TargetMachine*, ...)",
+#     "llvm::PassBuilder::registerModuleAnalyses(...)", ... 
+#     referenced from: dxmt::runOptimizationPasses(llvm::Module&) in airconv_context.o
+#
+# so we now follow the documented command exactly. The closure output is still
+# printed as information (a visible record of what the direct dependency set
+# looks like), but it no longer decides what goes in.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/madeira"
-SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 
 UNIX_A="build/dxmt-ios/libdxmt_unix.a"
 STAGE="build/dxmt-ios/libdxmt_combined.a"
@@ -23,14 +42,18 @@ LIBS="toolchains/llvm-ios-build/lib"
 [ -f "$UNIX_A" ] || { echo "ERROR: $UNIX_A missing (build/dxmt-ios/build.sh must run first)" >&2; exit 1; }
 [ -d "$LIBS" ] || { echo "ERROR: $LIBS missing (LLVM must be built first)" >&2; exit 1; }
 
-if [ -f "$STAGE" ] || [ -f "$COMBINED" ]; then
-  echo "libdxmt_combined.a already exists (dxmt-ios/build.sh refreshed it in place)"
-  [ -f "$STAGE" ] && cp "$STAGE" "$COMBINED"
-  exit 0
+# airconv compiles its AIR pipeline with LLVM's new pass manager; those objects
+# live in libLLVMPasses.a. Fail loudly rather than build a combined archive that
+# cannot link (CI run: this exact archive was missing from the selection).
+if [ ! -f "$LIBS/libLLVMPasses.a" ]; then
+  echo "ERROR: $LIBS/libLLVMPasses.a missing — did the LLVM iOS build produce all libraries?" >&2
+  ls -1 "$LIBS" >&2 || true
+  exit 1
 fi
 
-echo "=== computing LLVM archive closure for airconv ==="
-SELECTED=$(UNIX_A="$UNIX_A" LIBS="$LIBS" python3 - <<'PY'
+# Informational: which LLVM archives a symbol closure from libdxmt_unix.a alone
+# would have picked. Not used for the archive (see the header comment).
+UNIX_A="$UNIX_A" LIBS="$LIBS" python3 - <<'PY' || echo "note: closure report failed (non-fatal)"
 import subprocess, pathlib, os, sys
 
 libs_dir = pathlib.Path(os.environ["LIBS"])
@@ -80,17 +103,17 @@ while changed and pending:
             pending |= (u - resolved)
             changed = True
 
-if not selected:
-    print("ERROR: symbol closure selected no LLVM archives - unexpected", file=sys.stderr)
-    sys.exit(1)
+print("=== LLVM archives a direct closure from %s would pick (informational) ===" % unix.name)
 for a in selected:
-    print("  + " + a.name, file=sys.stderr)
-print(" ".join(str(a) for a in selected))
+    print("  + " + a.name)
+print("  (%d of %d archives; the combined archive includes ALL of them)" % (len(selected), len(archives)))
 PY
-)
 
+ALL_LLVM=("$LIBS"/*.a)
+echo "=== combining $(basename "$UNIX_A") + ${#ALL_LLVM[@]} LLVM archives ==="
 mkdir -p "$(dirname "$STAGE")"
-# shellcheck disable=SC2086
-xcrun -sdk iphoneos libtool -static -o "$STAGE" "$UNIX_A" $SELECTED
+rm -f "$STAGE"
+xcrun -sdk iphoneos libtool -static -o "$STAGE" "$UNIX_A" "${ALL_LLVM[@]}"
+xcrun -sdk iphoneos ranlib "$STAGE"
 cp "$STAGE" "$COMBINED"
 echo "combined archive: $(wc -c < "$COMBINED" | tr -d ' ') bytes -> app/Madeira/libdxmt_combined.a"
