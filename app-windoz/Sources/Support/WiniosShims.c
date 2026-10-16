@@ -8,7 +8,6 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
-#include <vm/vm.h>
 
 void ios_dump_all_thread_stacks(void) {
     thread_act_array_t threads;
