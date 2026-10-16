@@ -22,6 +22,19 @@ targets:
   Windoz:
     type: application
     platform: iOS
+    dependencies:
+      - framework: Metal.framework
+      - framework: QuartzCore.framework
+      - framework: MetalFX.framework
+      - framework: IOKit.framework
+      - framework: VideoToolbox.framework
+      - framework: CoreMedia.framework
+      - framework: CoreVideo.framework
+      - framework: AudioToolbox.framework
+      - framework: CoreFoundation.framework
+      - sdk: libz.tbd
+      - sdk: libsqlite3.tbd
+      - sdk: liblzma.tbd
     sources:
       - path: Sources
       # --- engine binding layer (ObjC/C glue that drives the forks; GPL,
