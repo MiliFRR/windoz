@@ -134,9 +134,12 @@ struct LibraryView: View {
         }
         try fm.copyItem(at: sourceFolder, to: destination)
 
-        let executable = isDirectory.boolValue
-            ? try findExecutable(in: destination)
-            : destination.appendingPathComponent(url.lastPathComponent)
+        let executable: URL
+        if isDirectory.boolValue {
+            executable = try findExecutable(in: destination)
+        } else {
+            executable = destination.appendingPathComponent(url.lastPathComponent)
+        }
         return try LocalFolderStore().importExecutable(at: executable)
     }
 

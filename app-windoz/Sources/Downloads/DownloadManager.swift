@@ -186,17 +186,34 @@ final class DownloadManager: NSObject, ObservableObject {
 
     // MARK: - Background continuation
 
+    /// Whether `BGTaskScheduler` accepts this app's identifier. Registering an
+    /// identifier that is not listed in `BGTaskSchedulerPermittedIdentifiers`
+    /// raises an uncatchable exception, and the live bundle id is not the
+    /// build-time one after a re-sign, so the list is read back first.
+    private var backgroundTaskPermitted = false
+
     private func registerBackgroundTask() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.backgroundTaskIdentifier, using: nil) { [weak self] task in
+        let identifier = Self.backgroundTaskIdentifier
+        let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+        guard permitted.contains(identifier) else {
+            EngineLogStream.shared.append("Continued downloads in the background are unavailable: \(identifier) is not one of this build's permitted background-task identifiers, so a transfer is paused while Windoz is closed.", level: .warning)
+            return
+        }
+        backgroundTaskPermitted = true
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { [weak self] task in
             self?.scheduleBackgroundContinuation()
             self?.pump()
             task.setTaskCompleted(success: true)
         }
     }
 
-    private func beginBackgroundContinuation() { scheduleBackgroundContinuation() }
+    private func beginBackgroundContinuation() {
+        guard backgroundTaskPermitted else { return }
+        scheduleBackgroundContinuation()
+    }
 
     private func scheduleBackgroundContinuation() {
+        guard backgroundTaskPermitted else { return }
         let request = BGProcessingTaskRequest(identifier: Self.backgroundTaskIdentifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
