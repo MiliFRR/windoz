@@ -301,6 +301,16 @@ order from a clean recursive clone.
   probe; built-in helper comes later. Session hosting (game rendering +
   input) is being ported behind the engine API incrementally — until that
   port completes, Play honestly reports "engine core only".
+- **CI run #31 failed** at the app link: 33 undefined symbols in two groups —
+  (1) none of the engine `.a` archives listed in the XcodeGen *sources* phase
+  were actually linked (Xcode silently skips `.a` there; confirmed because the
+  terminfo stubs in `libJemallocLibs.a` never resolved either), and (2)
+  `ios_dump_all_thread_stacks` (Winios main-stall hook) has no definition in
+  the public repository. Fixed: all engine archives are now linked explicitly
+  by file path in `OTHER_LDFLAGS`, in dependency order, with `-force_load`
+  for `libFEXCore.a` (its LTO members need unconditional pulling); an original
+  `WiniosShims.c` implements the stall dumper (Mach thread walk + dladdr
+  symbolisation).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)

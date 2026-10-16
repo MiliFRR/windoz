@@ -37,26 +37,8 @@ targets:
       - path: ../madeira/app/Madeira/Winios/WiniosGamepad.c
       - path: ../madeira/app/Madeira/Winios/WiniosCursor.c
       - path: ../madeira/app/Madeira/PadOutput.m
-      # --- engine static libraries
-      - path: ../madeira/app/Madeira/libwineserver.a
-      - path: ../madeira/app/Madeira/libntdll_unix.a
-      - path: ../madeira/app/Madeira/libwin32u_unix.a
-      - path: ../madeira/app/Madeira/libdxmt_combined.a
-      - path: ../madeira/app/Madeira/libgnutls.a
-      - path: ../madeira/app/Madeira/libhogweed.a
-      - path: ../madeira/app/Madeira/libnettle.a
-      - path: ../madeira/app/Madeira/libgmp.a
-      - path: ../madeira/app/Madeira/libavformat.a
-      - path: ../madeira/app/Madeira/libavcodec.a
-      - path: ../madeira/app/Madeira/libswresample.a
-      - path: ../madeira/app/Madeira/libavutil.a
-      - path: ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore.a
-      - path: ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
-      - path: ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a
-      - path: ../madeira/FEX/build-ios/External/fmt/libfmt.a
-      - path: ../madeira/FEX/build-ios/External/cephes/libcephes_128bit.a
-      - path: ../madeira/FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a
-      - path: ../madeira/FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a
+      # --- engine static libraries: linked explicitly via OTHER_LDFLAGS
+      #     (XcodeGen's sources phase silently skips .a archives — CI run #31)
       # --- engine resources (DLL farm, prefix template, licences, certs)
       - path: ../madeira/app/Madeira/arm64ec-windows
         type: folder
@@ -89,6 +71,9 @@ targets:
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
-        ENABLE_BITCODE: "NO"
-        HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils ../madeira/FEX/CodeEmitter ../madeira/FEX/External/fmt/include ../madeira/FEX/External/range-v3/include ../madeira/FEX/External/unordered_dense/include ../madeira/FEX/build-ios ../madeira/FEX/build-ios/include ../madeira/FEX/build-ios/FEXCore/Source ../madeira/FEX ../madeira/build/ntdll-unix/shims"
+        ENABLE_BITCODE: "NO"        HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils ../madeira/FEX/CodeEmitter ../madeira/FEX/External/fmt/include ../madeira/FEX/External/range-v3/include ../madeira/FEX/External/unordered_dense/include ../madeira/FEX/build-ios ../madeira/FEX/build-ios/include ../madeira/FEX/build-ios/FEXCore/Source ../madeira/FEX ../madeira/build/ntdll-unix/shims"
         SUPPORTS_MACCATALYST: "NO"
+        # Engine static libraries, linked explicitly in dependency order.
+        # -force_load for libFEXCore.a: its LTO-compiled members are not always
+        # pulled by the archive index on a non-LTO app link (CI run #31).
+        OTHER_LDFLAGS: "$(inherited) -force_load ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore.a ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore_Base.a ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a ../madeira/FEX/build-ios/External/fmt/libfmt.a ../madeira/FEX/build-ios/External/cephes/libcephes_128bit.a ../madeira/FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a ../madeira/FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a ../madeira/app/Madeira/libntdll_unix.a ../madeira/app/Madeira/libwin32u_unix.a ../madeira/app/Madeira/libdxmt_combined.a ../madeira/app/Madeira/libwineserver.a ../madeira/app/Madeira/libgnutls.a ../madeira/app/Madeira/libhogweed.a ../madeira/app/Madeira/libnettle.a ../madeira/app/Madeira/libgmp.a ../madeira/app/Madeira/libavformat.a ../madeira/app/Madeira/libavcodec.a ../madeira/app/Madeira/libswresample.a ../madeira/app/Madeira/libavutil.a"
