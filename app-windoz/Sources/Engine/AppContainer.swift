@@ -11,7 +11,7 @@ enum AppContainer {
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
     static var home: URL {
         if let path = environmentPath("LC_HOME_PATH") { return path }
-        if let path = environmentPath("HOME") { return URL(fileURLWithPath: path, isDirectory: true) }
+        if let path = environmentPath("HOME") { return path }
         return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     }
 
