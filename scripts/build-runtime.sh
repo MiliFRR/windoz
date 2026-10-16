@@ -173,17 +173,18 @@ if [ -z "$WINECRT0" ]; then
   echo "::error::libwinecrt0.a not found anywhere under the wine build tree" >&2
   exit 1
 fi
-mkdir -p wine/build-arm64ec/libs/winecrt0/arm64ec-windows \
-         wine/build-arm64ec/dlls/winecrt0/arm64ec-windows
-cp -f "$WINECRT0" wine/build-arm64ec/libs/winecrt0/arm64ec-windows/libwinecrt0.a
-cp -f "$WINECRT0" wine/build-arm64ec/dlls/winecrt0/arm64ec-windows/libwinecrt0.a
+mkdir -p wine/build-arm64ec/dlls/winecrt0/arm64ec-windows
+cp -f "$WINECRT0" wine/build-arm64ec/dlls/winecrt0/arm64ec-windows/libwinecrt0.a 2>/dev/null || true
 if [ ! -f wine/build-arm64ec/dlls/dbghelp/arm64ec-windows/dbghelp.dll ]; then
   run bash build/wine-pe/build-modules.sh dbghelp
 fi
+# wine_build_path MUST be absolute: DXMT resolves the option against the DXMT
+# source root (madeira/dxmt), so the recorded relative '../../wine/...' escapes
+# the repository and find_library searches a nonexistent dir (runs #17/#19).
 if [ ! -d dxmt/build-arm64ec ]; then
   run meson setup dxmt/build-arm64ec dxmt \
     -Dbuildtype=release \
-    -Dwine_build_path=../../wine/build-arm64ec \
+    -Dwine_build_path="$PWD/wine/build-arm64ec" \
     --cross-file=dxmt/build-arm64ec-win.txt
 fi
 run ninja -C dxmt/build-arm64ec src/winemetal/winemetal.dll

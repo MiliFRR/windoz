@@ -243,6 +243,14 @@ order from a clean recursive clone.
   wine build tree, stage copies into both meson search paths
   (`libs/winecrt0/arm64ec-windows/` and `dlls/winecrt0/arm64ec-windows/`),
   build it via file target if absent, and keep the dbghelp build.
+- **CI run #19 failed** at a `cp` in my own staging code: the `find` located
+  `libwinecrt0.a` at exactly the meson search path, and the copy was
+  self-identical (BSD cp errors, `set -e` aborts). **`libdxmt_combined.a`
+  was created successfully** (59.6 MB, ~30 LLVM archives via symbol closure).
+  Deeper root cause found for run #17's find_library failure: DXMT resolves
+  `-Dwine_build_path` against the DXMT source root, so the recorded relative
+  `../../wine/...` escapes the repository. Fixed: absolute `wine_build_path`
+  passed to meson, and the self-copy guarded.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
