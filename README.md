@@ -7,6 +7,25 @@ locally — unmodified — on a jailed iPhone (iOS 26+, sideloaded only).
 **Status: Phase 0 ✅ COMPLETE — CI run #24 produced the first
 `windoz.ipa` (145 MB).** Phase 1 (runtime test on device) is next.
 
+## app-windoz — the current app
+
+The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+project whose Swift sources (UI, stores, downloads, settings) are written from
+scratch. The engine — Wine ARM64EC, FEX-Emu, DXMT and the native D3D12 core —
+is reused from the pinned `madeira` submodule behind one boundary,
+`WindozEngine`. The UI never talks to Wine directly.
+
+- [`docs/ENGINE.md`](docs/ENGINE.md) — the boundary, the launch environment, and
+  how Direct3D 11 (DXMT) and Direct3D 12 (native) are handled.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — honest, item-by-item status
+  (✅ done / 🟡 partial / ⛔ not implemented). A feature is only ✅ when it was
+  observed working, on a device where device behaviour matters.
+
+The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection and
+downloads are real and testable today. **Hosting a full game session (rendering +
+input) is the remaining engine port**; until it lands, Play runs a real preflight
+and then reports that honestly instead of pretending to play.
+
 ## Decisions (recorded 2026-10-15)
 
 | Question | Decision |

@@ -75,10 +75,53 @@ targets:
         buildPhase: resources
       - path: ../madeira/app/Madeira/cacert.pem
         buildPhase: resources
+      # The engine's StikDebug script (the iOS-26 BRK region protocol lives in
+      # the engine; this is the matching debugger script).
+      - path: ../madeira/app/Madeira/madeira-jit.js
+        buildPhase: resources
+    info:
+      path: Windoz/Info.plist
+      properties:
+        CFBundleDisplayName: Windoz
+        CFBundleName: Windoz
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        CFBundleInfoDictionaryVersion: "6.0"
+        LSRequiresIPhoneOS: true
+        MinimumOSVersion: "26.0"
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        LSApplicationCategoryType: public.app-category.games
+        # JIT: StikDebug and LocalDevVPN are opened by URL; Live Activities show
+        # download progress; a processing task continues downloads in the
+        # background. (The identifier below is the build-time bundle id; a
+        # re-signed install derives the live one at run time.)
+        LSApplicationQueriesSchemes:
+          - stikdebug
+          - localdevvpn
+        NSSupportsLiveActivities: true
+        UIBackgroundModes:
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.milifrr.windoz.download
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.milifrr.windoz
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: "NO"
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "0.1.0"
         CODE_SIGN_IDENTITY: ""

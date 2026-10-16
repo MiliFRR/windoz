@@ -1,82 +1,73 @@
 import Foundation
 
-/// The engine boundary. Everything above this file talks only to WindozEngine;
-/// nothing above it imports Wine, FEX or DXMT symbols directly.
+/// The engine boundary. **Nothing above this file may import Wine, FEX or DXMT
+/// symbols.** The UI talks to `WindozEngine` and to plain value types only.
 ///
-/// Reuse statement: the underlying C/ObjC binding layer (WineProcessBridge,
-/// FEXBridge, WineServerBridge, JITAllocator, PrefixExtractor — GPL-3.0,
-/// © the Madeira/FEX authors) drives the pinned engine forks and is treated
-/// as part of the engine, per the project's ground rules. Everything above
-/// this boundary is original Windoz code.
-
-enum EngineHealth: Equatable {
-    case unknown
-    case checking
-    case ready
-    case unavailable(String)
-}
-
-struct EngineStatus: Equatable {
-    var jit: EngineHealth = .unknown
-    var memoryEntitlement: EngineHealth = .unknown
-    var freeStorageBytes: Int64 = 0
-}
-
-/// A game the user added from the Files app. (Store providers land in a
-/// later phase behind the StoreProvider protocol.)
-struct LocalGame: Identifiable, Codable, Hashable {
-    var id: UUID = UUID()
-    var title: String
-    var exePath: String          // absolute path inside the app sandbox
-    var addedAt: Date = Date()
-
-    static let storeKey = "windoz.localGames.v1"
-}
-
+/// What is underneath: the pinned engine forks (Wine ARM64EC, FEX-Emu, DXMT and
+/// the native D3D12 runtime) driven by the C/ObjC binding layer that those forks
+/// require. See `docs/ENGINE.md` for the exact boundary and what each entry
+/// point maps to.
+///
+/// Honesty contract: every method either does the thing it says, or throws an
+/// `EngineError` that names the exact missing piece. Nothing here pretends to
+/// run a game when the session host has not been ported yet.
 final class WindozEngine: ObservableObject {
     static let shared = WindozEngine()
 
-    @Published var status = EngineStatus()
+    @Published private(set) var status = EngineStatus()
+    @Published private(set) var phase: SessionPhase = .idle
+    @Published private(set) var currentGameID: UUID?
+
+    let log = EngineLogStream.shared
+    private(set) var prefix: PrefixManager
 
     private let queue = DispatchQueue(label: "windoz.engine", qos: .userInitiated)
+    private var sessionStart: Date?
+    private var callbacksInstalled = false
+
+    init(prefix: PrefixManager = PrefixManager()) {
+        self.prefix = prefix
+        installCallbacks()
+    }
+
+    private func installCallbacks() {
+        guard !callbacksInstalled else { return }
+        callbacksInstalled = true
+        fex_set_log_callback(windozEngineLogTrampoline)
+        jit_set_log_callback(windozEngineLogTrampoline)
+    }
 
     // MARK: - Health
 
-    /// Runs the JIT probe and the memory-entitlement check off the main thread.
+    /// Probe JIT, the memory entitlement, free storage and signing expiry.
+    /// Safe to call often; the work is off the main thread.
     func refreshStatus() {
         status.jit = .checking
         status.memoryEntitlement = .checking
+        status.runningInLiveContainer = AppEnvironment.isLiveContainer
         queue.async { [weak self] in
             guard let self else { return }
-            let jitOK = windoz_jit_probe() != 0
-            let mem = Self.memoryLimitBytes()
+            let jitOK = JITManager.probeEnabled()
+            let memory = JITManager.memoryEntitlementHealth
+            let free = Self.freeStorageBytes()
+            let expiry = JITManager.signingExpiryDate()
             DispatchQueue.main.async {
-                self.status.jit = jitOK ? .ready : .unavailable(
-                    "JIT is only available while a debugger is attached. Install StikDebug, attach it to Windoz, then try again.")
-                self.status.memoryEntitlement = mem == nil
-                    ? .unavailable("The increased-memory entitlement is not active in this signing.")
-                    : .ready
-                self.status.freeStorageBytes = Self.freeStorageBytes()
+                self.status.jit = jitOK ? .ready : .unavailable(Self.jitExplanation())
+                self.status.memoryEntitlement = memory
+                self.status.freeStorageBytes = free
+                self.status.signingExpiresAt = expiry
             }
         }
     }
 
-    /// Increased-memory entitlement check: task_vm_info reports how many
-    /// bytes of physical footprint the task may still use. Without the
-    /// entitlement the limit is small and fixed; with it, far larger.
-    static func memoryLimitBytes() -> Int64? {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
-        let result = withUnsafeMutablePointer(to: &info) { infoPtr in
-            infoPtr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
+    private static func jitExplanation() -> String {
+        if AppEnvironment.isSimulator {
+            return "JIT is not available in the Simulator."
         }
-        guard result == KERN_SUCCESS else { return nil }
-        // limit_bytes_remaining is only meaningful when the kernel applied a
-        // raised limit; zero means "no limit reported".
-        let remaining = Int64(info.limit_bytes_remaining)
-        return remaining > 0 ? remaining : nil
+        if AppEnvironment.isLiveContainer {
+            return "JIT is off. Inside LiveContainer, enable it with the separate StikDebug app (Windoz's bundled helper cannot be used here)."
+        }
+        return "JIT is off. Enable it from Setup with StikDebug, or with Windoz's bundled helper on a normal sideload."
     }
 
     static func freeStorageBytes() -> Int64 {
@@ -86,40 +77,58 @@ final class WindozEngine: ObservableObject {
         return bytes
     }
 
-    // MARK: - Prefix + wineserver
+    // MARK: - Session state
 
-    /// The Wine prefix lives in the app's Documents directory.
-    var prefixURL: URL {
-        URL.documentsDirectory.appendingPathComponent("windos-prefix", isDirectory: true)
+    var isSessionActive: Bool { phase.isActive }
+
+    // MARK: - Prefix
+
+    var prefixIsReady: Bool { prefix.exists }
+
+    func createPrefix() throws {
+        try prefix.createIfNeeded()
+        log.append("Windows environment ready at \(prefix.url.path)", level: .success)
     }
 
-    /// Seeds the prefix (first run) and reports whether the wineserver starts
-    /// and reaches its ready state. This exercises the real engine chain
-    /// (wineserver thread + wine process init) without claiming a full
-    /// game-session host, which is still being ported behind this API.
-    func startEngineCore() async throws {
-        let prefix = prefixURL.path
-        try FileManager.default.createDirectory(atPath: prefix, withIntermediateDirectories: true)
-        madeira_seed_prefix_if_needed(prefix)
+    func repairPrefix() throws {
+        guard !phase.isActive else { throw EngineError.sessionAlreadyRunning }
+        try prefix.repair()
+        log.append("Windows environment repaired (clean template extracted).", level: .success)
+    }
 
-        let ready = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Bool, Error>) in
+    func deletePrefix() throws {
+        guard !phase.isActive else { throw EngineError.sessionAlreadyRunning }
+        try prefix.delete()
+        log.append("Windows environment deleted.", level: .warning)
+    }
+
+    // MARK: - Engine core
+
+    /// Start the engine's core services (the Wine service process and the FEX
+    /// translator) without a game. This is the part that is fully wired and is
+    /// what the diagnostics screen exercises on device.
+    func startEngineCore() async throws {
+        try prefix.createIfNeeded()
+
+        let ready = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
             queue.async {
-                let rc = wineserver_start(prefix)
-                guard rc == 0 else {
-                    cont.resume(throwing: EngineError.wineserverStartFailed)
-                    return
-                }
-                // The server flips to ready once its registry is loaded.
-                for _ in 0..<120 {   // up to ~60 s
-                    if wineserver_is_ready() == 1 { cont.resume(returning: true); return }
-                    if wineserver_is_running() == 0 { continue }
+                let rc = wineserver_start(self.prefix.url.path)
+                guard rc == 0 else { continuation.resume(throwing: EngineError.wineserverStartFailed); return }
+                for _ in 0..<120 {                       // up to ~60 s
+                    if wineserver_is_ready() == 1 { continuation.resume(returning: true); return }
                     Thread.sleep(forTimeInterval: 0.5)
                 }
-                cont.resume(returning: wineserver_is_ready() == 1)
+                continuation.resume(returning: wineserver_is_ready() == 1)
             }
         }
         guard ready else { throw EngineError.wineserverNotReady }
-        guard fex_initialize() else { throw EngineError.fexInitFailed }
+        self.log.append("Wine service process ready.", level: .success)
+
+        let fexOK = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            queue.async { continuation.resume(returning: fex_initialize()) }
+        }
+        guard fexOK else { throw EngineError.fexInitFailed }
+        self.log.append("CPU translator (FEX) initialized.", level: .success)
     }
 
     func stopEngineCore() {
@@ -128,50 +137,164 @@ final class WindozEngine: ObservableObject {
             wineserver_stop()
         }
     }
-}
 
-enum EngineError: LocalizedError {
-    case wineserverStartFailed
-    case wineserverNotReady
-    case fexInitFailed
-    case sessionHostingNotPorted
+    // MARK: - Launch
 
-    var errorDescription: String? {
-        switch self {
-        case .wineserverStartFailed: return "The wineserver could not start."
-        case .wineserverNotReady: return "The wineserver started but did not reach its ready state."
-        case .fexInitFailed: return "The CPU emulator (FEX) failed to initialize."
-        case .sessionHostingNotPorted: return
-            "The engine core works, but hosting a full game session (rendering + input) is still being ported into Windoz. This build starts the engine core only."
+    /// Preflight + launch. The preflight is real and complete: it checks JIT,
+    /// the prefix and the executable, then writes the guest environment the
+    /// engine's forks read. Starting the *session host* (the JIT pool, the Metal
+    /// presentation layer and input routing) is the remaining port, so this
+    /// currently throws `.sessionHostingNotImplemented` with a clear message
+    /// rather than pretending to play the game.
+    func launch(_ game: InstalledGame) async throws {
+        guard !phase.isActive else { throw EngineError.sessionAlreadyRunning }
+
+        // 1. JIT — re-checked on every launch, as required.
+        guard JITManager.probeEnabled() else {
+            throw EngineError.jitRequired(Self.jitExplanation())
         }
-    }
-}
 
-// MARK: - Local game library
+        // 2. Prefix.
+        try prefix.createIfNeeded()
 
-final class LocalGameStore: ObservableObject {
-    @Published var games: [LocalGame] = []
-
-    init() {
-        if let data = UserDefaults.standard.data(forKey: LocalGame.storeKey),
-           let decoded = try? JSONDecoder().decode([LocalGame].self, from: data) {
-            games = decoded
+        // 3. Executable.
+        guard FileManager.default.fileExists(atPath: game.executablePath) else {
+            throw EngineError.executableMissing(game.executablePath)
         }
+
+        // 4. Guest environment for the engine's launcher.
+        applyLaunchEnvironment(for: game)
+        log.append("[launch] preflight passed for \(game.title)")
+
+        phase = .starting
+        currentGameID = game.id
+        sessionStart = Date()
+        GameLibrary.shared.markPlayed(id: game.id)
+
+        // 5. Session host (JIT pool + CAMetalLayer + input) — not ported yet.
+        phase = .failed(EngineError.sessionHostingNotImplemented.localizedDescription)
+        throw EngineError.sessionHostingNotImplemented
     }
 
-    func add(title: String, exePath: String) {
-        games.append(LocalGame(title: title, exePath: exePath))
-        persist()
+    /// The engine's virtual monitor default before `MADEIRA_SCREEN_W/H` is
+    /// applied, and the base a game's render scale is expressed against.
+    static let guestBaseResolution = (width: 1280, height: 720)
+
+    /// Write the environment the engine's launcher (`wine_process_start`) reads.
+    ///
+    /// **Only switch names the pinned forks actually read are written** (see
+    /// `docs/ENGINE.md` for the list and its sources). Settings the engine
+    /// applies through its own in-process API — the frame cap, the present/sync
+    /// mode, the D3D11/D3D12 choice and MetalFX — have no environment variable,
+    /// so they are reported here rather than faked; the (unported) session host
+    /// is what applies them. Nothing is invented.
+    private func applyLaunchEnvironment(for game: InstalledGame) {
+        let settings = game.settings
+
+        // MADEIRA_EXE: the program to run. The forks resolve both the PE path
+        // and the working folder from it, so it must be a Windows path: a
+        // guarded `C:\` path inside the prefix, or a `Z:\` path (Wine's default
+        // root mapping) when the executable was installed outside drive_c.
+        let guestExe = prefix.windowsPath(forHostPath: game.executablePath)
+            ?? Self.rootMappedWindowsPath(forHostPath: game.executablePath)
+        setenv("MADEIRA_EXE", guestExe, 1)
+
+        // MADEIRA_ARGS: space-separated extra arguments appended to argv.
+        if settings.launchArguments.isEmpty {
+            unsetenv("MADEIRA_ARGS")
+        } else {
+            setenv("MADEIRA_ARGS", settings.launchArguments, 1)
+        }
+
+        // The virtual monitor: the engine reads MADEIRA_SCREEN_W/H once per
+        // session and MADEIRA_SCREEN_SRC only for its log line.
+        let monitor = Self.guestMonitor(scale: settings.resolutionScale)
+        setenv("MADEIRA_SCREEN_W", String(monitor.width), 1)
+        setenv("MADEIRA_SCREEN_H", String(monitor.height), 1)
+        setenv("MADEIRA_SCREEN_SRC", monitor.source, 1)
+
+        // MADEIRA_WORKDIR: the working folder. The forks chdir into it and only
+        // honour a `C:\` folder, so anything else is not exported.
+        unsetenv("MADEIRA_WORKDIR")
+        if let guest = guestWorkingDirectory(for: game) {
+            setenv("MADEIRA_WORKDIR", guest, 1)
+        }
+
+        // The user's own forks switches, named as the forks name them
+        // (FEX_X87REDUCEDPRECISION, MADEIRA_CPU_COUNT, DXMT_D9_ANISO_LIMIT, ...).
+        // Windoz never invents a key of its own.
+        for (key, value) in settings.environment where !key.isEmpty {
+            setenv(key, value, 1)
+        }
+
+        // Applied by the engine's in-process API, not the environment. Reported
+        // so the log says what this session was configured to do.
+        log.append("[launch] frame cap \(settings.fpsCap > 0 ? "\(settings.fpsCap) FPS" : "uncapped"), "
+                   + "sync \(settings.syncMode.title), MetalFX \(settings.metalFXUpscaling ? "on" : "off") "
+                   + "— applied by the session host, not env")
+        log.append("[launch] guest env prepared (exe=\(guestExe), backend=\(settings.graphicsBackend.title))")
     }
 
-    func remove(_ game: LocalGame) {
-        games.removeAll { $0.id == game.id }
-        persist()
+    /// A guest Windows path for a folder inside the prefix, or nil. The
+    /// per-game `GameSettings.workingDirectory` already is a guest path when the
+    /// user set one; `InstalledGame.workingDirectory` is a host path.
+    private func guestWorkingDirectory(for game: InstalledGame) -> String? {
+        let configured = game.settings.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isGuestDrivePath(configured) {
+            return configured
+        }
+        guard !game.workingDirectory.isEmpty else { return nil }
+        return prefix.windowsPath(forHostPath: game.workingDirectory)
     }
 
-    private func persist() {
-        if let data = try? JSONEncoder().encode(games) {
-            UserDefaults.standard.set(data, forKey: LocalGame.storeKey)
+    /// `C:\folder` (or `Z:\folder`) — a path the forks can chdir into.
+    private static func isGuestDrivePath(_ path: String) -> Bool {
+        guard path.count > 3 else { return false }
+        guard let colon = path.firstIndex(of: ":"), path.index(after: colon) < path.endIndex,
+              path[path.index(after: colon)] == "\\" else { return false }
+        let drive = path[path.startIndex..<colon]
+        return drive.count == 1 && drive.first!.isLetter
+    }
+
+    /// Wine maps `Z:` to the host root, so a game installed outside the prefix
+    /// still has a stable guest path.
+    private static func rootMappedWindowsPath(forHostPath host: String) -> String {
+        "Z:" + host.replacingOccurrences(of: "/", with: "\\")
+    }
+
+    /// The guest monitor size the render scale asks for. The scale is relative
+    /// to `guestBaseResolution`; the result is clamped to the range the engine
+    /// accepts and kept even-numbered.
+    static func guestMonitor(scale: Double) -> (width: Int, height: Int, source: String) {
+        let clamped = min(max(scale, 0.25), 4.0)
+        func dimension(_ base: Int) -> Int {
+            let scaled = Int((Double(base) * clamped).rounded())
+            let even = scaled - (scaled % 2)
+            return min(max(even, 320), 4096)
+        }
+        return (dimension(guestBaseResolution.width), dimension(guestBaseResolution.height),
+                "windoz:\(String(format: "%.2f", clamped))")
+    }
+
+    // MARK: - Stop
+
+    func stop() {
+        guard phase.isActive else { return }
+        phase = .stopping
+        let started = sessionStart
+        queue.async { [weak self] in
+            fex_shutdown()
+            wineserver_stop()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let started, let id = self.currentGameID {
+                    GameLibrary.shared.addPlaytime(id: id, seconds: Date().timeIntervalSince(started))
+                }
+                self.sessionStart = nil
+                self.currentGameID = nil
+                self.phase = .idle
+                self.log.append("Session stopped.")
+            }
         }
     }
 }
