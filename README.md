@@ -30,6 +30,12 @@ is reused from the pinned `madeira` submodule behind one boundary,
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — honest, item-by-item status
   (✅ done / 🟡 partial / ⛔ not implemented). A feature is only ✅ when it was
   observed working, on a device where device behaviour matters.
+- [`docs/SIDELOADING.md`](docs/SIDELOADING.md) — getting the CI's IPA onto an
+  iPhone (Sideloadly / SideStore / LiveContainer), JIT via StikDebug, and the
+  free-Apple-ID realities.
+- [`docs/DOZDOCK.md`](docs/DOZDOCK.md) — what Doz Dock is, what exists today
+  (the download engine; the store clients are honest stubs), and the rules it
+  will keep (no DRM circumvention, no fake clients).
 
 The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection and
 downloads are real and testable today. **Hosting a full game session (rendering +
@@ -107,7 +113,8 @@ are public as of 2026-10-14). The pipeline:
   verification, BGContinuedProcessingTask + Live Activity (title, percent,
   speed, ETA).
 - [ ] **Phase 5 — Doz Dock.** Madeira Dock ported/renamed/improved; official
-  Steam-DRM games launch through Valve's own client running in Wine.
+  Steam-DRM games launch through Valve's own client running in Wine
+  (design and honest state: [`docs/DOZDOCK.md`](docs/DOZDOCK.md)).
 - [ ] **Phase 6 — Settings & polish.** Graphics options, storage management,
   log export, Steam account management.
 - [ ] **Phase 7 — Per-game options & logging.** Per-game Wine/DXMT options,
@@ -122,11 +129,42 @@ are public as of 2026-10-14). The pipeline:
 
 ## Build steps (local)
 
-Requires a Mac with Xcode 26. The CI workflow (`.github/workflows/build.yml`)
+Requires a Mac with Xcode 26. The CI workflow (`.github/workflows/build-ipa.yml`)
 is the authoritative recipe; every step above is a script you can run in
-order from a clean recursive clone.
+order from a clean recursive clone — or simply `make ipa` (see the
+`Makefile`; `make entitlements` checks the signing plist).
+
+## Automation
+
+| Workflow | What it does |
+|---|---|
+| [`build-ipa.yml`](.github/workflows/build-ipa.yml) | The full chain on a cloud macOS runner: LLVM, llvm-mingw, the VC++ runtime, Wine/FEX/DXMT/D3D12, the app, the `windoz.ipa` artifact. |
+| [`typecheck.yml`](.github/workflows/typecheck.yml) | Fast `swiftc -typecheck` + XcodeGen validation on `ci-*` branches — minutes instead of hours. |
+| [`issue-watcher.yml`](.github/workflows/issue-watcher.yml) | The self-healing loop. A failed `main` build, or a new owner-authored (or `autofix`-labelled) issue, is read by an AI agent; it writes the fix on an `autofix/…` branch; the full macOS build is dispatched on that branch; and **only a build-verified change is squash-merged to `main`** and reported back on the issue. If the attempts do not pass, it says so in the issue (or opens one). |
+
+Controls live in **Settings → Secrets and variables → Actions**:
+
+- `AUTOFIX_ENABLED=false` (variable) switches the watcher off.
+- `AUTOFIX_MODEL` (variable) picks the agent model. The default,
+  `opencode/deepseek-v4.1-flash-free`, needs no secret; a paid model needs
+  `OPENCODE_CONSOLE_TOKEN`. Expose nothing else — anything in the environment
+  is reachable by the agent's shell.
+- Adding the `autofix` label to an issue is the explicit "fix this one";
+  without it, only owner/member/collaborator issues are picked up.
+
+The watcher treats issue text and build logs as **untrusted data** (prompt
+injection), runs the agent with a deny-list (no `curl`/`wget`/`ssh`, no `gh`,
+no `git push`), and the workflow — not the agent — pushes, verifies and merges.
 
 ## Known issues
+
+*Operational note (2026-10-17): when this repository was next looked at, the
+GitHub side had been emptied again — no commits, no runs, and the
+`vc-runtime-inputs` release gone. `main` was pushed back from the working copy
+(so the history below is the history again), the release was re-created from
+the locally kept zip whose SHA-256 still matches the pin in
+`scripts/fetch-vcruntime.sh`, and Actions run numbering restarts at #1 for the
+restored repository.*
 
 *Diagnosed failures from the previous incarnation of this repository (its run
 numbers, #1–#35, no longer exist — this repository was recreated on 2026-10-16
