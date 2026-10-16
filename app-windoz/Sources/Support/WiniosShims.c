@@ -14,7 +14,9 @@ void ios_dump_all_thread_stacks(void) {
     mach_msg_type_number_t count;
     if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return;
 
-    thread_act_array_t self_port = mach_thread_self();
+    /* mach_thread_self() returns a thread port, not a thread array: compare it
+     * against the per-thread ports below so the dumper never suspends itself. */
+    mach_port_t self_port = mach_thread_self();
     dprintf(2, "[windoz] thread stack dump (%u threads):\n", count);
 
     for (mach_msg_type_number_t i = 0; i < count; i++) {
@@ -45,8 +47,8 @@ void ios_dump_all_thread_stacks(void) {
             uintptr_t pc = (uintptr_t)arm_thread_state64_get_pc(st);
             const char *where = "?";
             char buf[128];
-            Dl_info di;
-            if (dladdr((const void *)pc, &di) && di.dli_sname) {
+            Dl_info di = {0};
+            if (dladdr((const void *)pc, &di) != 0 && di.dli_sname) {
                 where = di.dli_sname;
             } else if (di.dli_fname) {
                 const char *b = strrchr(di.dli_fname, '/');
@@ -64,5 +66,6 @@ void ios_dump_all_thread_stacks(void) {
         thread_resume(threads[i]);
         mach_port_deallocate(mach_task_self(), threads[i]);
     }
+    mach_port_deallocate(mach_task_self(), self_port);
     vm_deallocate(mach_task_self(), (vm_address_t)threads, count * sizeof(*threads));
 }
