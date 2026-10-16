@@ -367,6 +367,18 @@ the fix that is still in the tree.*
   `toolchains/llvm-ios-build/lib` — still printing the old closure as
   information only, and failing loudly if `libLLVMPasses.a` is absent. Linking
   member-by-member means unused archives cost nothing.
+- **Why that archive was missing at all** (found while reading run #1's steps):
+  run #1 restored no LLVM cache, started building LLVM, and was cancelled 22
+  minutes later by the next push — but the `Save LLVM cache (even on later
+  failures)` step still ran and wrote the *partial* `llvm-ios-build` tree under
+  the version-3 key. Every run since restored that incomplete tree and skipped
+  the LLVM step, which is why "Build runtime" succeeded (Wine/FEX/DXMT need
+  LLVM's headers and only some archives) while "Build app" could not link
+  airconv. Fixed twice over: the cache key moves to **v4** (a fresh entry) with a
+  `restore-keys` fallback so the old tree is *completed* rather than discarded,
+  and the LLVM step now **always runs** — `build-llvm.sh` is idempotent and ends
+  in an incremental `cmake --build`, so a complete tree costs seconds and a
+  partial one is finished in place instead of failing the link an hour later.
 - **Same run, non-fatal warnings worth knowing:** the app was linked with
   Xcode 26's *debug dylib* mode (`Windoz.app/Windoz.debug.dylib`). An unsigned
   IPA with a second Mach-O gives sideloading tools — LiveContainer included —

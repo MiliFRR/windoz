@@ -58,10 +58,21 @@ jobs:
             madeira/toolchains/llvm-project
             madeira/toolchains/llvm-host-build
             madeira/toolchains/llvm-ios-build
-          key: llvm-${{ env.LLVM_COMMIT }}-v3
+          # v4: the v3 entry was written by the "Save LLVM cache (even on later
+          # failures)" step of a run that was CANCELLED mid-build, so it holds a
+          # partial llvm-ios-build/lib (no libLLVMPasses.a — the app link failed
+          # on exactly the symbols that archive defines). v4 starts a fresh entry;
+          # the restore-key fallback still lets that v3 tree be completed
+          # incrementally instead of rebuilt from zero.
+          key: llvm-${{ env.LLVM_COMMIT }}-v4
+          restore-keys: |
+            llvm-${{ env.LLVM_COMMIT }}-
 
       - name: Build LLVM for iOS
-        if: steps.llvmcache.outputs.cache-hit != 'true'
+        # Always run, even on a cache hit. build-llvm.sh is idempotent and ends in
+        # `cmake --build` (ninja), so a complete tree costs seconds, while a tree
+        # restored from a cache entry that a cancelled run wrote gets finished
+        # here — instead of surfacing much later as a missing archive.
         run: ./scripts/build-llvm.sh
 
       - name: Save LLVM cache (even on later failures)
@@ -72,7 +83,7 @@ jobs:
             madeira/toolchains/llvm-project
             madeira/toolchains/llvm-host-build
             madeira/toolchains/llvm-ios-build
-          key: llvm-${{ env.LLVM_COMMIT }}-v3
+          key: llvm-${{ env.LLVM_COMMIT }}-v4
 
       - name: Fetch llvm-mingw toolchain
         run: ./scripts/fetch-llvm-mingw.sh
