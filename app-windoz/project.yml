@@ -10,6 +10,9 @@ settings:
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Support/Windoz-Bridging-Header.h
     TARGETED_DEVICE_FAMILY: "1,2"
     SWIFT_VERSION: "5.0"
+    CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+    CLANG_ENABLE_MODULES: "YES"
+    CLANG_ENABLE_OBJC_ARC: "YES"
     # Engine static libraries (built by scripts/build-runtime.sh into the
     # madeira submodule tree) — all linked with -l via these search paths.
     OTHER_LDFLAGS: "$(inherited) -L../madeira/app/Madeira -L../madeira/FEX/build-ios/FEXCore/Source -L../madeira/FEX/build-ios/External/fmt -L../madeira/FEX/build-ios/External/cephes -L../madeira/FEX/build-ios/External/xxhash/cmake_unofficial -L../madeira/FEX/build-ios/External/SoftFloat-3e"
