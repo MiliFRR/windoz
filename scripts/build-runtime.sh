@@ -104,19 +104,31 @@ if [ ! -f FEX/build-ios/CMakeCache.txt ]; then
     -DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78
 fi
 run bash build/fex-ios/build.sh
-# FEX's root CMake disables the JemallocLibs target on Apple ("Apple platform
-# detected — disabling jemalloc and rpmalloc"; FEXCore uses the system
-# allocator there), but the app's Xcode project links
-# FEX/build-ios/FEXCore/Source/libJemallocLibs.a unconditionally (CI run #21:
-# ld: library 'JemallocLibs' not found). The dev machine's copy was a stale
-# artifact. The Apple FEXCore references no jemalloc symbols, so an empty
-# stub archive satisfies the link harmlessly.
-mkdir -p FEX/build-ios/FEXCore/Source
+# FEX's root CMake disables the JemallocLibs target on Apple, but the app's
+# Xcode project links FEX/build-ios/FEXCore/Source/libJemallocLibs.a
+# unconditionally (CI run #21: ld: library 'JemallocLibs' not found). Build
+# the archive ourselves from FEX's own Utils/AllocatorHooks.cpp — WITHOUT
+# ENABLE_FEX_ALLOCATOR this is the system-malloc passthrough (identical to
+# FEX's JemallocDummy target). Also stub the four terminfo functions LLVM's
+# color detection references: the iOS SDK has no terminfo, and returning
+# "no colors" is functionally correct (CI run #22).
+mkdir -p FEX/build-ios/FEXCore/Source "$ROOT/work/linkstubs"
 if [ ! -f FEX/build-ios/FEXCore/Source/libJemallocLibs.a ]; then
-  printf '' > "$ROOT/work/empty_jemalloc.c"
-  xcrun -sdk iphoneos clang -c "$ROOT/work/empty_jemalloc.c" -o "$ROOT/work/empty_jemalloc.o"
-  xcrun -sdk iphoneos ar rcs FEX/build-ios/FEXCore/Source/libJemallocLibs.a "$ROOT/work/empty_jemalloc.o"
-  echo "created empty libJemallocLibs.a stub (Apple FEXCore uses the system allocator)"
+  xcrun -sdk iphoneos clang++ -arch arm64 \
+    -c "$ROOT/madeira/FEX/FEXCore/Source/Utils/AllocatorHooks.cpp" \
+    -o "$ROOT/work/linkstubs/AllocatorHooks.o"
+  cat > "$ROOT/work/linkstubs/terminfo_stub.c" <<'EOF'
+/* iOS has no terminfo; LLVM only uses these for color detection. */
+void *set_curterm(void *nterm) { return (void *)0; }
+int del_curterm(void *oterm) { return 0; }
+int setupterm(char *term, int filedes, int *errret) { if (errret) *errret = 1; return -1; }
+int tigetnum(const char *capname) { return -2; }
+EOF
+  xcrun -sdk iphoneos clang -arch arm64 \
+    -c "$ROOT/work/linkstubs/terminfo_stub.c" -o "$ROOT/work/linkstubs/terminfo_stub.o"
+  xcrun -sdk iphoneos ar rcs FEX/build-ios/FEXCore/Source/libJemallocLibs.a \
+    "$ROOT/work/linkstubs/AllocatorHooks.o" "$ROOT/work/linkstubs/terminfo_stub.o"
+  echo "created libJemallocLibs.a (passthrough allocator hooks + terminfo stubs)"
 fi
 # fex-arm64ec: pre-configure with the script's exact options (BUILDING.md:
 # "the options the madeira-bcd fork's macOS CI has built xtajit64.dll with

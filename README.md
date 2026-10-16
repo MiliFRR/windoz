@@ -269,6 +269,16 @@ order from a clean recursive clone.
   creates an empty stub archive. **Everything else in run #21 passed:
   Xcode 26.6 parsed the StikJIT interfaces, all Swift compiled, and the app
   linked down to this single library.**
+- **CI run #22 failed** at the final link: `Undefined symbols:
+  FEXCore::Allocator::{malloc,free,aligned_alloc,aligned_free,memalign}` (from
+  FEXCore's allocator-aware fextl — defined in FEX's
+  `Utils/AllocatorHooks.cpp`, which FEX's CMake only compiles into the
+  Apple-disabled JemallocLibs target) and `_setupterm/_set_curterm/
+  _del_curterm/_tigetnum` (LLVM color detection; the iOS SDK has no
+  terminfo). Fixed: the stub archive now contains FEX's own
+  `AllocatorHooks.cpp` compiled WITHOUT `ENABLE_FEX_ALLOCATOR` (the
+  system-malloc passthrough — identical to FEX's JemallocDummy target) plus
+  terminfo stubs returning "no colors".
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
