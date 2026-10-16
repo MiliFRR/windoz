@@ -7,7 +7,8 @@ struct SettingsView: View {
     @ObservedObject private var log = EngineLogStream.shared
     @ObservedObject private var controller = ControllerManager.shared
 
-    @AppStorage("windoz.jitMethod") private var jitMethodRaw = JITMethod.automatic.rawValue
+    @AppStorage("windoz.jitMethod") private var jitMethodRaw =
+        (AppEnvironment.availableJITMethods.first ?? .stikDebug).rawValue
     @State private var confirmDelete = false
     @State private var confirmRepair = false
     @State private var coreMessage: String?
@@ -70,10 +71,16 @@ struct SettingsView: View {
 
     private var jitSection: some View {
         Section("JIT") {
-            Picker("Method", selection: $jitMethodRaw) {
-                ForEach(AppEnvironment.availableJITMethods) { method in
-                    Text(method.title).tag(method.rawValue)
+            // Only offer a choice when there genuinely is one: this build has no
+            // helper extension in the bundle, so the StikDebug app is the route.
+            if AppEnvironment.availableJITMethods.count > 1 {
+                Picker("Method", selection: $jitMethodRaw) {
+                    ForEach(AppEnvironment.availableJITMethods) { method in
+                        Text(method.title).tag(method.rawValue)
+                    }
                 }
+            } else if let only = AppEnvironment.availableJITMethods.first {
+                LabeledContent("Method", value: only.title)
             }
             Text(AppEnvironment.jitSituation)
                 .font(.caption).foregroundStyle(.secondary)

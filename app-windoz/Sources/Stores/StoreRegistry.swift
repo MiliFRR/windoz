@@ -49,7 +49,7 @@ final class StoreRegistry: ObservableObject {
     }
 
     /// Every provider, as the protocol the rest of the app sees.
-    var providers: [StoreProvider] { [local, steam, epic, gog, rockstar, ea] }
+    var providers: [any StoreProvider] { [local, steam, epic, gog, rockstar, ea] }
 
     private func rebuild() {
         summaries = providers.map { provider in
@@ -62,7 +62,7 @@ final class StoreRegistry: ObservableObject {
         }
     }
 
-    func provider(_ id: StoreID) -> StoreProvider? {
+    func provider(_ id: StoreID) -> (any StoreProvider)? {
         providers.first { $0.id == id }
     }
 

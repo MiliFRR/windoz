@@ -27,11 +27,14 @@ enum AppEnvironment {
         Bundle.main.bundleIdentifier ?? "com.milifrr.windoz"
     }
 
-    /// JIT methods that can actually work here, in preference order.
+    /// JIT methods that can actually work here, in preference order. The
+    /// built-in helper is only offered when its extension really is in the
+    /// bundle (`JITManager.builtInHelperUsable`), so the list never promises a
+    /// route this build does not have.
     static var availableJITMethods: [JITMethod] {
         if isSimulator { return [] }
         if isLiveContainer { return [.stikDebug] }
-        return [.automatic, .stikDebug, .builtIn]
+        return JITManager.builtInHelperUsable ? [.automatic, .stikDebug, .builtIn] : [.stikDebug]
     }
 
     /// Why a normally-available feature is limited on this install, if it is.

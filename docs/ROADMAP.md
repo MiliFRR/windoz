@@ -19,6 +19,7 @@ what it is.
 | wineserver + FEX core | ✅ | `WindozEngine.startEngineCore` (Settings → Diagnostics) |
 | Log streaming (FEX/JIT → in-app log) | ✅ | `EngineLogStream` |
 | JIT probe + StikDebug deep link | ✅ | `JITManager`; re-checked every launch |
+| Bundled JIT helper extension | ⛔ | no helper target yet, so the UI offers StikDebug only (the bundle is checked, not assumed) |
 | Memory-entitlement report | ✅ | honest "not active" when the signing lacks it |
 | **Game session host** (JIT pool, CAMetalLayer, input) | ⛔ | `launch` throws `sessionHostingNotImplemented` after a real preflight |
 | Per-game settings → engine | 🟡 | stored and validated; applied by the (unported) session host |

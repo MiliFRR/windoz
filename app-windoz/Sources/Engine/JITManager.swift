@@ -18,11 +18,18 @@ enum JITManager {
         return jit_check_debugged()
     }
 
-    /// Whether the bundled helper extension may be used here. LiveContainer runs
-    /// guest apps in its own process and cannot start an app's nested extension,
-    /// so inside LiveContainer only StikDebug can work.
+    /// Whether the bundled helper extension may be used here. It has to be
+    /// genuinely present in the bundle: the extension is not part of this build
+    /// yet, and inside LiveContainer — where the guest app runs in LiveContainer's
+    /// own process — a nested extension can never be started anyway. The answer
+    /// therefore comes from the bundle, never from the build configuration.
     static var builtInHelperUsable: Bool {
-        !AppEnvironment.isLiveContainer && !AppEnvironment.isSimulator
+        guard !AppEnvironment.isLiveContainer, !AppEnvironment.isSimulator else { return false }
+        guard let plugins = Bundle.main.builtInPlugInsURL,
+              let items = try? FileManager.default.contentsOfDirectory(
+                at: plugins, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        else { return false }
+        return !items.isEmpty
     }
 
     /// The `stikdebug://enable-jit` URL for this process. StikDebug is given

@@ -146,8 +146,12 @@ routes:
   is the only route inside **LiveContainer**: `LC_HOME_PATH` is set there, the
   guest app runs in LiveContainer's process, and a bundled app extension cannot
   be started, so `JITManager.builtInHelperUsable` is false.
-- **Bundled helper extension** on a normal sideload (JIT v1 keeps the deep-link
-  + on-device probe; the helper target is a later addition).
+- **Bundled helper extension** on a normal sideload — *not in this build*. The
+  helper target does not exist yet, so `JITManager.builtInHelperUsable` reads
+  the bundle (`Bundle.main.builtInPlugInsURL`) and reports false, and
+  `AppEnvironment.availableJITMethods` therefore offers only StikDebug. The
+  moment the extension is added to the bundle the choice appears by itself;
+  until then nothing claims it is there.
 
 `WindozEngine.refreshStatus` probes JIT, memory and storage off the main thread;
 `launch` re-checks JIT on **every** launch. The increased-memory entitlement
