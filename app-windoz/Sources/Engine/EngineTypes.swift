@@ -208,6 +208,8 @@ struct EngineStatus: Equatable {
     var jitMethod: JITMethod = .automatic
     /// Earliest date at which the current signing certificate stops working.
     var signingExpiresAt: Date?
+    /// Process physical footprint, measured; 0 if the kernel did not report it.
+    var memoryFootprintBytes: Int64 = 0
 }
 
 // MARK: - Session state

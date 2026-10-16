@@ -8,7 +8,7 @@ struct PrefixManager {
     /// hives and installed games all sit next to the app's own data.
     let url: URL
 
-    init(base: URL = URL.documentsDirectory) {
+    init(base: URL = AppContainer.documents) {
         self.url = base.appendingPathComponent("windoz-prefix", isDirectory: true)
     }
 

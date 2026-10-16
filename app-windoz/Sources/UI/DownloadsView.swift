@@ -42,6 +42,10 @@ struct DownloadsView: View {
                     Text("You are on a metered connection, so downloads are held.")
                         .font(.caption).foregroundStyle(Theme.warn)
                 }
+                if AppEnvironment.isLiveContainer {
+                    Text("Inside LiveContainer, iOS will not continue these transfers after Windoz is closed. Leave this screen (or a LiveContainer window) open until they finish.")
+                        .font(.caption).foregroundStyle(Theme.warn)
+                }
                 Button("Clear finished") { manager.clearCompletedAndFailed() }
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.accent)

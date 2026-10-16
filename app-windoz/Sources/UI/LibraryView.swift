@@ -124,7 +124,7 @@ struct LibraryView: View {
         // Copy the game's folder into the app container so it is not tied to the
         // Files provider's security scope.
         let sourceFolder = isDirectory.boolValue ? url : url.deletingLastPathComponent()
-        let imported = URL.documentsDirectory.appendingPathComponent("Imported", isDirectory: true)
+        let imported = AppContainer.importedGames
         try fm.createDirectory(at: imported, withIntermediateDirectories: true)
         var destination = imported.appendingPathComponent(sourceFolder.lastPathComponent, isDirectory: true)
         var suffix = 1

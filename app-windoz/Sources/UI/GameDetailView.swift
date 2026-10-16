@@ -89,8 +89,14 @@ struct GameDetailView: View {
                 play(game)
             }
             if !engine.status.jit.isReady {
-                Text("JIT is off, so games cannot run yet. Enable it in Setup or Settings.")
+                Text(AppEnvironment.isLiveContainer
+                     ? "JIT is off. Inside LiveContainer enable Launch with JIT and attach StikDebug, then come back and press Play."
+                     : "JIT is off, so games cannot run yet. Enable it in Setup or Settings.")
                     .font(.caption).foregroundStyle(Theme.warn)
+            }
+            if AppEnvironment.isLiveContainer, engine.status.memoryFootprintBytes > 0 {
+                Text("This LiveContainer process is using \(ByteCountFormatter.string(fromByteCount: engine.status.memoryFootprintBytes, countStyle: .memory)). Chromium store launchers are started only when a game needs them.")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.45))
             }
         }
     }

@@ -58,10 +58,11 @@ final class DownloadManager: NSObject, ObservableObject {
     private var resumeData: [UUID: Data] = [:]
     private var maxConcurrent = 2
     private let pathMonitor = NWPathMonitor()
-    private let persistenceURL = URL.documentsDirectory.appendingPathComponent("windoz-downloads.json")
+    private let persistenceURL: URL
 
     private override init() {
         wifiOnly = UserDefaults.standard.bool(forKey: "windoz.downloads.wifiOnly")
+        persistenceURL = AppContainer.downloadsFile
         super.init()
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -193,6 +194,10 @@ final class DownloadManager: NSObject, ObservableObject {
     private var backgroundTaskPermitted = false
 
     private func registerBackgroundTask() {
+        if AppEnvironment.isLiveContainer {
+            EngineLogStream.shared.append("Continued downloads in the background are unavailable inside LiveContainer (guest apps cannot register BGTaskScheduler identifiers). Keep Windoz open while a download runs.", level: .warning)
+            return
+        }
         let identifier = Self.backgroundTaskIdentifier
         let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
         guard permitted.contains(identifier) else {

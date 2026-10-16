@@ -70,7 +70,7 @@ final class RuntimeInstaller: ObservableObject {
 
     @Published private(set) var states: [RuntimeComponent: RuntimeState] = [:]
 
-    private let staging = URL.documentsDirectory.appendingPathComponent("windoz-runtimes", isDirectory: true)
+    private var staging: URL { AppContainer.runtimes }
 
     func refresh(prefix: PrefixManager) {
         let system32 = prefix.windowsPath.appendingPathComponent("system32")

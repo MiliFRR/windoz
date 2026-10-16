@@ -14,7 +14,7 @@ final class GameLibrary: ObservableObject {
     private let fileURL: URL
     private let queue = DispatchQueue(label: "windoz.library")
 
-    init(fileURL: URL = URL.documentsDirectory.appendingPathComponent("windoz-library.json")) {
+    init(fileURL: URL = AppContainer.libraryFile) {
         self.fileURL = fileURL
         load()
     }

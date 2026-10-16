@@ -33,13 +33,15 @@ enum JITManager {
     }
 
     /// The `stikdebug://enable-jit` URL for this process. StikDebug is given
-    /// Windoz's live bundle identifier, this PID and the engine's script.
+    /// the process that needs CS_DEBUGGED (LiveProcess inside LiveContainer),
+    /// this PID, and the engine's script. Prefer attaching by PID: the guest
+    /// bundle id is not registered with SpringBoard under LiveContainer.
     static func stikDebugEnableURL() -> URL? {
         var components = URLComponents()
         components.scheme = "stikdebug"
         components.host = "enable-jit"
         var items = [
-            URLQueryItem(name: "bundle-id", value: AppEnvironment.bundleIdentifier),
+            URLQueryItem(name: "bundle-id", value: AppEnvironment.jitTargetBundleIdentifier),
             URLQueryItem(name: "pid", value: String(getpid())),
         ]
         if let script = jitScriptBase64() {
@@ -49,13 +51,14 @@ enum JITManager {
         return components.url
     }
 
-    /// The bundled engine script (`madeira-jit.js`), base64 encoded, or nil when
-    /// the resource is missing (StikDebug then enables JIT without the custom
-    /// script — enough to run, but not the full BRK region protocol).
+    /// The engine script (`madeira-jit.js` / staged `windoz-jit.js`), base64
+    /// encoded, or nil when missing (StikDebug then enables JIT without the
+    /// custom script — enough for CS_DEBUGGED, but not the full BRK protocol).
     static func jitScriptBase64() -> String? {
-        guard let url = Bundle.main.url(forResource: "windoz-jit", withExtension: "js")
-            ?? Bundle.main.url(forResource: "madeira-jit", withExtension: "js"),
-              let data = try? Data(contentsOf: url) else { return nil }
+        let url = AppContainer.bundledJITScriptURL()
+            ?? (FileManager.default.fileExists(atPath: AppContainer.stagedJITScript.path)
+                ? AppContainer.stagedJITScript : nil)
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
         return data.base64EncodedString()
     }
 
@@ -78,6 +81,20 @@ enum JITManager {
 
     static func availableMemoryBytes() -> UInt64 {
         jit_available_memory()
+    }
+
+    /// Current physical footprint of this process (LiveProcess when hosted).
+    /// Used to warn that Chromium launchers are heavy on iPhone RAM.
+    static func physicalFootprintBytes() -> Int64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Int64(info.phys_footprint)
     }
 
     /// The increased-memory entitlement is granted by the signing profile and

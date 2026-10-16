@@ -50,6 +50,16 @@ struct SetupWizardView: View {
             StatusLine(health: engine.status.jit, text: jitSummary)
             Text(AppEnvironment.jitSituation)
                 .font(.footnote).foregroundStyle(.white.opacity(0.6))
+            if AppEnvironment.isLiveContainer {
+                NavigationLink {
+                    LiveContainerView()
+                } label: {
+                    Label("LiveContainer setup", systemImage: "shippingbox")
+                        .frame(maxWidth: .infinity).padding(.vertical, 12)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            }
             if !engine.status.jit.isReady {
                 Button {
                     openStikDebug()
@@ -86,6 +96,11 @@ struct SetupWizardView: View {
                             value: ByteCountFormatter.string(fromByteCount: engine.status.freeStorageBytes, countStyle: .file))
                     InfoRow(label: "Plan for", value: "Games + prefix, ~3 GB to start")
                     InfoRow(label: "Install type", value: AppEnvironment.installKind)
+                    if AppEnvironment.isLiveContainer {
+                        Text("LiveContainer cannot grant the increased-memory entitlement. Large games may be killed; that is a host limit, not a Windoz bug.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.warn.opacity(0.9))
+                    }
                 }
             }
         }

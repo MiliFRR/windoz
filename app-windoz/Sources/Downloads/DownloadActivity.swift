@@ -42,6 +42,9 @@ final class DownloadActivity {
             Task { await existing.update(ActivityContent(state: state, staleDate: nil)) }
             return
         }
+        // Guest apps inside LiveContainer cannot register a widget extension,
+        // so a Live Activity request would only fail. Progress stays in-app.
+        if AppEnvironment.isLiveContainer { return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             postFallbackNotification(for: item)
             return

@@ -9,6 +9,7 @@ struct SettingsView: View {
 
     @AppStorage("windoz.jitMethod") private var jitMethodRaw =
         (AppEnvironment.availableJITMethods.first ?? .stikDebug).rawValue
+    @AppStorage("windoz.preferOffline") private var preferOffline = false
     @State private var confirmDelete = false
     @State private var confirmRepair = false
     @State private var coreMessage: String?
@@ -18,6 +19,9 @@ struct SettingsView: View {
             ConsoleBackground()
             List {
                 engineSection
+                if AppEnvironment.isLiveContainer {
+                    liveContainerSection
+                }
                 jitSection
                 prefixSection
                 runtimeSection
@@ -54,6 +58,10 @@ struct SettingsView: View {
             statusRow("Increased memory", engine.status.memoryEntitlement)
             LabeledContent("Free storage",
                            value: ByteCountFormatter.string(fromByteCount: engine.status.freeStorageBytes, countStyle: .file))
+            if engine.status.memoryFootprintBytes > 0 {
+                LabeledContent("Memory in use",
+                               value: ByteCountFormatter.string(fromByteCount: engine.status.memoryFootprintBytes, countStyle: .memory))
+            }
             if let expiry = engine.status.signingExpiresAt {
                 let days = Calendar.current.dateComponents([.day], from: Date(), to: expiry).day ?? 0
                 LabeledContent("Signing expires") {
@@ -66,6 +74,16 @@ struct SettingsView: View {
                 }
             }
             Button("Check again") { engine.refreshStatus() }
+        }
+    }
+
+    private var liveContainerSection: some View {
+        Section("LiveContainer") {
+            NavigationLink("Setup for LiveContainer") {
+                LiveContainerView().environmentObject(engine)
+            }
+            Text("JIT, extra RAM, Live Activities and background tasks follow LiveContainer's host entitlements. Windoz does not pretend those guest features exist.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -162,7 +180,7 @@ struct SettingsView: View {
             LabeledContent("Version", value: "0.2.0")
             LabeledContent("Engine", value: "Wine ARM64EC · FEX · DXMT · D3D12")
             LabeledContent("Install", value: AppEnvironment.installKind)
-            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz")!)
+            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz-v2")!)
             NavigationLink("Licenses") { LicensesView() }
         }
     }
@@ -227,7 +245,7 @@ struct LicensesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Windoz is licensed GPL-3.0-or-later. Its complete source is at https://github.com/MiliFRR/windoz, so any IPA you receive can be rebuilt from it.")
+                Text("Windoz is licensed GPL-3.0-or-later. Its complete source is at https://github.com/MiliFRR/windoz-v2, so any IPA you receive can be rebuilt from it.")
                 Text("Windoz uses the Wine (ARM64EC), FEX-Emu, DXMT and native-D3D12 engine forks. Their notices and the full licence texts are bundled in the app's licenses folder.")
                 Text("Microsoft Windows runtime files are downloaded on-device from Microsoft's own servers; Windoz does not redistribute them.")
             }

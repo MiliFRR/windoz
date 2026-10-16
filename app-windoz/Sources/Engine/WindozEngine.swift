@@ -25,7 +25,7 @@ final class WindozEngine: ObservableObject {
     private var sessionStart: Date?
     private var callbacksInstalled = false
 
-    init(prefix: PrefixManager = PrefixManager()) {
+    init(prefix: PrefixManager = PrefixManager(base: AppContainer.documents)) {
         self.prefix = prefix
         installCallbacks()
     }
@@ -51,11 +51,13 @@ final class WindozEngine: ObservableObject {
             let memory = JITManager.memoryEntitlementHealth
             let free = Self.freeStorageBytes()
             let expiry = JITManager.signingExpiryDate()
+            let footprint = JITManager.physicalFootprintBytes()
             DispatchQueue.main.async {
                 self.status.jit = jitOK ? .ready : .unavailable(Self.jitExplanation())
                 self.status.memoryEntitlement = memory
                 self.status.freeStorageBytes = free
                 self.status.signingExpiresAt = expiry
+                self.status.memoryFootprintBytes = footprint
             }
         }
     }

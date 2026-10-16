@@ -40,13 +40,20 @@ struct GlassCard<Content: View>: View {
     var padding: CGFloat = 14
     @ViewBuilder var content: Content
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     var body: some View {
-        content
-            .padding(padding)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
-                    .strokeBorder(.white.opacity(0.08)))
+        let shape = RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
+        Group {
+            if reduceTransparency {
+                content.padding(padding).background(Color.black.opacity(0.85), in: shape)
+            } else if #available(iOS 26.0, *) {
+                content.padding(padding).glassEffect(.regular, in: shape)
+            } else {
+                content.padding(padding).background(.ultraThinMaterial, in: shape)
+            }
+        }
+        .overlay(shape.strokeBorder(.white.opacity(0.08)))
     }
 }
 

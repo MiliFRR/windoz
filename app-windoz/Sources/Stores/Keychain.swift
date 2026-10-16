@@ -5,13 +5,17 @@ import Security
 /// `Documents` (every Windows program in the prefix can read Documents) and
 /// never in logs.
 enum Keychain {
-    static let service = "com.milifrr.windoz"
+    /// Service name is Windoz's own, not an access group. LiveContainer assigns
+    /// random keychain groups to containers; specifying a group here would miss
+    /// items after a re-sign or a container move.
+    static var service: String { "com.milifrr.windoz" }
 
     private static func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            kSecAttrSynchronizable as String: false,
         ]
     }
 
