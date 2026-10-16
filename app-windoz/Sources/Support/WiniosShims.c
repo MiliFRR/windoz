@@ -30,7 +30,7 @@ void ios_dump_all_thread_stacks(void) {
             switch (info.run_state) {
                 case TH_STATE_RUNNING: state = "running"; break;
                 case TH_STATE_WAITING: state = "waiting"; break;
-                case TH_STATE_SUSPENDED: state = "suspended"; break;
+                case TH_STATE_STOPPED: state = "suspended"; break;
                 case TH_STATE_HALTED: state = "halted"; break;
             }
         }
