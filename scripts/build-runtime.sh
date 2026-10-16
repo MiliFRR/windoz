@@ -241,6 +241,11 @@ run bash build/faultrep/build.sh
 # folder satisfies the folder reference; 64-bit games are unaffected.
 mkdir -p app/Madeira/i386-windows
 
+# Stage the bundled licence copies (the Xcode build FAILS if they are stale —
+# the phase compares them against the repo root; build/stage-licenses.sh is
+# the refresh step Madeira's docs prescribe, and it needs no Apple package).
+run bash build/stage-licenses.sh
+
 # --- Madeira Dock (becomes Doz Dock in Phase 5). Non-fatal in Phase 0:
 # without it the Steam library stays off, but the app builds and runs.
 if bash build/madeira-dock/build.sh; then

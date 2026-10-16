@@ -279,6 +279,14 @@ order from a clean recursive clone.
   `AllocatorHooks.cpp` compiled WITHOUT `ENABLE_FEX_ALLOCATOR` (the
   system-malloc passthrough — identical to FEX's JemallocDummy target) plus
   terminfo stubs returning "no colors".
+- **CI run #23 failed** at a Xcode build phase:
+  `bundled LICENSE-MADEIRA-GPL-3.0.txt is missing or stale; run
+  build/stage-licenses.sh` — the licence-staging step was accidentally
+  dropped when `fetch-converter.sh` was removed (they are unrelated: staging
+  copies pure text files and needs no Apple package). **The final app link
+  SUCCEEDED past all symbols** — the allocator hooks and terminfo stubs
+  resolved everything. Fixed: `build/stage-licenses.sh` runs before the app
+  build.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
