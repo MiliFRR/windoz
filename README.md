@@ -4,18 +4,24 @@ A Windows game launcher and runner for iPhone. Sign in to Steam, browse your
 library in a console-style UI, download games in the background, and run them
 locally — unmodified — on a jailed iPhone (iOS 26+, sideloaded only).
 
-**Status: rebuilding.** This repository was recreated empty on 2026-10-16, so
-earlier run history (and the `windoz.ipa` an earlier CI produced) is gone.
+**Status: green build (2026-10-17).** This repository was recreated empty on
+2026-10-16; `main` was then re-pushed from the developer's clone and the
+`vc-runtime-inputs` release behind `scripts/fetch-vcruntime.sh` recreated
+(its download hash matches the pin). The whole pipeline now runs green in
+**this** repository as restored: run #2 of `build-ipa.yml` (`main` = `f720d53`)
+completed every stage — LLVM for iOS, llvm-mingw, the hash-verified VC++
+runtime fetch, "Build runtime" (Wine/ARM64EC PE tree, wineserver, FEX for iOS
+and arm64ec, DXMT's unix and PE sides, Wine Mono, the Rust pairing library, the
+native D3D12 core, the stub DLLs, licence staging), "Build app" and "Assemble
+IPA" — and uploaded a ~70 MB unsigned `windoz.ipa` (`windoz-unsigned-ipa`
+artifact, 14-day retention; download it from that run's page). Even with a
+cold LLVM cache the run took under 50 minutes.
 
-What is proven here so far: the **engine chain builds green in this repository**
-— run #4 completed "Build runtime" (Wine/ARM64EC PE tree, wineserver, FEX for
-iOS and arm64ec, DXMT's unix and PE sides, Wine Mono, the Rust pairing library,
-the native D3D12 core, the stub DLLs, licence staging). With the LLVM cache warm
-a whole run takes roughly half an hour, not hours. What is *not* proven yet is
-the app: run #4 failed at "Build app" on a link error
-(root cause and fix in **Known issues** below), and the run that carries that
-fix is in flight. Until a run finishes green in **this** repository, no IPA is
-claimed.
+An unsigned IPA that **builds** is the claim — no more. Running it on a device
+(sideload, JIT, launching anything) is not proven here yet, and hosting a full
+game session (rendering + input) is the remaining engine port; Play reports
+that honestly. The run-by-run ledger, including what the first restored-repo
+runs and the new typecheck gate caught, is in **Known issues** below.
 
 ## app-windoz — the current app
 
@@ -84,18 +90,23 @@ are public as of 2026-10-14). The pipeline:
    order: GnuTLS → FFmpeg → FEX (unix + ARM64EC) → Wine (unix + ARM64EC PE)
    → DXMT (unix + PE) → Wine Mono → in-app pairing → native D3D12 → stubs →
    faultrep → Madeira Dock (non-fatal in Phase 0).
-5. `scripts/build-app.sh` — Xcode **Debug** build (the configuration that
-   runs games), unsigned, with `overlay/windoz.xcconfig` giving the app its
-   own bundle id (`com.milifrr.windoz`; the JIT helper follows it).
-6. `scripts/assemble-ipa.sh` — packages `Payload/Madeira.app` into
-   `windoz.ipa`, uploaded as a CI artifact.
+5. `scripts/build-windoz-app.sh` — generates the Xcode project from
+   `app-windoz/project.yml` (XcodeGen) and makes an unsigned **Debug** build
+   (the configuration that runs games). The bundle id is
+   `com.milifrr.windoz`; the JIT helper, when it lands, will follow it.
+6. `scripts/assemble-ipa.sh` — packages the built app into `windoz.ipa` as
+   `Payload/Windoz.app` (it still understands the legacy `Madeira.app`),
+   uploaded as a CI artifact.
 
 ## Phases
 
 - [x] **Phase 0 — Reproducible build.** CI produces an installable IPA from a
-  clean clone (runs #1–#24; ten issues found and fixed — full ledger in
-  Known issues below). The LLVM cache is saved across runs, so future builds
-  skip the ~25 min LLVM compile. **First IPA: run #24.**
+  clean clone — first proven in the pre-restore pipeline (ledger below), and
+  re-proven in the restored repository: run #2 of `build-ipa.yml`
+  (`main` = `f720d53`) went green end-to-end in under 50 minutes on a cold
+  LLVM cache and uploaded the ~70 MB unsigned `windoz.ipa`
+  (`Payload/Windoz.app`). The LLVM cache is saved across runs, so later builds
+  skip the ~25 min LLVM compile.
 - [ ] **Phase 1 — Runtime.** Launch a simple 64-bit game from a local
   folder; Settings shows JIT + Memory+ status; launch blocked with a clear
   message when not ready.
@@ -426,6 +437,27 @@ the fix that is still in the tree.*
   (harmless: only the SDK's minimum-version stamp), and that Swift autolinks
   `SwiftUICore`, `CoreAudioTypes` and the private `UIUtilities` — all three are
   "cannot link directly with" warnings from Apple's own SDKs, not errors.
+- **Restored repository, first Swift error came from the new fast gate, not
+  the full build:** `typecheck.yml` run #1 (red, `main` = `07d8364`) failed
+  with `app-windoz/Sources/Engine/AppContainer.swift:14:77: cannot convert
+  value of type 'URL' to expected argument type 'String'` — the `HOME` branch
+  of `AppContainer.home` wrapped `environmentPath("HOME")` in
+  `URL(fileURLWithPath:)` a second time even though the helper already returns
+  `URL?`. Fixed at `f720d53` (`return path`, exactly like the `LC_HOME_PATH`
+  branch above it); typecheck run #2 went green in a few minutes of runner
+  time. The full build never paid for this one. *(Numbering note: the
+  repository restore and the `build.yml` → `build-ipa.yml` rename gave the
+  workflows new identities, so their run numbers restarted at #1 — older
+  "run #N" entries in this ledger refer to the previous identities.)*
+- **Restored repository, first full run — green end-to-end (2026-10-17):**
+  `build-ipa.yml` #2 (`main` = `f720d53`) passed every stage — the cold LLVM
+  build (cache v4 started empty in the restored repo), llvm-mingw, the VC++
+  fetch (hash check included), Build runtime, Build app, Assemble IPA — and
+  uploaded the ~70 MB `windoz-unsigned-ipa` artifact: one `Windoz` binary (no
+  debug dylib), the Wine ARM64EC tree, D3D12 plus Metal Shader Converter, the
+  14 x86_64 VC++ runtime DLLs, the licence bundle and the staged
+  `madeira-jit.js`. Under 50 minutes wall, cold cache. The pre-fix run #1
+  (`07d8364`) was cancelled on purpose rather than left to burn a runner.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
