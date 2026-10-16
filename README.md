@@ -66,6 +66,12 @@ are public as of 2026-10-14). The pipeline:
   message when not ready.
 - [ ] **Phase 2 — UI shell.** Console-style Library with mock data: cover-art
   carousel, focus/selection animation, ambient blur, dark theme.
+  **In progress — Phase 2 step 1 shipped:** the app now roots into a windoz
+  console home (dark theme, cover carousel with focus animation, "OPEN
+  CONSOLE" entry into the full engine/library). Delivered as a build-time
+  override (`overrides/app/Madeira/MadeiraApp.swift`) so no Xcode project
+  surgery is needed; display name is `windoz`. Next: real library data in
+  the carousel, app icon, ambient blur from selected art.
 - [ ] **Phase 3 — Steam.** Login (password + Steam Guard, QR optional), owned
   library with cover art.
 - [ ] **Phase 4 — Downloads.** Pausable/resumable downloads, integrity
