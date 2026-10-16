@@ -6,14 +6,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT/madeira"
 
-APP="$(find build/derived/Build/Products -maxdepth 3 -type d -name 'Windoz.app' -o -maxdepth 3 -type d -name 'Madeira.app' | head -n 1)"
+# The original Windoz app (app-windoz/, XcodeGen) builds into its own derived
+# dir; the legacy Madeira target built into madeira/. Search both.
+APP="$(find "$ROOT/app-windoz/build/derived/Build/Products" -maxdepth 3 -type d \( -name 'Windoz.app' -o -name 'Madeira.app' \) 2>/dev/null | head -n 1)"
 if [ -z "$APP" ]; then
-  echo "ERROR: built Windoz.app/Madeira.app not found under build/derived" >&2
+  cd "$ROOT/madeira"
+  APP="$(find build/derived/Build/Products -maxdepth 3 -type d \( -name 'Windoz.app' -o -name 'Madeira.app' \) | head -n 1)"
+fi
+if [ -z "$APP" ]; then
+  echo "ERROR: built Windoz.app/Madeira.app not found under either derived dir" >&2
   exit 1
 fi
 APP_NAME="$(basename "$APP")"
+echo "packaging: $APP"
 
 STAGE="$ROOT/build/ipa"
 rm -rf "$STAGE"
