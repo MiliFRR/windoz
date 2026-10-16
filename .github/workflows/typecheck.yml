@@ -55,6 +55,12 @@ jobs:
           set -e
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           cd app-windoz
+          # XcodeGen errors when a listed source path is absent, and
+          # x86_64-vcruntime is staged by fetch-vcruntime.sh (the pinned release
+          # asset) before the app is generated in the real build. Stand the
+          # directory up so the spec itself is what gets validated.
+          mkdir -p ../madeira/app/Madeira/x86_64-vcruntime
           xcodegen generate
           xcodebuild -project Windoz.xcodeproj -list
+          plutil -p Windoz/Info.plist
           test -f Windoz/Info.plist && echo "Info.plist generated"

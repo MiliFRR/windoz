@@ -47,7 +47,7 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 | Free-space check before queueing | ✅ |
 | Wi-Fi-only rule | ✅ (`NWPathMonitor`) |
 | Persisted queue across relaunch | ✅ |
-| `BGProcessingTask` continuation | 🟡 submitted; identifier must match the **live** bundle id after a re-sign |
+| `BGProcessingTask` continuation | 🟡 registered only when the live bundle id is in the build's `BGTaskSchedulerPermittedIdentifiers`; otherwise a log line says so |
 | Live Activity / Dynamic Island | 🟡 activity is requested; **rendering** needs the paired widget extension (below) |
 
 ## UI
@@ -70,7 +70,7 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 | Detect LiveContainer (`LC_HOME_PATH`) | ✅ |
 | Route JIT through StikDebug (no bundled helper) | ✅ |
 | Read the bundle id from `Bundle.main` (re-sign safe) | ✅ |
-| Re-sign-safe background-task identifier | 🟡 derived from the live bundle id; a mismatch fails silently and is documented |
+| Re-sign-safe background-task identifier | 🟡 derived from the live bundle id; when it is not among the app's permitted identifiers the task is not registered and a log line says why |
 | Increased-memory entitlement | ⛔ not grantable via LiveContainer; reported as unavailable |
 
 ## Next, in order

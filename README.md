@@ -4,8 +4,13 @@ A Windows game launcher and runner for iPhone. Sign in to Steam, browse your
 library in a console-style UI, download games in the background, and run them
 locally — unmodified — on a jailed iPhone (iOS 26+, sideloaded only).
 
-**Status: Phase 0 ✅ COMPLETE — CI run #24 produced the first
-`windoz.ipa` (145 MB).** Phase 1 (runtime test on device) is next.
+**Status: rebuilding.** This repository was recreated empty on 2026-10-16, so
+earlier run history (and the `windoz.ipa` an earlier CI produced) is gone. The
+pipeline runs again from scratch here: the pinned VC++ runtime payload is
+re-published as the `vc-runtime-inputs` release asset, and a build takes a
+few hours (LLVM is cached; Wine, FEX, DXMT and the native D3D12 core are
+compiled from source in each run). Until a run finishes green in **this**
+repository, no IPA is claimed.
 
 ## app-windoz — the current app
 
