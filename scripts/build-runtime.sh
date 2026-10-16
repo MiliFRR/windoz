@@ -104,6 +104,20 @@ if [ ! -f FEX/build-ios/CMakeCache.txt ]; then
     -DCMAKE_SYSTEM_PROCESSOR=arm64 -DTUNE_CPU=cortex-a78
 fi
 run bash build/fex-ios/build.sh
+# FEX's root CMake disables the JemallocLibs target on Apple ("Apple platform
+# detected — disabling jemalloc and rpmalloc"; FEXCore uses the system
+# allocator there), but the app's Xcode project links
+# FEX/build-ios/FEXCore/Source/libJemallocLibs.a unconditionally (CI run #21:
+# ld: library 'JemallocLibs' not found). The dev machine's copy was a stale
+# artifact. The Apple FEXCore references no jemalloc symbols, so an empty
+# stub archive satisfies the link harmlessly.
+mkdir -p FEX/build-ios/FEXCore/Source
+if [ ! -f FEX/build-ios/FEXCore/Source/libJemallocLibs.a ]; then
+  printf '' > "$ROOT/work/empty_jemalloc.c"
+  xcrun -sdk iphoneos clang -c "$ROOT/work/empty_jemalloc.c" -o "$ROOT/work/empty_jemalloc.o"
+  xcrun -sdk iphoneos ar rcs FEX/build-ios/FEXCore/Source/libJemallocLibs.a "$ROOT/work/empty_jemalloc.o"
+  echo "created empty libJemallocLibs.a stub (Apple FEXCore uses the system allocator)"
+fi
 # fex-arm64ec: pre-configure with the script's exact options (BUILDING.md:
 # "the options the madeira-bcd fork's macOS CI has built xtajit64.dll with
 # since 2026-09-26") plus CMAKE_DISABLE_FIND_PACKAGE for fmt and range-v3 —

@@ -261,6 +261,14 @@ order from a clean recursive clone.
   (Xcode 26.6 / iPhoneOS 26.5 — the author's own SDK; capacity crunch from
   Oct 15 was transient). The `server_ios.c` SDK patch is unconditional and
   harmless on 26.5.
+- **CI run #21 failed** at the FINAL app link: `ld: library 'JemallocLibs'
+  not found` — FEX's root CMake disables the JemallocLibs target on Apple
+  (system allocator), but the app's Xcode project links it unconditionally;
+  the dev machine's copy was a stale artifact from an earlier FEX config.
+  The Apple FEXCore references no jemalloc symbols, so the pipeline now
+  creates an empty stub archive. **Everything else in run #21 passed:
+  Xcode 26.6 parsed the StikJIT interfaces, all Swift compiled, and the app
+  linked down to this single library.**
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
