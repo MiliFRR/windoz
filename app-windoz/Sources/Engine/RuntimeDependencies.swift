@@ -116,6 +116,6 @@ final class RuntimeInstaller: ObservableObject {
         let destination = staging.appendingPathComponent("\(component.rawValue)-installer.\(ext)")
         DownloadManager.shared.enqueue(title: component.title, url: url, destination: destination, storeID: "runtime")
         states[component] = .staged(destination.lastPathComponent)
-        return "\(component.title) is downloading. It installs into the Windows environment at first game launch."
+        return "\(component.title) is downloading. Windoz will run the vendor's installer inside the Windows environment once a game session can be hosted — that is the remaining engine port."
     }
 }

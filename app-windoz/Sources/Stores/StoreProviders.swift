@@ -322,7 +322,7 @@ final class LauncherInWineStore: ObservableObject, StoreProvider {
             updateAndVerify: true,
             cloudSaves: true,
             runtimeLauncherNeeded: true,
-            summary: "\(launcherName) has no usable public API, so Windoz runs the official launcher inside Wine. You sign in there; the native UI just starts your games through it.")
+            summary: "\(launcherName) has no usable public API, so Windoz is meant to run the official launcher inside Wine. You sign in there; the native UI just starts your games through it. That needs the game-session host, which is not ported yet.")
     }
 
     func signIn() async {

@@ -93,7 +93,7 @@ struct LibraryView: View {
         ForEach(registry.summaries) { summary in
             StoreRow(summary: summary, registry: registry)
         }
-        Text("Windoz uses your own accounts with each store and follows their terms. Where a store has no usable API, its official launcher runs inside Wine — started only when you launch a game and closed afterwards.")
+        Text("Windoz uses your own accounts with each store and follows their terms. Where a store has no usable API, Windoz is meant to run the vendor's official launcher inside Wine — started only when you launch a game and closed afterwards. That needs the game-session host, which is still being ported, so today the launcher stores report themselves as not implemented.")
             .font(.caption2).foregroundStyle(.white.opacity(0.4))
     }
 

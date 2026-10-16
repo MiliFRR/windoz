@@ -163,6 +163,8 @@ struct GameDetailView: View {
                         .foregroundStyle(.white)
                 }
             }
+            Text("Saved with the game. The engine reads these when a session starts — hosting a game session is still being ported, so nothing plays yet.")
+                .font(.caption2).foregroundStyle(.white.opacity(0.45))
             Picker("Compatibility", selection: compatibilityBinding) {
                 ForEach(CompatibilityStatus.allCases) { Text($0.title).tag($0) }
             }
@@ -185,6 +187,8 @@ struct GameDetailView: View {
                 }
             }
             .buttonStyle(.plain)
+            Text("Saved per game. The in-session overlay draws it once the game-session host is ported.")
+                .font(.caption2).foregroundStyle(.white.opacity(0.45))
         }
     }
 
