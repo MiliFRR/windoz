@@ -5,12 +5,17 @@ library in a console-style UI, download games in the background, and run them
 locally — unmodified — on a jailed iPhone (iOS 26+, sideloaded only).
 
 **Status: rebuilding.** This repository was recreated empty on 2026-10-16, so
-earlier run history (and the `windoz.ipa` an earlier CI produced) is gone. The
-pipeline runs again from scratch here: the pinned VC++ runtime payload is
-re-published as the `vc-runtime-inputs` release asset, and a build takes a
-few hours (LLVM is cached; Wine, FEX, DXMT and the native D3D12 core are
-compiled from source in each run). Until a run finishes green in **this**
-repository, no IPA is claimed.
+earlier run history (and the `windoz.ipa` an earlier CI produced) is gone.
+
+What is proven here so far: the **engine chain builds green in this repository**
+— run #4 completed "Build runtime" (Wine/ARM64EC PE tree, wineserver, FEX for
+iOS and arm64ec, DXMT's unix and PE sides, Wine Mono, the Rust pairing library,
+the native D3D12 core, the stub DLLs, licence staging). With the LLVM cache warm
+a whole run takes roughly half an hour, not hours. What is *not* proven yet is
+the app: run #4 failed at "Build app" on a link error
+(root cause and fix in **Known issues** below), and the run that carries that
+fix is in flight. Until a run finishes green in **this** repository, no IPA is
+claimed.
 
 ## app-windoz — the current app
 
@@ -165,9 +170,11 @@ the fix that is still in the tree.*
   nothing in the audited scripts creates the initial
   `app/Madeira/libdxmt_combined.a` (the project only links it; the DXMT
   script only refreshes an existing copy). New
-  `scripts/build-dxmt-combined.sh` selects the LLVM archives airconv needs
-  by symbol closure from `libdxmt_unix.a` and merges them with Apple's
-  `libtool -static`.
+  `scripts/build-dxmt-combined.sh` merges the DXMT objects with the LLVM iOS
+  archives with Apple's `libtool -static`. (The first version of that script
+  selected the archives by symbol closure instead of following
+  `build/dxmt-ios/README.md`'s "all of `llvm-ios-build/lib/*.a`" — that is what
+  broke the app link in run #4; see the newest entry below.)
 - **CI run #4 failed** at "Build LLVM for iOS" link: `FAILED:
   lib/LLVMHello.dylib` — `ld: unknown file type in '.../LLVMHello.def'`.
   LLVM's export-file logic uses `APPLE` in some places (true on iOS) and
