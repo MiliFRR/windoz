@@ -1,0 +1,60 @@
+name: Type-check windoz Swift
+
+# A fast gate for the Swift in app-windoz/: `swiftc -typecheck` needs only the
+# SDK and the engine's headers, so it runs in minutes instead of waiting for the
+# full Wine/FEX/DXMT runtime build. The full IPA build still lives in build.yml.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["ci-*"]
+    paths:
+      - "app-windoz/**"
+      - ".github/workflows/typecheck.yml"
+
+concurrency:
+  group: typecheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: swiftc -typecheck (iOS 26 SDK)
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Check out windoz + Madeira
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select newest Xcode
+        run: |
+          set -e
+          XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
+          echo "SDK: $(xcrun --sdk iphoneos --show-sdk-path)"
+
+      - name: Type-check the app's Swift
+        run: |
+          set -o pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          cd app-windoz
+          FILES="$(find Sources -name '*.swift' | sort)"
+          echo "$FILES"
+          xcrun swiftc -typecheck \
+            -sdk "$SDK" \
+            -target arm64-apple-ios26.0 \
+            -swift-version 5 \
+            -module-name Windoz \
+            -DDEBUG \
+            -import-objc-header Sources/Support/Windoz-Bridging-Header.h \
+            $FILES
+
+      - name: Validate project.yml through XcodeGen
+        run: |
+          set -e
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          cd app-windoz
+          xcodegen generate
+          xcodebuild -project Windoz.xcodeproj -list
+          test -f Windoz/Info.plist && echo "Info.plist generated"
