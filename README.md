@@ -123,6 +123,11 @@ order from a clean recursive clone.
 
 ## Known issues
 
+*Diagnosed failures from the previous incarnation of this repository (its run
+numbers, #1–#35, no longer exist — this repository was recreated on 2026-10-16
+and its runs restart at #1). Kept because each entry records a root cause and
+the fix that is still in the tree.*
+
 - **CI run #1 failed** at "Build LLVM for iOS": `ninja: error: unknown target
   'llvm-min-tblgen'` — that target doesn't exist in the pinned LLVM revision
   (pre-17). Fixed: host build now produces `llvm-tblgen` only, and the iOS
@@ -337,20 +342,24 @@ order from a clean recursive clone.
   symbolisation).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
-## Built-in JIT (in-app)
+## JIT
 
-Inherited from Madeira, included in every windoz build:
+What this build actually offers, in order of what works:
 
-- **Built-in StikJIT** — a bundled app extension (`JITHelper.appex`) enables
-  JIT without the separate StikDebug app. Requires iOS 26+, a normal
-  sideloaded install, and **LocalDevVPN** (App Store) for the loopback.
-- **Pairing**: on iOS 27 the app can pair with the iPhone by itself (in-app);
-  on iOS 26 a pairing file made on a computer (e.g. JitterbugPair on Windows)
-  is imported in Settings → JIT → JIT setup.
-- **StikDebug** remains supported as an alternative method.
-- Sideload with SideStore/AltStore/Sideloadly **keeping app extensions** (the
-  helper must survive); the bundle id is `com.milifrr.windoz` and the helper
-  follows it automatically.
+- **StikDebug** (a separate app) is the route that exists today. Windoz builds a
+  `stikdebug://enable-jit?bundle-id=…&pid=…&script-data=…` URL whose script is the
+  engine's `madeira-jit.js` (bundled as a resource), and re-probes JIT on every
+  launch. This is the only route inside **LiveContainer** (`LC_HOME_PATH` is set
+  there and a guest app cannot start a nested extension).
+- **A bundled helper extension** (`JITHelper.appex`) is *not* part of this build:
+  `app-windoz/project.yml` has no extension target. `JITManager.builtInHelperUsable`
+  therefore reads the bundle and reports false, and the UI offers StikDebug only.
+  When the helper target is added the choice appears by itself.
+- **LocalDevVPN** (App Store) would be required for the helper's loopback, and is
+  not needed while the helper is absent.
+- Sideload with SideStore/AltStore/Sideloadly; the bundle id is
+  `com.milifrr.windoz`. Any per-app extension would have to survive re-signing —
+  another reason JIT currently goes through StikDebug.
 - If `macos-26` is not yet a valid GitHub runner label, switch to
   `macos-15` + newest Xcode 26.
 
