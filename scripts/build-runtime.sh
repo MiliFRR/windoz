@@ -158,16 +158,25 @@ run bash "$ROOT/scripts/build-dxmt-combined.sh"
 # (CI run #16) — alias it to the real one, exactly like the build-macos alias.
 [ -e dxmt/toolchains ] || ln -s ../toolchains dxmt/toolchains
 # dxmt/src/winemetal/meson.build searches the WINE BUILD TREE for winecrt0,
-# ntdll and dbghelp under <build>/dlls/<m>/arm64ec-windows/ (CI run #17):
-#  - libwinecrt0.a actually lives in libs/wine/ — stage a copy where it looks;
-#  - dbghelp is not in GAME_MODULES and was never built — build it now
-#    (build-modules also refreshes the tracked farm copy, which is fine).
-if [ ! -f wine/build-arm64ec/libs/wine/libwinecrt0.a ]; then
-  run make -C wine/build-arm64ec -j "$JOBS" libs/wine
+# ntdll and dbghelp under <build>/dlls/<m>/arm64ec-windows/ (CI run #17).
+# winecrt0's archive is built by the ntdll PE build — locate it, and stage
+# copies into BOTH meson search paths (libs/winecrt0/ and dlls/winecrt0/).
+# dbghelp is not in GAME_MODULES and was never built — build it now
+# (build-modules also refreshes the tracked farm copy, which is fine).
+WINECRT0="$(find wine/build-arm64ec -name 'libwinecrt0.a' 2>/dev/null | head -n 1)"
+if [ -z "$WINECRT0" ]; then
+  run make -C wine/build-arm64ec -j "$JOBS" libs/winecrt0/arm64ec-windows/libwinecrt0.a
+  WINECRT0="$(find wine/build-arm64ec -name 'libwinecrt0.a' 2>/dev/null | head -n 1)"
 fi
-mkdir -p wine/build-arm64ec/dlls/winecrt0/arm64ec-windows
-cp -f wine/build-arm64ec/libs/wine/libwinecrt0.a \
-      wine/build-arm64ec/dlls/winecrt0/arm64ec-windows/libwinecrt0.a
+echo "libwinecrt0.a located at: ${WINECRT0:-NOT FOUND}"
+if [ -z "$WINECRT0" ]; then
+  echo "::error::libwinecrt0.a not found anywhere under the wine build tree" >&2
+  exit 1
+fi
+mkdir -p wine/build-arm64ec/libs/winecrt0/arm64ec-windows \
+         wine/build-arm64ec/dlls/winecrt0/arm64ec-windows
+cp -f "$WINECRT0" wine/build-arm64ec/libs/winecrt0/arm64ec-windows/libwinecrt0.a
+cp -f "$WINECRT0" wine/build-arm64ec/dlls/winecrt0/arm64ec-windows/libwinecrt0.a
 if [ ! -f wine/build-arm64ec/dlls/dbghelp/arm64ec-windows/dbghelp.dll ]; then
   run bash build/wine-pe/build-modules.sh dbghelp
 fi

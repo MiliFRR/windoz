@@ -236,6 +236,13 @@ order from a clean recursive clone.
   `libs/wine`, stage `libwinecrt0.a` into the searched location, and build
   dbghelp via `build/wine-pe/build-modules.sh dbghelp` (also refreshes the
   tracked farm copy).
+- **CI run #18 failed** at `make libs/wine`: `No rule to make target
+  'libs/wine'` — my staging step used the wrong directory; in this Wine fork
+  winecrt0 lives in `libs/winecrt0/` (its archive `libwinecrt0.a`, already
+  built by the ntdll PE link). Fixed: locate the archive anywhere under the
+  wine build tree, stage copies into both meson search paths
+  (`libs/winecrt0/arm64ec-windows/` and `dlls/winecrt0/arm64ec-windows/`),
+  build it via file target if absent, and keep the dbghelp build.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
