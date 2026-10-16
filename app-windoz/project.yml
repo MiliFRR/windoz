@@ -87,5 +87,5 @@ targets:
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
         ENABLE_BITCODE: "NO"
-        HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils/include ../madeira/build/ntdll-unix/shims"
+        HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils ../madeira/FEX/CodeEmitter ../madeira/FEX/External/fmt/include ../madeira/FEX/External/range-v3/include ../madeira/FEX/External/unordered_dense/include ../madeira/FEX/build-ios ../madeira/FEX/build-ios/include ../madeira/FEX/build-ios/FEXCore/Source ../madeira/FEX ../madeira/build/ntdll-unix/shims"
         SUPPORTS_MACCATALYST: "NO"
