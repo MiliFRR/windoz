@@ -4,8 +4,8 @@ A Windows game launcher and runner for iPhone. Sign in to Steam, browse your
 library in a console-style UI, download games in the background, and run them
 locally — unmodified — on a jailed iPhone (iOS 26+, sideloaded only).
 
-**Status: Phase 0 (reproducible CI build) — scaffold pushed, first CI run
-starting.**
+**Status: Phase 0 ✅ COMPLETE — CI run #24 produced the first
+`windoz.ipa` (145 MB).** Phase 1 (runtime test on device) is next.
 
 ## Decisions (recorded 2026-10-15)
 
@@ -57,9 +57,10 @@ are public as of 2026-10-14). The pipeline:
 
 ## Phases
 
-- [ ] **Phase 0 — Reproducible build.** CI produces an installable IPA from a
-  clean clone. This also discharges the LGPL clean-rebuild obligation
-  Madeira marks UNVERIFIED. **In progress.**
+- [x] **Phase 0 — Reproducible build.** CI produces an installable IPA from a
+  clean clone (runs #1–#24; ten issues found and fixed — full ledger in
+  Known issues below). The LLVM cache is saved across runs, so future builds
+  skip the ~25 min LLVM compile. **First IPA: run #24.**
 - [ ] **Phase 1 — Runtime.** Launch a simple 64-bit game from a local
   folder; Settings shows JIT + Memory+ status; launch blocked with a clear
   message when not ready.
