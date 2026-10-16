@@ -275,6 +275,8 @@ jobs:
           MAX_ATTEMPTS="${INPUT_MAX_ATTEMPTS:-${VAR_MAX_ATTEMPTS:-2}}"
           outcome="none"; last_note=""; verified_run=""
           echo "main is at $(git rev-parse --short HEAD)"
+          # All attempt commits go on the fix branch, never on main.
+          git checkout -b "$BRANCH"
 
           attempt=1
           while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
