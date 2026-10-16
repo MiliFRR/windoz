@@ -50,6 +50,11 @@ jobs:
           rustup target add aarch64-apple-ios || true
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
 
+      - name: Verify the signing entitlements
+        # Cheap and early: a stale app-windoz/Config/Windoz.entitlements should
+        # fail here, not after the runtime chain.
+        run: ./scripts/generate-entitlements.sh --check
+
       - name: Restore LLVM cache
         id: llvmcache
         uses: actions/cache/restore@v4

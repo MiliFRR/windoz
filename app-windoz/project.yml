@@ -121,6 +121,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.milifrr.windoz
+        # Signing entitlements (get-task-allow + dynamic-codesigning; the file
+        # explains each key). The CI build is unsigned, so this only matters if
+        # someone signs the project; the plist is kept honest by
+        # scripts/generate-entitlements.sh --check, which CI runs.
+        CODE_SIGN_ENTITLEMENTS: Config/Windoz.entitlements
         GENERATE_INFOPLIST_FILE: "NO"
         CURRENT_PROJECT_VERSION: "1"
         MARKETING_VERSION: "0.1.0"
