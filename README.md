@@ -251,6 +251,16 @@ order from a clean recursive clone.
   `-Dwine_build_path` against the DXMT source root, so the recorded relative
   `../../wine/...` escapes the repository. Fixed: absolute `wine_build_path`
   passed to meson, and the self-copy guarded.
+- **CI run #20 failed** at the Xcode app build: Swift could not parse
+  `StikJIT.swiftmodule/arm64-apple-ios.private.swiftinterface`
+  (`expected '{' in struct`) — the vendored StikJIT 1.9.0 framework was built
+  with **Swift 6.4** (Xcode 26.6); macos-15's newest Xcode is 26.3 (Swift
+  6.2), and Swift 6.4 interfaces use qualified-type syntax older compilers
+  cannot parse. Everything before the app build passed: **DXMT PE ✅, Wine
+  Mono ✅, rppairing ✅, D3D12 ✅, stubs ✅**. Fixed: back to `macos-26`
+  (Xcode 26.6 / iPhoneOS 26.5 — the author's own SDK; capacity crunch from
+  Oct 15 was transient). The `server_ios.c` SDK patch is unconditional and
+  harmless on 26.5.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## Built-in JIT (in-app)
