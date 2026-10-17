@@ -89,23 +89,26 @@ final class DepotDownloader {
             .appendingPathComponent(folderName, isDirectory: true)
         let journalDir = steamApps.appendingPathComponent("downloading", isDirectory: true)
             .appendingPathComponent("\(app.appID)", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
-        } catch {
+        var refusal: String?
+        for url in [installURL, journalDir] {
+            if let failure = Self.ensureDirectory(url) { refusal = failure; break }
+        }
+        if let refusal {
             // Device test, 2026-10-17: Foundation 513 ("You don't have
             // permission to save the file … in the folder “common”") on the
-            // first install-folder creation. Repair (rename a broken level out
-            // of the way, rebuild the chain), then retry once; if it still
-            // fails the sheet gets the failing level and raw errno, not a
-            // mystery.
-            SteamLog.event("[steam-depot] install dir create failed: \(error.localizedDescription)")
+            // first install-folder creation, while every level of the path
+            // reported owner-writable. Repair (rename a broken level out of
+            // the way, rebuild the chain — and as a last resort rebuild the
+            // prefix), then retry every route once; if it still fails the
+            // sheet gets the failing level and raw errno, not a mystery.
+            SteamLog.event("[steam-depot] install dir create failed: \(refusal)")
             let verdict = PrefixHealth.checkAndRepair(steamApps: steamApps)
-            do {
-                try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
-                try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
-            } catch {
-                SteamLog.event("[steam-depot] retry after repair failed: \(error.localizedDescription)")
+            var second: String?
+            for url in [installURL, journalDir] {
+                if let failure = Self.ensureDirectory(url) { second = failure; break }
+            }
+            if let second {
+                SteamLog.event("[steam-depot] retry after repair failed: \(second)")
                 throw NSError(domain: "windoz.steam", code: 513, userInfo: [
                     NSLocalizedDescriptionKey: "Windows could not write inside the environment. \(verdict)",
                 ])
@@ -340,10 +343,14 @@ final class DepotDownloader {
                 }
                 let url = installURL.appendingPathComponent(relative)
                 if file.isDirectory {
-                    try fm.createDirectory(at: url, withIntermediateDirectories: true)
+                    if let refusal = ensureDirectory(url) {
+                        throw SteamError.chunkDownloadFailed("Cannot create a game folder: \(refusal)")
+                    }
                     paths.append(""); existing.append(false); continue
                 }
-                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if let refusal = ensureDirectory(url.deletingLastPathComponent()) {
+                    throw SteamError.chunkDownloadFailed("Cannot create a game folder: \(refusal)")
+                }
                 var before = stat()
                 let hadContent = stat(url.path, &before) == 0 && before.st_size > 0
                 existing.append(hadContent)
@@ -374,6 +381,27 @@ final class DepotDownloader {
             result.journals.append(journalURL)
         }
         return result
+    }
+
+    /// Create a folder the way an install needs it: Foundation first, then the
+    /// C library (device test, 2026-10-17: Foundation's create answered 513
+    /// inside the prefix while the same paths stayed traversable; the raw
+    /// `mkdir -p` route is the one that has to answer for itself either way).
+    /// Returns nil once the folder exists, else the refusal text.
+    nonisolated static func ensureDirectory(_ url: URL) -> String? {
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return nil
+        } catch {
+            let raw = error as NSError
+            let first = "\(raw.domain) \(raw.code) — \(raw.localizedDescription)"
+            let dirs = ContainerFS.mkdirs(url.path)
+            if dirs.ok {
+                SteamLog.event("[steam-depot] folder created via the C library: \(url.lastPathComponent)")
+                return nil
+            }
+            return "\(first); C library: \(dirs.lines.first ?? "refused")"
+        }
     }
 
     /// Create or resize a file to its manifest length. Existing bytes below

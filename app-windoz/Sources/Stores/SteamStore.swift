@@ -13,8 +13,10 @@
 //  - the owned library, from the account's own licenses over Steam's CM
 //    protocol (SteamLibraryFetcher);
 //  - depot downloads, decryption and decompression into the Windows prefix's
-//    `Program Files (x86)\Steam\steamapps` in the exact layout Steam's own
-//    client writes (DepotDownloader + SteamInstall/AppManifestWriter);
+//    Steam library (`Program Files (x86)\Steam\steamapps`, or the first
+//    fallback location a device accepts — `SteamLibraryLocator`) in the exact
+//    layout Steam's own client writes (DepotDownloader + SteamInstall/
+//    AppManifestWriter);
 //  - re-verification: every already-downloaded chunk is checked against
 //    Steam's SHA-1 before it is skipped, so Install doubles as Verify, and
 //    resumes from the on-disk journals.
@@ -80,10 +82,10 @@ final class SteamStore: ObservableObject, StoreProvider {
     // MARK: - Paths (the same layout Steam's own client writes)
 
     static var prefix: PrefixManager { PrefixManager() }
-    /// `C:\Program Files (x86)\Steam\steamapps`, on the host side.
-    static var steamApps: URL {
-        prefix.url.appendingPathComponent("drive_c/\(SteamInstallPaths.libraryRelative)", isDirectory: true)
-    }
+    /// The Steam library on the host side. Normally
+    /// `C:\Program Files (x86)\Steam\steamapps`; `SteamLibraryLocator` moves it
+    /// (and remembers the move) when the device refuses writes in that tree.
+    static var steamApps: URL { SteamLibraryLocator.resolved() }
 
     private static var cacheURL: URL {
         AppContainer.documents.appendingPathComponent("windoz-steam-library.json")
@@ -378,9 +380,16 @@ final class SteamStore: ObservableObject, StoreProvider {
             guard let info = try await fetcher.fetchInstallInfo(appID: appID) else {
                 throw StoreError.network("Steam did not return install information for this game.")
             }
+            // Negotiate the library location before any file is touched: the
+            // preferred spot refuses writes on some devices, and the first
+            // location that passes its probe is remembered for later.
+            let choice = SteamLibraryLocator.prepareForDownload()
+            if choice.changed {
+                SteamLog.event("[steam-library] using \(choice.relative) (the previous location refused writes)")
+            }
             let folder = try await downloader.install(
                 info,
-                steamApps: Self.steamApps,
+                steamApps: choice.url,
                 ownedDepots: { [weak self] in try? await self?.fetcher.ownedDepotIDs() }
             ) { [weak self] progress in
                 self?.downloads[appID]?.progress = progress

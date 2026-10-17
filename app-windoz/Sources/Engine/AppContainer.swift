@@ -62,20 +62,36 @@ enum AppContainer {
         logWriteHealth()
     }
 
-    /// One write probe per container folder at launch: if a device's data
-    /// folder is not writable, this names it at the top of the log instead of
-    /// leaving a mystery 513 for a later download to trip over.
+    /// One write probe per container folder at launch — through Foundation and
+    /// through the C library, including deletes and BSD flags: if a device's
+    /// data folder is not writable (or cannot replace an existing file), this
+    /// names it at the top of the log instead of leaving a mystery 513 for a
+    /// later download to trip over.
     private static func logWriteHealth() {
         var problems: [String] = []
         for (name, url) in [("Documents", documents), ("Imported", importedGames),
                             ("Runtimes", runtimes), ("LiveContainer", liveContainerSupport)] {
             let probe = url.appendingPathComponent(".windoz-write-probe")
+            // Foundation: write, delete, and replace a real file.
             do {
                 try Data([0x57]).write(to: probe)
-                try? FileManager.default.removeItem(at: probe)
             } catch {
-                let raw = error as NSError
-                problems.append("\(name) NOT WRITABLE: \(raw.domain) \(raw.code) — \(raw.localizedDescription)")
+                problems.append("\(name) Foundation write refused: \(describe(error))")
+            }
+            do { try FileManager.default.removeItem(at: probe) } catch {
+                if FileManager.default.fileExists(atPath: probe.path) {
+                    problems.append("\(name) Foundation delete refused: \(describe(error))")
+                }
+            }
+            // The C library: create, write, delete.
+            let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
+            if !raw.ok {
+                problems.append("\(name) C-library write refused: \(raw.detail)")
+            } else if !ContainerFS.unlink(probe.path).ok {
+                problems.append("\(name) C-library delete refused")
+            }
+            if let flags = ContainerFS.flags(url.path), flags != 0 {
+                problems.append("\(name) carries BSD flags=0x\(String(flags, radix: 16)) (the immutable bit blocks creates and deletes)")
             }
         }
         if problems.isEmpty {
@@ -89,23 +105,53 @@ enum AppContainer {
 
     /// Copy the engine's StikDebug script into Documents so LiveContainer can
     /// load it as a "JIT launch Script". Returns the destination when the copy
-    /// succeeded.
+    /// succeeded or the previous staged copy is still usable.
+    ///
+    /// Device test, 2026-10-17: an existing staged script could not be deleted
+    /// — the copy then answered "an item with the same name already exists" —
+    /// the same "existing items resist replace" behaviour the prefix showed.
+    /// The replace now falls back to renaming the old copy aside, then to a
+    /// C-library write, and every refusal is logged with its raw error.
     @discardableResult
     static func stageJITScript() -> URL? {
         let destination = stagedJITScript
         let fm = FileManager.default
         if let source = bundledJITScriptURL() {
             if fm.fileExists(atPath: destination.path) {
-                try? fm.removeItem(at: destination)
+                do {
+                    try fm.removeItem(at: destination)
+                } catch {
+                    EngineLogStream.shared.append("[host] JIT script replace: delete refused: \(describe(error))", level: .warning)
+                    let aside = destination.appendingPathExtension("old-\(Int(Date().timeIntervalSince1970))")
+                    do {
+                        try fm.moveItem(at: destination, to: aside)
+                        EngineLogStream.shared.append("[host] JIT script replace: old copy kept as \(aside.lastPathComponent)")
+                    } catch {
+                        EngineLogStream.shared.append("[host] JIT script replace: rename refused: \(describe(error))", level: .warning)
+                    }
+                }
             }
-            do {
-                try fm.copyItem(at: source, to: destination)
-                return destination
-            } catch {
-                EngineLogStream.shared.append("[host] could not stage JIT script: \(error.localizedDescription)", level: .warning)
+            if fm.fileExists(atPath: destination.path) {
+                EngineLogStream.shared.append("[host] JIT script stays: the existing copy could not be replaced", level: .warning)
+            } else {
+                do {
+                    try fm.copyItem(at: source, to: destination)
+                    return destination
+                } catch {
+                    EngineLogStream.shared.append("[host] could not stage JIT script: \(describe(error))", level: .warning)
+                    if let data = try? Data(contentsOf: source), ContainerFS.writeFile(destination.path, data).ok {
+                        EngineLogStream.shared.append("[host] JIT script staged via the C library")
+                        return destination
+                    }
+                }
             }
         }
         return fm.fileExists(atPath: destination.path) ? destination : nil
+    }
+
+    private static func describe(_ error: Error) -> String {
+        let raw = error as NSError
+        return "\(raw.domain) \(raw.code) — \(raw.localizedDescription)"
     }
 
     static func bundledJITScriptURL() -> URL? {

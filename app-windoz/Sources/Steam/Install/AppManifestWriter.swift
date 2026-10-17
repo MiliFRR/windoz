@@ -7,6 +7,7 @@
 // the install record writer and extended by 125hz (docs/STEAM_LIBRARY.md).
 
 import Foundation
+import Darwin
 
 /// Generates Steam appmanifest .acf files, Steam's on-disk install record.
 /// A depot download writes one next to `steamapps/common/<installdir>`, in the
@@ -143,7 +144,37 @@ struct AppManifestWriter {
 
         // A failed install record fails the install instead of leaving
         // downloaded files that no library scan can identify.
-        try content.write(toFile: manifestPath, atomically: true, encoding: .utf8)
+        try writeAtomically(content, to: manifestPath)
+    }
+
+    /// Foundation first (atomic — Steam never reads a half-written record);
+    /// when Foundation's route is refused, the C library writes the same bytes
+    /// directly. Device test, 2026-10-17: Foundation answered 513 for creates
+    /// inside the prefix while the raw route kept working, so the install
+    /// record must not depend on the one route that was refused.
+    private static func writeAtomically(_ content: String, to path: String) throws {
+        do {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            return
+        } catch {
+            let bytes = Data(content.utf8)
+            let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            if fd >= 0 {
+                var written = 0
+                let ok = bytes.withUnsafeBytes { raw -> Bool in
+                    guard let base = raw.baseAddress else { return true }
+                    while written < raw.count {
+                        let n = Darwin.write(fd, base + written, raw.count - written)
+                        if n <= 0 { return false }
+                        written += n
+                    }
+                    return true
+                }
+                close(fd)
+                if ok { return }
+            }
+            throw error
+        }
     }
 
     /// Records depots installed for another app's shared use under

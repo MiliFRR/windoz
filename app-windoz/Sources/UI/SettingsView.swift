@@ -95,7 +95,7 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section("About") {
-            LabeledContent("Version", value: "0.3.0")
+            LabeledContent("Version", value: "0.3.1")
             LabeledContent("Engine", value: "Wine ARM64EC · FEX · DXMT · D3D12")
             LabeledContent("Install", value: AppEnvironment.installKind)
             Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz-v2")!)

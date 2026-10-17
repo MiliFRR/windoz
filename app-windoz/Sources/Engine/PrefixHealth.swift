@@ -4,18 +4,27 @@
 // Device test, 2026-10-17: creating `steamapps/common/<game>` failed with
 // Foundation 513 ("You don't have permission to save the file … in the folder
 // “common”"), and the runtime installer hit a permission error moving its file
-// into the container. The shipped prefix template is fully owner-writable, so
-// the blocker is on the device's own data — a level that is a symlink, a file,
-// or missing its owner bits after an earlier install. This is therefore an
-// executor, not just a reporter:
+// into the container. The shipped prefix template is fully owner-writable, and
+// the device's own report later showed every level of the path as
+// `mode=755 uid=501 owner-w` — yet Foundation's create was refused while
+// "Steam" was reported missing before *and* after the attempt. This is
+// therefore an executor, not just a reporter:
 //
-//   1. report every level — lstat (symlinks, types) plus stat, plus a real
-//      write attempt with the raw errno
-//   2. rename the first broken level at or below `windoz-prefix` away
+//   1. report every level — lstat (symlinks, types, raw errno, BSD flags)
+//      plus stat, plus access(W_OK)
+//   2. probe each level with real operations through *both* routes —
+//      Foundation (Data.write + removeItem) and the C library
+//      (creat/mkdir + unlink/rmdir) — so a route that refuses names itself
+//   3. rename the first broken level at or below `windoz-prefix` away
 //      (kept as `<name>.windoz-broken-<timestamp>` for inspection) so the
 //      chain can be rebuilt fresh — nothing above windoz-prefix is touched
-//   3. probe the exact operations the downloader runs
-//   4. return one honest verdict naming the failing level
+//   4. rebuild the chain, Foundation first then the C library; when even
+//      that is refused and the refusal is inside the prefix (and the engine
+//      is not running), rename the whole prefix aside and extract a fresh
+//      template — the old tree is kept for inspection
+//   5. show what is actually on disk at the failing level (names, types,
+//      BSD flags) through the C library's own readdir
+//   6. return one honest verdict naming the failing level and route
 //
 // Every line also goes to the engine log (exportable from Settings) and the
 // boot trace, so a failing run still names its cause.
@@ -34,11 +43,22 @@ enum PrefixHealth {
         let accessOK: Bool          // access(W_OK)
         let mode: String
         let uid: uid_t
+        let flags: UInt32           // st_flags (UF_IMMUTABLE = 0x2, SF_IMMUTABLE = 0x80000)
+        let lstatErrno: Int32
 
         var isSound: Bool { exists && !isSymlink && isDirectory && ownerWritable && accessOK }
 
         var description: String {
-            "\(exists ? (isSymlink ? "symlink" : (isDirectory ? "dir" : "file")) : "missing") mode=\(mode) uid=\(uid) \(accessOK ? "w-ok" : "W-DENIED") \(url.path)"
+            var text: String
+            if exists {
+                text = isSymlink ? "symlink" : (isDirectory ? "dir" : "file")
+            } else {
+                text = "missing (lstat errno \(lstatErrno): \(String(cString: strerror(lstatErrno))))"
+            }
+            text += " mode=\(mode) uid=\(uid)"
+            if flags != 0 { text += " flags=0x\(String(flags, radix: 16))" }
+            text += " \(accessOK ? "w-ok" : "W-DENIED") \(url.path)"
+            return text
         }
     }
 
@@ -61,18 +81,25 @@ enum PrefixHealth {
         return urls.map(inspect)
     }
 
-    /// Report, repair, probe — and return a one-line verdict for the UI.
+    /// Report, repair, rebuild, probe — and return a one-line verdict for the UI.
     @discardableResult
     static func checkAndRepair(steamApps: URL) -> String {
-        var lines: [String] = ["checking \(steamApps.path)"]
-        let before = levels(steamApps: steamApps)
+        let fm = FileManager.default
+        var lines: [String] = ["checking \(steamApps.path)",
+                               "process uid=\(getuid()) euid=\(geteuid()) pid=\(getpid())"]
+
+        // 1. Every level: type, rights, flags — then one real operation pair.
+        var before = levels(steamApps: steamApps)
         for level in before { lines.append(level.description) }
+        var failing: [(url: URL, detail: String)] = []
         for level in before where level.exists && level.isDirectory {
-            lines.append("write probe \(level.url.path): \(probe(level.url))")
+            let probe = dualProbe(level.url)
+            lines.append("probe \(level.url.path): \(probe.text)")
+            if !probe.ok { failing.append((level.url, probe.text)) }
         }
 
-        // The first broken level at or below windoz-prefix is renamed away and
-        // the chain rebuilt. Documents itself is only ever reported.
+        // 2. The first broken level at or below windoz-prefix is renamed away
+        //    and the chain rebuilt. Documents itself is only ever reported.
         let floor = prefixRoot().standardizedFileURL
         var repaired = false
         for level in before where level.exists && !level.isSound {
@@ -84,74 +111,186 @@ enum PrefixHealth {
             let moved = url.deletingLastPathComponent()
                 .appendingPathComponent("\(url.lastPathComponent).windoz-broken-\(Int(Date().timeIntervalSince1970))")
             do {
-                try FileManager.default.moveItem(at: url, to: moved)
+                try fm.moveItem(at: url, to: moved)
                 lines.append("replaced broken level \(url.path) → \(moved.lastPathComponent)")
                 repaired = true
             } catch {
-                let raw = error as NSError
-                lines.append("could not rename \(url.path): \(raw.domain) \(raw.code) — \(raw.localizedDescription)")
+                lines.append("could not rename \(url.path): \(describe(error))")
             }
             break // rebuilding the first broken level makes the rest moot
         }
 
-        let fm = FileManager.default
-        var ok = true
-        var failure = ""
-        do {
-            try fm.createDirectory(at: steamApps, withIntermediateDirectories: true)
-            let common = steamApps.appendingPathComponent("common", isDirectory: true)
-            try fm.createDirectory(at: common, withIntermediateDirectories: true)
+        // 3. Build the real chain — Foundation first, then the C library — and
+        //    prove it with a real write.
+        let common = steamApps.appendingPathComponent("common", isDirectory: true)
+        var route = ""
+        func attemptChain() -> Bool {
+            route = ""
+            do {
+                try fm.createDirectory(at: common, withIntermediateDirectories: true)
+                route = "Foundation"
+            } catch {
+                lines.append("Foundation chain create refused: \(describe(error))")
+                let dirs = ContainerFS.mkdirs(common.path)
+                guard dirs.ok else {
+                    lines.append(contentsOf: dirs.lines)
+                    return false
+                }
+                route = "C library"
+            }
             let probeFile = common.appendingPathComponent(".windoz-write-probe")
-            try Data([0x57]).write(to: probeFile)
-            try? fm.removeItem(at: probeFile)
-            lines.append("probe write to common: OK\(repaired ? " (after repair)" : "")")
-        } catch {
-            ok = false
-            let raw = error as NSError
-            failure = "\(raw.domain) \(raw.code) — \(raw.localizedDescription)"
-            lines.append("probe failed: \(failure)")
-            let after = levels(steamApps: steamApps)
-            for level in after { lines.append("after: \(level.description)") }
-            if let first = after.first(where: { $0.exists && !$0.isSound }) {
-                failure = "blocked at \(first.url.path) — \(first.description)"
+            do {
+                try Data([0x57]).write(to: probeFile)
+                try? fm.removeItem(at: probeFile)
+                route += " write"
+                return true
+            } catch {
+                lines.append("Foundation probe write refused: \(describe(error))")
+            }
+            let raw = ContainerFS.writeFile(probeFile.path, Data([0x57]))
+            guard raw.ok else {
+                lines.append("C-library probe write refused: \(raw.detail)")
+                return false
+            }
+            _ = ContainerFS.unlink(probeFile.path)
+            route += " mkdirs + C-library write"
+            return true
+        }
+        var writable = attemptChain()
+
+        // 4. Last resort while the refusal is inside the prefix: rename the
+        //    whole prefix aside and extract a fresh template. Guarded so a
+        //    running engine is never rebuilt from under, and skipped when the
+        //    container itself (Documents) is the thing refusing writes.
+        var rebuilt = false
+        if !writable {
+            let rootProbe = AppContainer.documents.appendingPathComponent(".windoz-root-probe")
+            let containerOK = ContainerFS.writeFile(rootProbe.path, Data([0x57])).ok
+            _ = ContainerFS.unlink(rootProbe.path)
+            let insidePrefix = failing.contains { $0.url.path == floor.path || $0.url.path.hasPrefix(floor.path + "/") }
+            if !containerOK {
+                lines.append("writes are refused outside the prefix too — not rebuilding it")
+            } else if !insidePrefix {
+                lines.append("nothing inside the prefix refused — not rebuilding it")
+            } else if wineserver_is_ready() == 1 {
+                lines.append("the engine is running — not rebuilding the prefix from under it")
+            } else {
+                let moved = floor.deletingLastPathComponent()
+                    .appendingPathComponent("windoz-prefix.windoz-broken-\(Int(Date().timeIntervalSince1970))")
+                do {
+                    try fm.moveItem(at: floor, to: moved)
+                    lines.append("old prefix kept at \(moved.lastPathComponent)")
+                    try PrefixManager().createIfNeeded()
+                    rebuilt = true
+                    lines.append("fresh prefix extracted")
+                } catch {
+                    lines.append("could not rebuild the prefix: \(describe(error))")
+                }
+            }
+            if rebuilt {
+                before = levels(steamApps: steamApps)
+                lines.append("after the rebuild:")
+                for level in before { lines.append(level.description) }
+                writable = attemptChain()
             }
         }
 
+        // 5. Show what is actually on disk at the failing levels — through the
+        //    C library's readdir — so the report names reality, not a guess.
+        if !failing.isEmpty {
+            var seen = Set<String>()
+            for failure in failing.prefix(3) where seen.insert(failure.url.path).inserted {
+                let listing = ContainerFS.children(failure.url.path)
+                if listing.ok {
+                    let names = listing.entries.map { entry in
+                        entry.flags != 0
+                            ? "\(entry.name)[\(entry.type), flags=0x\(String(entry.flags, radix: 16))]"
+                            : "\(entry.name)[\(entry.type)]"
+                    }
+                    lines.append("contents of \(failure.url.path): \(names.isEmpty ? "(empty)" : names.joined(separator: ", "))")
+                } else {
+                    lines.append("contents of \(failure.url.path): readdir refused: errno \(listing.errnoValue) (\(String(cString: strerror(listing.errnoValue))))")
+                }
+            }
+        }
+
+        let summary: String
+        if writable {
+            summary = "Windows-prefix write path: OK — steamapps/common is writable (\(route))."
+                + (repaired ? " A broken folder was replaced." : "")
+                + (rebuilt ? " The prefix was rebuilt." : "")
+        } else if let first = failing.first {
+            summary = "Windows-prefix write path: FAILED — \(first.url.path): \(first.detail) The full per-level report is in the log."
+        } else {
+            summary = "Windows-prefix write path: FAILED — creating steamapps/common was refused; the log names every level, route and errno."
+        }
         for line in lines {
-            EngineLogStream.shared.append("[prefix-health] \(line)", level: ok ? .info : .warning)
+            EngineLogStream.shared.append("[prefix-health] \(line)", level: writable ? .info : .warning)
             BootTrace.mark("[prefix-health] \(line)")
         }
-        return ok
-            ? "Windows-prefix write path: OK — steamapps/common is writable." + (repaired ? " (A broken folder was replaced.)" : "")
-            : "Windows-prefix write path: FAILED — \(failure)"
+        return summary
     }
 
     // MARK: - low level
 
-    /// One real write attempt inside `url`; returns "OK" or the raw errno.
-    private static func probe(_ url: URL) -> String {
-        var st = stat()
-        guard url.withUnsafeFileSystemRepresentation({ lstat($0, &st) == 0 }),
-              (st.st_mode & S_IFMT) == S_IFDIR else { return "not a directory" }
+    /// One real operation pair inside `url`, through both routes: the C library
+    /// (`creat`/`mkdir` + `unlink`/`rmdir`) and Foundation (`Data.write` +
+    /// `removeItem`). A route that refuses contributes its raw error.
+    private static func dualProbe(_ url: URL) -> (text: String, ok: Bool) {
+        var parts: [String] = []
+        var ok = true
+
         let file = url.appendingPathComponent(".windoz-probe-\(getpid())")
-        let fd = creat(file.path, 0o644)
-        if fd < 0 {
-            let err = errno
-            return "create failed: errno \(err) (\(String(cString: strerror(err))))"
+        let made = ContainerFS.writeFile(file.path, Data([0x57]))
+        if made.ok {
+            let gone = ContainerFS.unlink(file.path)
+            if gone.ok { parts.append("file C-library=ok") }
+            else { parts.append("file C-library delete=\(gone.detail)"); ok = false }
+        } else {
+            parts.append("file C-library=\(made.detail)"); ok = false
         }
-        _ = close(fd)
-        _ = unlink(file.path)
-        return "OK"
+
+        let dir = url.appendingPathComponent(".windoz-probe-dir-\(getpid())")
+        let dirMade = ContainerFS.mkdir(dir.path)
+        if dirMade.ok {
+            let gone = ContainerFS.rmdir(dir.path)
+            if gone.ok { parts.append("dir C-library=ok") }
+            else { parts.append("dir C-library rmdir=\(gone.detail)"); ok = false }
+        } else {
+            parts.append("dir C-library=\(dirMade.detail)"); ok = false
+        }
+
+        let foundation = url.appendingPathComponent(".windoz-probe-f-\(getpid())")
+        do {
+            try Data([0x57]).write(to: foundation)
+            do {
+                try FileManager.default.removeItem(at: foundation)
+                parts.append("file Foundation=ok")
+            } catch {
+                parts.append("file Foundation delete=\(describe(error))"); ok = false
+            }
+        } catch {
+            parts.append("file Foundation=\(describe(error))"); ok = false
+        }
+
+        return (parts.joined(separator: "; "), ok)
+    }
+
+    private static func describe(_ error: Error) -> String {
+        let raw = error as NSError
+        return "\(raw.domain) \(raw.code) — \(raw.localizedDescription)"
     }
 
     private static func inspect(_ url: URL) -> Level {
         var lst = stat()
         let exists = url.withUnsafeFileSystemRepresentation { lstat($0, &lst) == 0 }
+        let lstatErrno: Int32 = exists ? 0 : errno
         let isSymlink = exists && (lst.st_mode & S_IFMT) == S_IFLNK
         var st = stat()
         let follows = url.withUnsafeFileSystemRepresentation { stat($0, &st) == 0 }
         let accessOK = url.withUnsafeFileSystemRepresentation { access($0, W_OK) == 0 }
         let mode = (follows ? st.st_mode : lst.st_mode) & 0o7777
+        let flags = exists ? lst.st_flags : (follows ? st.st_flags : 0)
         return Level(url: url,
                      exists: exists,
                      isSymlink: isSymlink,
@@ -159,6 +298,8 @@ enum PrefixHealth {
                      ownerWritable: follows && (st.st_mode & 0o200) != 0,
                      accessOK: accessOK,
                      mode: String(format: "%o", mode),
-                     uid: follows ? st.st_uid : (exists ? lst.st_uid : 0))
+                     uid: follows ? st.st_uid : (exists ? lst.st_uid : 0),
+                     flags: flags,
+                     lstatErrno: lstatErrno)
     }
 }

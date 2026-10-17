@@ -546,26 +546,42 @@ the fix that is still in the tree.*
   caught, so no cause is claimed: this stays "not reproduced", not "fixed".
   The breadcrumbs stay in the app and would name the exact step if the bounce
   ever returns.
-- **Steam on device: sign-in and the owned library verified; installs still
-  hit the write-permission error (2026-10-17).** The owner signed in natively
-  and the full owned library rendered with real art. Starting an install
-  still failed with Foundation's "You don't have permission to save the file
-  … in the folder “common”" (error 513) when the downloader creates
-  `steamapps/common/<game>`. The shipped `prefix-template.tar.gz` extracts
-  every directory owner-writable (verified entry by entry), so the blocker is
-  on the device's own data. `PrefixHealth` — run from Settings → Advanced →
-  Diagnostics, or automatically on a failing write — now reports every level
-  (lstat/stat/access plus a real write probe with its raw errno), renames the
-  first broken level at or below `windoz-prefix` out of the way
-  (`*.windoz-broken-<ts>`, kept for inspection), rebuilds the chain and
-  retries; a still-failing download names the blocking level and errno in the
-  sheet and the log instead of a mystery. Device confirmation pending.
+- **Steam on device: sign-in and the owned library verified; the
+  write-permission error is narrowed to create/delete inside the prefix tree
+  (2026-10-17).** The owner signed in natively and the full owned library
+  rendered with real art. Starting an install still failed with Foundation's
+  "You don't have permission to save the file … in the folder “common”"
+  (error 513) when the downloader creates `steamapps/common/<game>`. The
+  owner exported the device log: every level of the path — Documents,
+  `windoz-prefix`, `drive_c`, `Program Files (x86)` — reported `mode=755
+  uid=501 owner-w` with `access(W_OK)` passing, `Steam` itself read as
+  missing before *and* after the attempt, and the create was still refused;
+  the same session could not *delete* an existing staged file
+  (`windoz-jit.js` — its copy then answered "already exists"), so "existing
+  items inside the prefix resist create/delete" is the observed behaviour;
+  the cause is still not named, and nothing below claims it is fixed. Build
+  0.3.1 answers with executors instead of another question:
+  `SteamLibraryLocator` tests the download location before each install
+  (create `steamapps/common`, write a file, delete it — through Foundation
+  *and* the C library) and moves the library to the first location that
+  passes, remembering it in `windoz-steam-library-location.txt` (in-prefix
+  fallbacks stay `C:\` to Wine; the last one sits outside the prefix and
+  will arrive as `Z:` later). `PrefixHealth` probes every level through
+  both routes, prints raw errno, `st_flags` and a raw `readdir` listing of
+  the failing level, keeps its rename-the-broken-level repair, and as a
+  last resort renames the whole prefix aside
+  (`windoz-prefix.windoz-broken-<ts>`, kept for inspection) and extracts a
+  fresh template — never while the engine is running. The C library's route
+  is also the fallback for every critical write (install folders, install
+  records, the JIT script copy, app downloads). Device confirmation
+  pending.
 - **Runtime installer downloads could not save their file (2026-10-17).**
   The Downloads tab showed "the downloaded file could not be saved" for the
   VC++ / .NET installers: moving CFNetwork's temp file into the container
   answered "you don't have permission". The move now falls back to a plain
-  copy through Data, and both attempts log the raw NSError (domain and code).
-  Device confirmation pending.
+  copy through Data, and then to the C library's raw write, with every
+  attempt's raw NSError (domain and code) in the log. Device confirmation
+  pending.
 - **JIT status fix verified on device (2026-10-17).** The probe no longer
   shares the engine queue, and the "off"-style UI only appears when the probe
   has answered — the owner's device shows JIT and increased memory as Ready,

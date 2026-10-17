@@ -334,28 +334,52 @@ extension DownloadManager: URLSessionDownloadDelegate {
         let item = items[i]
 
         // Move out of the temp location synchronously.
-        try? FileManager.default.removeItem(at: item.destination)
+        do {
+            try FileManager.default.removeItem(at: item.destination)
+        } catch {
+            if FileManager.default.fileExists(atPath: item.destination.path) {
+                let raw = error as NSError
+                EngineLogStream.shared.append("[downloads] could not clear the previous \(item.destination.lastPathComponent): \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+            }
+        }
+        var saved = false
         do {
             try FileManager.default.moveItem(at: location, to: item.destination)
+            saved = true
         } catch {
             // Device test, 2026-10-17: moving CFNetwork's temp file into the
             // container answered "you don't have permission". Fall back to a
-            // plain copy through Data (a different code path in the same
-            // sandbox) and log the raw NSError either way.
+            // plain copy through Data, then to the C library's raw write.
             let raw = error as NSError
             EngineLogStream.shared.append("[downloads] move failed for \(item.destination.lastPathComponent): \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+        }
+        if !saved {
             do {
                 let data = try Data(contentsOf: location)
                 try data.write(to: item.destination)
-                try? FileManager.default.removeItem(at: location)
+                saved = true
             } catch {
                 let raw = error as NSError
-                EngineLogStream.shared.append("[downloads] copy fallback failed: \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .error)
-                DispatchQueue.main.async {
-                    self.setState(id, .failed("the downloaded file could not be saved: \(error.localizedDescription)"))
-                }
-                return
+                EngineLogStream.shared.append("[downloads] copy fallback failed: \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
             }
+        }
+        if !saved, let data = try? Data(contentsOf: location) {
+            let result = ContainerFS.writeFile(item.destination.path, data)
+            if result.ok {
+                saved = true
+                EngineLogStream.shared.append("[downloads] saved via the C library: \(item.destination.lastPathComponent)")
+            } else {
+                EngineLogStream.shared.append("[downloads] C-library write refused: \(result.detail)", level: .error)
+            }
+        }
+        if saved {
+            try? FileManager.default.removeItem(at: location)
+        } else {
+            EngineLogStream.shared.append("[downloads] \(item.destination.lastPathComponent) could not be saved by any route", level: .error)
+            DispatchQueue.main.async {
+                self.setState(id, .failed("the downloaded file could not be saved — every route was refused, and the log names each errno."))
+            }
+            return
         }
 
         DispatchQueue.main.async {
