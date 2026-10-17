@@ -128,66 +128,6 @@ final class LocalFolderStore: ObservableObject, StoreProvider {
     }
 }
 
-// MARK: - Epic
-
-/// Native Epic. Chunked downloads and updates follow the Legendary/Heroic
-/// approach; titles that refuse to start without the official client fall back
-/// to the Epic Games Launcher in Wine.
-final class EpicStore: ObservableObject, StoreProvider {
-    let id: StoreID = .epic
-
-    let capability = StoreCapability(
-        signIn: .native,
-        downloads: .native,
-        library: true,
-        updateAndVerify: true,
-        cloudSaves: true,
-        runtimeLauncherNeeded: true,
-        summary: "Sign in to Epic. Windoz is meant to fetch chunks itself; some titles need the official Epic launcher in Wine.")
-
-    @Published var authState: StoreAuthState = .signedOut
-    @Published var games: [StoreGame] = []
-
-    private let credentialAccount = "epic.refreshToken"
-
-    init() {
-        if Keychain.has(account: credentialAccount) {
-            authState = .signedIn(account: "Stored Epic session")
-        }
-    }
-
-    func signIn() async {
-        authState = .signingIn("Starting Epic sign-in…")
-        authState = .error("Native Epic sign-in is not in this build yet. It is being written from the Legendary/Heroic approach.")
-    }
-
-    func signOut() {
-        Keychain.remove(account: credentialAccount)
-        authState = .signedOut
-        games = []
-    }
-
-    func refreshLibrary() async throws -> [StoreGame] {
-        guard authState.isSignedIn else { throw StoreError.notSignedIn }
-        throw StoreError.notImplemented("The native Epic library client is not implemented yet.")
-    }
-
-    func install(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Native Epic chunked downloads are not implemented yet.")
-    }
-    func update(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Native Epic updates are not implemented yet.")
-    }
-    func verify(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Native Epic verification is not implemented yet.")
-    }
-    func uninstall(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Native Epic removal is not implemented yet.")
-    }
-
-    func launchConfiguration(for game: StoreGame) -> GameSettings { .default }
-}
-
 // MARK: - GOG
 
 /// GOG is DRM-free, so the best path is simply installing the game's files and

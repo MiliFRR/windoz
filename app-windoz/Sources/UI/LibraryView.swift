@@ -10,6 +10,7 @@ struct LibraryView: View {
 
     @ObservedObject private var registry = StoreRegistry.shared
     @ObservedObject private var steamStore = StoreRegistry.shared.steam
+    @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
@@ -46,7 +47,12 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $steamStore.showingSignIn) { SteamSignInView() }
         .sheet(isPresented: $steamStore.showingLibrary) { SteamLibrarySheet(store: steamStore) }
-        .task { steamStore.start() }
+        .sheet(isPresented: $epicStore.showingSignIn) { EpicSignInSheet(store: epicStore) }
+        .sheet(isPresented: $epicStore.showingLibrary) { EpicSheet(store: epicStore) }
+        .task {
+            steamStore.start()
+            epicStore.start()
+        }
     }
 
     // MARK: - Games
@@ -96,12 +102,24 @@ struct LibraryView: View {
         SectionHeader(title: "Stores")
         ForEach(registry.summaries) { summary in
             StoreRow(summary: summary, registry: registry,
-                     extraAction: summary.id == .steam && summary.authState.isSignedIn
-                         ? (title: "Steam library", handler: { steamStore.showingLibrary = true })
-                         : nil)
+                     extraAction: extraAction(for: summary))
         }
-        Text("Windoz uses your own accounts with each store and follows their terms. Steam signs in and downloads natively today, into the Windows prefix. The remaining stores are meant to run the vendor's official launcher inside Wine once the game-session host is ported; until then they report themselves as not implemented.")
+        Text("Windoz uses your own accounts with each store and follows their terms. Steam signs in natively (password + Steam Guard or a QR code) and downloads owned depots into the Windows prefix. Epic signs in with a device code — you approve it on Epic's own site, no password ever typed into the app — and lists your owned library; its chunked downloads are the next piece. The remaining stores are meant to run the vendor's official launcher inside Wine once the game-session host is ported; until then they report themselves as not implemented.")
             .font(.caption2).foregroundStyle(.white.opacity(0.4))
+    }
+
+    /// The per-store row button that opens the store's own sheet, when signing
+    /// in bought one. Everything else keeps the plain Sign in / Sign out row.
+    private func extraAction(for summary: StoreSummary) -> (title: String, handler: () -> Void)? {
+        guard summary.authState.isSignedIn else { return nil }
+        switch summary.id {
+        case .steam:
+            return (title: "Steam library", handler: { steamStore.showingLibrary = true })
+        case .epic:
+            return (title: "Epic library", handler: { epicStore.showingLibrary = true })
+        default:
+            return nil
+        }
     }
 
     // MARK: - Import
