@@ -458,6 +458,24 @@ the fix that is still in the tree.*
   14 x86_64 VC++ runtime DLLs, the licence bundle and the staged
   `madeira-jit.js`. Under 50 minutes wall, cold cache. The pre-fix run #1
   (`07d8364`) was cancelled on purpose rather than left to burn a runner.
+- **First on-device launch report (LiveContainer, 2026-10-17): the app quit
+  immediately; the audit found the one launch-path operation that can kill the
+  process by itself, and it is fixed — device confirmation pending.** The
+  build that was run contained a `windoz_jit_probe()` that mapped one RWX page
+  and executed a tiny function from it to "prove" JIT by execution. On iOS 26
+  that is exactly what the platform rejects — the engine's own `JITAllocator`
+  documents that self-mapped RX pages fault-loop ("TXM rejected self-mapped RX
+  pages") — and the probe ran on **every** trip through the console
+  (`ConsoleRootView.task` → `refreshStatus`), JIT on or off. Every other
+  launch-path operation is plain file/syscall work. Fixed by replacing the
+  probe with the engine's own safe readiness rule (Madeira's
+  `StikJITHelper.ready`): sticky `CS_DEBUGGED` **and** a debugger attached
+  right now (`P_TRACED` via `sysctl`) — nothing is mapped, nothing is
+  executed, and the check cannot kill the process. Settings now also
+  distinguishes "JIT was enabled but the debugger left" (the state StikDebug's
+  app-list mode leaves behind) instead of treating the sticky flag as ready.
+  The next IPA carries the fix; a crash log from the device is what confirms
+  the diagnosis.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
