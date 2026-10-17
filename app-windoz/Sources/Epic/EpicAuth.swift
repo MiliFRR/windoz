@@ -73,7 +73,12 @@ enum EpicSignIn {
     private static let account = "epic.session"
 
     static func storedSession() -> StoredSession? {
-        guard let data = Keychain.get(account: account) else { return nil }
+        BootTrace.mark("EpicSignIn.storedSession: keychain read")
+        guard let data = Keychain.get(account: account) else {
+            BootTrace.mark("EpicSignIn.storedSession: nothing stored")
+            return nil
+        }
+        BootTrace.mark("EpicSignIn.storedSession: \(data.count) bytes")
         return try? JSONDecoder().decode(StoredSession.self, from: data)
     }
 

@@ -89,8 +89,20 @@ final class DepotDownloader {
             .appendingPathComponent(folderName, isDirectory: true)
         let journalDir = steamApps.appendingPathComponent("downloading", isDirectory: true)
             .appendingPathComponent("\(app.appID)", isDirectory: true)
-        try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+        } catch {
+            // Device test, 2026-10-17: Foundation 513 ("You don't have
+            // permission to save the file … in the folder “common”") on the
+            // first install-folder creation; cause unknown on the device.
+            // Log the exact failure, report the path chain, repair what can be
+            // repaired, then retry once.
+            SteamLog.event("[steam-depot] install dir create failed: \(error.localizedDescription)")
+            _ = PrefixHealth.checkAndRepair(steamApps: steamApps)
+            try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+        }
 
         var state = SteamDownloadProgress()
         report(state)

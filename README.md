@@ -535,6 +535,35 @@ the fix that is still in the tree.*
   round starts by settling that second, launcher-scoped authorization (the
   approach Legendary uses). Device verification of sign-in and the library is
   pending the owner's next run.
+- **Steam+Epic build bounced at launch on device (2026-10-17).** Build #6
+  (`7f139c7`) throws the user back to the home screen a moment after launch in
+  LiveContainer, with or without JIT; the Steam-only build (#5, `5a6e47d`)
+  and the pre-store build both launch fine, so the regression lives inside the
+  Epic commit's delta (`5b674e0`) or its effect on the launch path. Static
+  review found nothing load-time outside the registry's `EpicStore`
+  construction, whose keychain read matches patterns that already run in the
+  working builds. This build adds a boot breadcrumb (`BootTrace`, one line per
+  step in `Documents/windoz-boot.log`) and a gate screen that shows the
+  previous session's log before any store code runs, so one bounce names the
+  exact step; root cause and fix follow the evidence. The gate disappears once
+  the crash is fixed.
+- **Steam download hit a write-permission error on device (2026-10-17).**
+  Starting a download on the Steam-only build failed with Foundation's
+  "You don't have permission to save the file … in the folder “common”"
+  (error 513, EACCES) when the downloader created `steamapps/common/<game>`
+  inside the Wine prefix. The shipped `prefix-template.tar.gz` extracts every
+  directory owner-writable (verified entry by entry), so the cause is on the
+  device's data, not in the template. This build adds `PrefixHealth`: it
+  reports each level's mode and owner, re-adds owner access, probes the exact
+  failing operation, logs the detail, and retries the download once — a
+  repaired path or an exact diagnosis, never silence. Device confirmation
+  pending.
+- **JIT status could read "off" while still checking (fixed in this build).**
+  Running the engine-core test queues work on the engine's serial queue, and
+  the status probe shared that queue: the JIT/memory rows sat at "Checking…"
+  (and the top banner said "JIT is off") until the core test finished. Probes
+  now run on their own queue and the "off"-style UI only appears when the
+  probe has actually answered. Device confirmation pending.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

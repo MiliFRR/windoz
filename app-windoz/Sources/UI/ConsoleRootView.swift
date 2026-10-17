@@ -11,32 +11,46 @@ struct ConsoleRootView: View {
     @AppStorage("windoz.didSetup") private var didSetup = false
 
     var body: some View {
+        let _ = BootTrace.once("console body")
         TabView(selection: $tab) {
+            let _ = BootTrace.once("tab: building home")
             NavigationStack { HomeView() }
                 .tabItem { Label("Home", systemImage: "house.fill") }
                 .tag(Tab.home)
 
+            let _ = BootTrace.once("tab: building library")
             NavigationStack { LibraryView() }
                 .tabItem { Label("Library", systemImage: "square.grid.2x2.fill") }
                 .tag(Tab.library)
 
+            let _ = BootTrace.once("tab: building downloads")
             NavigationStack { DownloadsView() }
                 .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }
                 .tag(Tab.downloads)
 
+            let _ = BootTrace.once("tab: building settings")
             NavigationStack { SettingsView() }
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
         .tint(Theme.accent)
         .overlay(alignment: .top) {
-            if !engine.status.jit.isReady, !showSetup {
+            // Only a probe answer of "off" shows the banner: while the status
+            // is still being checked, nothing is claimed (2026-10-17 device
+            // report: the banner claimed "JIT is off" while the engine-core
+            // test held the probe queue).
+            if case .unavailable = engine.status.jit, !showSetup {
                 jitBanner
             }
         }
         .task {
+            BootTrace.mark("console task: first frame; refreshing status")
             engine.refreshStatus()
             if !didSetup { showSetup = true }
+            BootTrace.mark("console task done; boot complete")
+        }
+        .onChange(of: tab) { _, new in
+            BootTrace.mark("tab selected: \(new)")
         }
         .sheet(isPresented: $showSetup) {
             NavigationStack {

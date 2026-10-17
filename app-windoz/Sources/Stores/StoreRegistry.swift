@@ -24,19 +24,33 @@ final class StoreRegistry: ObservableObject {
 
     @Published private(set) var summaries: [StoreSummary] = []
 
-    let local = LocalFolderStore()
-    let steam = SteamStore()
-    let epic = EpicStore()
-    let gog = GOGStore()
-    let rockstar = LauncherInWineStore(
-        id: .rockstar,
-        launcherName: "Rockstar Games Launcher",
-        installerURL: URL(string: "https://socialclub.rockstargames.com/rockstar-games-launcher"))
-    let ea = LauncherInWineStore(id: .ea, launcherName: "EA app", installerURL: nil)
+    let local: LocalFolderStore
+    let steam: SteamStore
+    let epic: EpicStore
+    let gog: GOGStore
+    let rockstar: LauncherInWineStore
+    let ea: LauncherInWineStore
 
     private var cancellables: [AnyCancellable] = []
 
     private init() {
+        // Diagnostic build (2026-10-17): breadcrumbs around each store
+        // construction — the Steam+Epic build bounced at launch somewhere in
+        // this path, and LiveContainer gives no crash log for guests.
+        BootTrace.mark("registry: constructing LocalFolderStore")
+        local = LocalFolderStore()
+        BootTrace.mark("registry: constructing SteamStore")
+        steam = SteamStore()
+        BootTrace.mark("registry: constructing EpicStore")
+        epic = EpicStore()
+        BootTrace.mark("registry: constructing the rest")
+        gog = GOGStore()
+        rockstar = LauncherInWineStore(
+            id: .rockstar,
+            launcherName: "Rockstar Games Launcher",
+            installerURL: URL(string: "https://socialclub.rockstargames.com/rockstar-games-launcher"))
+        ea = LauncherInWineStore(id: .ea, launcherName: "EA app", installerURL: nil)
+        BootTrace.mark("registry: stores constructed; installing observers")
         for publisher in [local.objectWillChange.eraseToAnyPublisher(),
                           steam.objectWillChange.eraseToAnyPublisher(),
                           epic.objectWillChange.eraseToAnyPublisher(),
@@ -49,7 +63,9 @@ final class StoreRegistry: ObservableObject {
                 }
                 .store(in: &cancellables)
         }
+        BootTrace.mark("registry: first rebuild")
         rebuild()
+        BootTrace.mark("registry: done")
     }
 
     /// Every provider, as the protocol the rest of the app sees.

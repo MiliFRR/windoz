@@ -22,6 +22,10 @@ final class WindozEngine: ObservableObject {
     private(set) var prefix: PrefixManager
 
     private let queue = DispatchQueue(label: "windoz.engine", qos: .userInitiated)
+    /// Status probes run on their own queue: they must never wait behind a
+    /// long engine-core test (device bug 2026-10-17: the JIT/memory rows sat
+    /// at "Checking…" while the core test held `queue`).
+    private let probes = DispatchQueue(label: "windoz.probes", qos: .userInitiated)
     private var sessionStart: Date?
     private var callbacksInstalled = false
 
@@ -45,7 +49,7 @@ final class WindozEngine: ObservableObject {
         status.jit = .checking
         status.memoryEntitlement = .checking
         status.runningInLiveContainer = AppEnvironment.isLiveContainer
-        queue.async { [weak self] in
+        probes.async { [weak self] in
             guard let self else { return }
             let jitOK = JITManager.probeEnabled()
             let memory = JITManager.memoryEntitlementHealth

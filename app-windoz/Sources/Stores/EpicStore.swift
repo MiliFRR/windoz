@@ -62,8 +62,12 @@ final class EpicStore: ObservableObject, StoreProvider {
     // MARK: - Lifecycle
 
     init() {
+        BootTrace.mark("EpicStore.init enter")
         if let name = EpicSignIn.accountName {
+            BootTrace.mark("EpicStore.init signed in")
             authState = .signedIn(account: name)
+        } else {
+            BootTrace.mark("EpicStore.init signed out")
         }
     }
 

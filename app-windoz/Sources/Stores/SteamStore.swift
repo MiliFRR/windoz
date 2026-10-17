@@ -106,8 +106,12 @@ final class SteamStore: ObservableObject, StoreProvider {
     // MARK: - Lifecycle
 
     init() {
+        BootTrace.mark("SteamStore.init enter")
         if let account = SteamSignIn.accountName {
+            BootTrace.mark("SteamStore.init signed in")
             authState = .signedIn(account: account)
+        } else {
+            BootTrace.mark("SteamStore.init signed out")
         }
     }
 

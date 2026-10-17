@@ -102,7 +102,7 @@ struct SettingsView: View {
             }
             Text(AppEnvironment.jitSituation)
                 .font(.caption).foregroundStyle(.secondary)
-            if !engine.status.jit.isReady {
+            if case .unavailable = engine.status.jit {
                 Button("Enable JIT with StikDebug") {
                     if let url = JITManager.stikDebugEnableURL() { UIApplication.shared.open(url) }
                 }
@@ -152,6 +152,9 @@ struct SettingsView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
+            Button("Check Windows-prefix write access") {
+                coreMessage = PrefixHealth.checkAndRepair(steamApps: SteamStore.steamApps)
+            }
             Button("Start engine core (test)") {
                 coreMessage = "Starting…"
                 Task {

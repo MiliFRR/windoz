@@ -15,6 +15,7 @@ struct LibraryView: View {
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
     var body: some View {
+        let _ = BootTrace.once("library body")
         ZStack {
             ConsoleBackground()
             ScrollView {
@@ -50,8 +51,11 @@ struct LibraryView: View {
         .sheet(isPresented: $epicStore.showingSignIn) { EpicSignInSheet(store: epicStore) }
         .sheet(isPresented: $epicStore.showingLibrary) { EpicSheet(store: epicStore) }
         .task {
+            BootTrace.mark("library task: steamStore.start()")
             steamStore.start()
+            BootTrace.mark("library task: epicStore.start()")
             epicStore.start()
+            BootTrace.mark("library task: done")
         }
     }
 
@@ -99,6 +103,7 @@ struct LibraryView: View {
     // MARK: - Stores
 
     @ViewBuilder private var storesSection: some View {
+        let _ = BootTrace.once("library stores section")
         SectionHeader(title: "Stores")
         ForEach(registry.summaries) { summary in
             StoreRow(summary: summary, registry: registry,
