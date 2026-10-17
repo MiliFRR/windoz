@@ -73,6 +73,10 @@ final class WindozEngine: ObservableObject {
     /// pinned front end uses — see `applyFPSLock`).
     private var launchFPSLimit: FPSLimit = .displayMaximum
     private var fpsReapplied = false
+    /// Set once the no-frame watchdog has spoken; drives the session screen's
+    /// wording. A game that is still loading is never force-closed — the
+    /// owner decides.
+    private var noFrameWarned = false
 
     init(prefix: PrefixManager = PrefixManager(base: AppContainer.documents)) {
         self.prefix = prefix
@@ -262,6 +266,7 @@ final class WindozEngine: ObservableObject {
         lastStageLine = "Preparing the session…"
         launchFPSLimit = game.settings.fpsLimit
         fpsReapplied = false
+        noFrameWarned = false
         currentGameID = game.id
         sessionStart = Date()
         sessionBaselineFrames = madeira_get_present_count()
@@ -400,10 +405,11 @@ final class WindozEngine: ObservableObject {
         }
     }
 
-    /// Watches a launch from the main thread: a stalled startup, or a session
-    /// that never draws a frame, becomes an honest message instead of an
-    /// endless black screen. Budgets are generous — a first boot (service
-    /// cold start + translator + the game's own loader) is genuinely slow.
+    /// Watches a launch from the main thread: a stalled startup becomes an
+    /// honest failure with the last stage's name, and a session that draws no
+    /// frame for five minutes gets a spoken warning — but is never force-closed,
+    /// because a first boot (service cold start + translator + the game's own
+    /// loader) is genuinely slow. Budgets are generous for the same reason.
     private func startLaunchWatchdog() {
         launchWatchdog?.invalidate()
         launchWatchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -421,9 +427,11 @@ final class WindozEngine: ObservableObject {
         switch phase {
         case .starting where age > 180:
             failStartingSession(EngineError.sessionStalled(lastStageLine.isEmpty ? "starting" : lastStageLine))
-        case .running where sessionFrames == 0 && age > 300:
-            launchWatchdog?.invalidate(); launchWatchdog = nil
-            detachSession(reason: "\(sessionGame?.title ?? "The game") did not draw a frame within five minutes")
+        case .running where sessionFrames == 0 && age > 300 && !noFrameWarned:
+            // Say it on the session screen and in the log; the owner decides.
+            // (The timer keeps running and re-checks — first frames cancel it.)
+            noFrameWarned = true
+            log.append("[session] no frame in five minutes — the game may still be loading; the startup stages are in this log", level: .warning)
         case .running where sessionFrames > 0:
             launchWatchdog?.invalidate(); launchWatchdog = nil
         default:
@@ -617,7 +625,9 @@ final class WindozEngine: ObservableObject {
             sawWineProcess = true
             sessionDetail = sessionFrames > 0
                 ? "Rendering — \(sessionFrames) frame\(sessionFrames == 1 ? "" : "s") presented."
-                : "The game is starting (no frame yet)."
+                : (noFrameWarned
+                   ? "No frame in five minutes — the game may still be loading. It keeps running if you leave; the log has the startup stages."
+                   : "The game is starting (no frame yet).")
         } else if sawWineProcess && wineserver_is_running() == 0 {
             finishSession()
         } else if !sawWineProcess, let start = sessionStart,

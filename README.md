@@ -745,9 +745,10 @@ the fix that is still in the tree.*
     "Launching the game…"), session startup runs on its own queue so a
     diagnostics stop (a blocking join) cannot hold it, a storage preflight
     refuses a launch with the reason when the prefix itself refuses writes,
-    and a watchdog turns a startup stalled over three minutes — or a session
-    that draws no frame in five — into an honest message with the last stage
-    name.
+    and a watchdog turns a startup stalled over three minutes into an honest
+    failure carrying the last stage's name — while a session that draws no
+    frame in five minutes gets a spoken warning on the session screen and is
+    left running, because a slow first boot is not a failure.
   - **The library index was saved through a bare `try?` and read strictly.**
     Two independent causes could empty the shelf after a restart: `persist()`
     swallowed every write refusal silently (this container has refused
