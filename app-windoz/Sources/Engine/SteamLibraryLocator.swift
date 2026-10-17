@@ -27,7 +27,14 @@ enum SteamLibraryLocator {
 
     static let ruleFileName = "windoz-steam-library-location.txt"
 
-    static var ruleURL: URL { AppContainer.documents.appendingPathComponent(ruleFileName) }
+    /// The rule's home: the resolved storage root first, the legacy Documents
+    /// path as a read fallback, and the Keychain as the durable copy (it is a
+    /// small string, and the Keychain is the one store this device has proven
+    /// it can write back when every file location refuses).
+    private static let keychainAccount = "windoz.steam.library"
+
+    static var ruleURL: URL { AppContainer.storageRoot.appendingPathComponent(ruleFileName) }
+    static var legacyRuleURL: URL { AppContainer.documents.appendingPathComponent(ruleFileName) }
 
     /// Steam's own client layout (`C:\Program Files (x86)\Steam\steamapps`).
     static var preferredRelative: String { "Documents/drive_c/\(SteamInstallPaths.libraryRelative)" }
@@ -81,19 +88,40 @@ enum SteamLibraryLocator {
         return allCandidates.first(where: { $0.name == legacy })
     }
 
-    /// The location remembered in `windoz-steam-library-location.txt`.
+    /// The location remembered in `windoz-steam-library-location.txt` (or in
+    /// the Keychain, which outlives a container that refuses file writes).
     static var remembered: String? {
-        guard let text = try? String(contentsOf: ruleURL, encoding: .utf8) else { return nil }
-        let line = text.split(separator: "\n").first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
-        return line.isEmpty ? nil : line
+        if let stored = Keychain.getString(account: keychainAccount) {
+            let line = stored.split(separator: "\n").first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            if !line.isEmpty { return line }
+        }
+        for url in [ruleURL, legacyRuleURL] {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let line = text.split(separator: "\n").first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            if !line.isEmpty { return line }
+        }
+        return nil
     }
 
     static func remember(_ relative: String) {
-        let result = ContainerFS.writeFile(ruleURL.path, Data("\(relative)\n".utf8))
-        if !result.ok {
-            EngineLogStream.shared.append("[steam-library] could not remember the location: \(result.detail)", level: .warning)
+        let data = Data("\(relative)\n".utf8)
+        Keychain.set(data, account: keychainAccount)
+        var written = Set<String>()
+        for url in [ruleURL, legacyRuleURL] where written.insert(url.standardizedFileURL.path).inserted {
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                let result = ContainerFS.writeFile(url.path, data)
+                if !result.ok {
+                    EngineLogStream.shared.append(
+                        "[steam-library] could not remember the location at \(url.path): \(result.detail)",
+                        level: .warning)
+                }
+            }
         }
     }
 

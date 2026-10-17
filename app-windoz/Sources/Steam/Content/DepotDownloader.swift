@@ -20,6 +20,13 @@ struct SteamDownloadProgress: Equatable, Sendable {
     /// previous attempt.
     var doneBytes: UInt64 = 0
     var bytesPerSecond: Double = 0
+    /// Compressed bytes that had to be fetched from the network during *this*
+    /// run. When it stays 0 while `doneBytes` climbs, the install is checking
+    /// files that were already on disk — the honest reason a re-install can
+    /// finish in seconds.
+    var fetchedBytes: UInt64 = 0
+    /// Compressed bytes that were found on disk and verified, not fetched.
+    var verifiedBytes: UInt64 = 0
 
     var fraction: Double { totalBytes > 0 ? min(1, Double(doneBytes) / Double(totalBytes)) : 0 }
 }
@@ -187,7 +194,6 @@ final class DepotDownloader {
 
         // 3. Chunks.
         let started = Date()
-        let resumedBytes = state.doneBytes
         var lastReport = Date.distantPast
         for (index, plan) in plans.enumerated() {
             let journal = try JournalWriter(url: prepared.journals[index])
@@ -196,7 +202,7 @@ final class DepotDownloader {
             let paths = prepared.paths[index]
             let existing = prepared.existing[index]
             let maximum = maxConcurrentChunks, attempts = attemptsPerChunk
-            try await withThrowingTaskGroup(of: (UInt64, UInt64).self) { group in
+            try await withThrowingTaskGroup(of: (UInt64, UInt64, Bool).self) { group in
                 var next = 0
                 func enqueue() {
                     guard next < work.count else { return }
@@ -205,20 +211,23 @@ final class DepotDownloader {
                     let path = paths[item.file]
                     let verify = existing[item.file]
                     group.addTask {
-                        if verify, Self.chunkAlreadyPresent(chunk, path: path) { return (item.key, UInt64(chunk.compressedSize)) }
+                        if verify, Self.chunkAlreadyPresent(chunk, path: path) {
+                            return (item.key, UInt64(chunk.compressedSize), true)
+                        }
                         try await Self.fetchChunk(chunk, plan: plan, path: path, attempts: attempts, seed: item.file &+ item.chunk)
-                        return (item.key, UInt64(chunk.compressedSize))
+                        return (item.key, UInt64(chunk.compressedSize), false)
                     }
                 }
                 for _ in 0..<min(maximum, work.count) { enqueue() }
-                for try await (key, bytes) in group {
+                for try await (key, bytes, wasVerified) in group {
                     journal.append(key)
                     state.doneBytes += bytes
+                    if wasVerified { state.verifiedBytes += bytes } else { state.fetchedBytes += bytes }
                     let now = Date()
                     if now.timeIntervalSince(lastReport) >= 0.25 {
                         lastReport = now
                         let elapsed = now.timeIntervalSince(started)
-                        if elapsed > 1 { state.bytesPerSecond = Double(state.doneBytes - resumedBytes) / elapsed }
+                        if elapsed > 1 { state.bytesPerSecond = Double(state.fetchedBytes) / elapsed }
                         report(state)
                     }
                     enqueue()

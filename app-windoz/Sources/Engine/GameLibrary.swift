@@ -1,8 +1,10 @@
 import Foundation
 
 /// The local library: the apps the user can launch, their per-game settings and
-/// their playtime. Persisted as JSON in Documents (games themselves are not
-/// secret; credentials live in the Keychain).
+/// their playtime. Persisted as JSON at the write-tested storage root
+/// (Documents when it accepts writes) with a Keychain mirror for devices whose
+/// container refuses files — games themselves are not secret; credentials live
+/// in the Keychain.
 ///
 /// A `StoreProvider` materialises its games into this store, so the rest of the
 /// app never needs to know which store a game came from.
@@ -11,11 +13,9 @@ final class GameLibrary: ObservableObject {
 
     @Published private(set) var games: [InstalledGame] = []
 
-    private let fileURL: URL
     private let queue = DispatchQueue(label: "windoz.library")
 
-    init(fileURL: URL = AppContainer.libraryFile) {
-        self.fileURL = fileURL
+    init() {
         load()
     }
 
@@ -83,17 +83,112 @@ final class GameLibrary: ObservableObject {
 
     // MARK: - Persistence
 
-    private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([InstalledGame].self, from: data) else { return }
-        games = decoded
+    /// The Keychain mirror — the one store this device has proven writable
+    /// when the container refuses files (Steam and Epic sessions survive
+    /// there). A library index is a few KB; anything over the cap is skipped
+    /// rather than failing.
+    private static let mirrorAccount = "windoz.library.mirror"
+    private static let mirrorByteCap = 60_000
+
+    private struct Mirror: Codable {
+        var savedAt: Date
+        var games: [InstalledGame]
     }
 
+    /// The index can live at the resolved storage root, at the legacy
+    /// Documents path, and in the Keychain mirror; the newest readable copy
+    /// wins. A file that fails to decode is copied aside and left in place —
+    /// never silently replaced with an empty list.
+    private func load() {
+        let primary = AppContainer.libraryFilePrimary
+        let legacy = AppContainer.libraryFile
+
+        struct Copy { var games: [InstalledGame]; var date: Date; var source: String }
+        var copies: [Copy] = []
+
+        func consider(_ url: URL, source: String) {
+            guard let data = try? Data(contentsOf: url) else { return }
+            do {
+                let decoded = try JSONDecoder().decode([InstalledGame].self, from: data)
+                let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate) ?? .distantPast
+                copies.append(Copy(games: decoded, date: date, source: source))
+            } catch {
+                EngineLogStream.shared.append(
+                    "[library] the \(source) could not be read (\(error.localizedDescription)) — it is kept in place and a copy is set aside",
+                    level: .warning)
+                let backup = url.appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970))")
+                if ContainerFS.writeFile(backup.path, data).ok {
+                    EngineLogStream.shared.append("[library] unreadable index copied to \(backup.lastPathComponent)")
+                }
+            }
+        }
+        consider(primary, source: "storage-root index")
+        if legacy.standardizedFileURL.path != primary.standardizedFileURL.path {
+            consider(legacy, source: "Documents index")
+        }
+        if let data = Keychain.get(account: Self.mirrorAccount),
+           let mirror = try? JSONDecoder().decode(Mirror.self, from: data) {
+            copies.append(Copy(games: mirror.games, date: mirror.savedAt, source: "Keychain mirror"))
+        }
+
+        guard let best = copies.max(by: { $0.date < $1.date }) else {
+            EngineLogStream.shared.append("[library] no readable index yet (first run, or every copy was refused)")
+            return
+        }
+        games = best.games
+        EngineLogStream.shared.append(
+            "[library] loaded \(games.count) game\(games.count == 1 ? "" : "s") from the \(best.source)")
+    }
+
+    /// Persist to the primary index and the legacy path (each verified), then
+    /// refresh the Keychain mirror. Every refusal is logged with its raw
+    /// error — a save that did not happen is never silent again.
     private func persist() {
         let snapshot = games
-        queue.async { [fileURL] in
+        queue.async {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: fileURL, options: .atomic)
+            let primary = AppContainer.libraryFilePrimary
+            let legacy = AppContainer.libraryFile
+
+            let primaryOK = Self.writeIndex(data, to: primary, label: "storage root")
+            let legacyOK = legacy.standardizedFileURL.path == primary.standardizedFileURL.path
+                ? primaryOK
+                : Self.writeIndex(data, to: legacy, label: "Documents")
+            if !primaryOK && legacyOK {
+                EngineLogStream.shared.append(
+                    "[library] saved to Documents because the resolved storage root refused", level: .warning)
+            }
+
+            var mirrored = false
+            if data.count <= Self.mirrorByteCap,
+               let mirrorData = try? JSONEncoder().encode(Mirror(savedAt: Date(), games: snapshot)) {
+                mirrored = Keychain.set(mirrorData, account: Self.mirrorAccount)
+            }
+            if !primaryOK && !legacyOK && !mirrored {
+                EngineLogStream.shared.append(
+                    "[library] the index could not be saved anywhere — it lives in memory until the container is repaired",
+                    level: .error)
+            }
+        }
+    }
+
+    private static func writeIndex(_ data: Data, to url: URL, label: String) -> Bool {
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            let raw = error as NSError
+            if ContainerFS.writeFile(url.path, data).ok {
+                EngineLogStream.shared.append(
+                    "[library] index saved to \(label) via the C library (Foundation: \(raw.domain) \(raw.code))",
+                    level: .warning)
+                return true
+            }
+            EngineLogStream.shared.append(
+                "[library] index save refused for \(label): \(raw.domain) \(raw.code) — \(raw.localizedDescription)",
+                level: .warning)
+            return false
         }
     }
 }

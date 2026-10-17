@@ -108,18 +108,108 @@ enum SyncMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Frame pacing, mapped onto the engine's own `madeira_set_vsync_locked`
+/// values. The pinned engine's front end documents them as
+/// `1 = 60, 3 = 30, 4 = 40, 0 = display maximum, 2 = uncapped`
+/// (Madeira `Library.swift`, the FPS menu) — these raw values are passed to
+/// that call unchanged.
+enum FPSLimit: Int, Codable, CaseIterable, Identifiable {
+    case displayMaximum = 0
+    case sixty = 1
+    case uncapped = 2
+    case thirty = 3
+    case forty = 4
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .displayMaximum: return "Display maximum"
+        case .sixty: return "60 FPS"
+        case .uncapped: return "Uncapped"
+        case .thirty: return "30 FPS"
+        case .forty: return "40 FPS"
+        }
+    }
+}
+
+/// Wine's sync engine, as the pins' `MADEIRA_FASTSYNC` variable names it
+/// (`auto`, `1`, `cells`, `0`; unset = the engine's own default, which the
+/// engine resolves to its fast-sync path).
+enum SyncEngineChoice: String, Codable, CaseIterable, Identifiable {
+    case engineDefault
+    case auto
+    case on
+    case cells
+    case off
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .engineDefault: return "Engine default"
+        case .auto: return "Auto"
+        case .on: return "On"
+        case .cells: return "Poll answers only"
+        case .off: return "Off (Wine's standard sync)"
+        }
+    }
+
+    /// nil = leave the variable unset.
+    var environmentValue: String? {
+        switch self {
+        case .engineDefault: return nil
+        case .auto: return "auto"
+        case .on: return "1"
+        case .cells: return "cells"
+        case .off: return "0"
+        }
+    }
+}
+
+/// A switch whose engine default is a real third state: leaving the variable
+/// unset is different from exporting `0`, so "default" must be selectable.
+enum TriState: String, Codable, CaseIterable, Identifiable {
+    case engineDefault
+    case on
+    case off
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .engineDefault: return "Engine default"
+        case .on: return "On"
+        case .off: return "Off"
+        }
+    }
+
+    /// nil = leave the variable unset.
+    var environmentValue: String? {
+        switch self {
+        case .engineDefault: return nil
+        case .on: return "1"
+        case .off: return "0"
+        }
+    }
+}
+
 /// Per-game options. These map onto the engine forks' documented switches
 /// (see `docs/ENGINE.md`); a key the pinned forks do not read is never written.
+///
+/// Decoding is deliberately forgiving (`decodeIfPresent` + defaults): every
+/// build that adds an option must not wipe the settings — or the library —
+/// written by the build before it.
 struct GameSettings: Codable, Equatable, Hashable {
     /// Render scale relative to the session's logical resolution. 1.0 = native.
     var resolutionScale: Double = 1.0
-    /// Frame cap in FPS; 0 means "uncapped" (the engine's -1 / unset).
-    var fpsCap: Int = 0
+    /// Frame pacing. Applied through the engine's own call
+    /// `madeira_set_vsync_locked` — not stored-and-ignored.
+    var fpsLimit: FPSLimit = .displayMaximum
     /// Ask for MetalFX spatial upscaling when the title renders below native.
     var metalFXUpscaling: Bool = false
-    /// Present/sync mode.
+    /// Present/sync mode. No engine switch exists for it in this build.
     var syncMode: SyncMode = .immediate
-    /// D3D11 (DXMT) vs native D3D12 selection.
+    /// Wine's sync engine (`MADEIRA_FASTSYNC`).
+    var syncEngine: SyncEngineChoice = .engineDefault
+    /// D3D11 (DXMT) vs native D3D12 selection. Stored, not applied.
     var graphicsBackend: GraphicsBackend = .auto
     /// Extra environment variables handed to the guest process.
     var environment: [String: String] = [:]
@@ -128,7 +218,81 @@ struct GameSettings: Codable, Equatable, Hashable {
     /// Guest working directory (Windows path or relative-to-drive_c).
     var workingDirectory: String = ""
 
+    // The pins' per-game switches (WineProcessBridge.m's per-launch list,
+    // Library.swift's game options). All are applied as environment variables.
+    /// AVX/AVX2 through FEX's 128-bit emulation (`MADEIRA_FEX_AVX=1`).
+    var fexAVX: Bool = false
+    /// Reduced-precision x87 (`FEX_X87REDUCEDPRECISION=1`) — some titles need
+    /// it for speed, some for accuracy.
+    var reducedX87: Bool = false
+    /// `MADEIRA_CPU_COUNT`; 0 = automatic (unset).
+    var cpuCount: Int = 0
+    /// The host pad as a DirectInput joystick (`MADEIRA_DINPUT_PAD=1`).
+    var dinputPad: Bool = false
+    /// `DXMT_D9_ANISO_LIMIT`; 0 = automatic (unset), else 1/2/4/8.
+    var anisotropyLimit: Int = 0
+    /// `MADEIRA_GAME_WINDOWS` — game-mode window handling.
+    var gameWindows: TriState = .engineDefault
+    /// `MADEIRA_WAIT_CHILDREN=1` — stay in the session while child processes
+    /// a launcher started still run.
+    var waitChildren: Bool = false
+    /// `MADEIRA_VIRTUAL_MODE_SET` — Off exports `0`, which accepts a listed
+    /// mode without programming the monitor.
+    var virtualModeSet: TriState = .engineDefault
+
     static let `default` = GameSettings()
+}
+
+extension GameSettings {
+    enum CodingKeys: String, CodingKey {
+        case resolutionScale, fpsLimit, metalFXUpscaling, syncMode, syncEngine
+        case graphicsBackend, environment, launchArguments, workingDirectory
+        case fexAVX, reducedX87, cpuCount, dinputPad, anisotropyLimit
+        case gameWindows, waitChildren, virtualModeSet
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = GameSettings()
+        resolutionScale = try c.decodeIfPresent(Double.self, forKey: .resolutionScale) ?? d.resolutionScale
+        fpsLimit = try c.decodeIfPresent(FPSLimit.self, forKey: .fpsLimit) ?? d.fpsLimit
+        metalFXUpscaling = try c.decodeIfPresent(Bool.self, forKey: .metalFXUpscaling) ?? d.metalFXUpscaling
+        syncMode = try c.decodeIfPresent(SyncMode.self, forKey: .syncMode) ?? d.syncMode
+        syncEngine = try c.decodeIfPresent(SyncEngineChoice.self, forKey: .syncEngine) ?? d.syncEngine
+        graphicsBackend = try c.decodeIfPresent(GraphicsBackend.self, forKey: .graphicsBackend) ?? d.graphicsBackend
+        environment = try c.decodeIfPresent([String: String].self, forKey: .environment) ?? d.environment
+        launchArguments = try c.decodeIfPresent(String.self, forKey: .launchArguments) ?? d.launchArguments
+        workingDirectory = try c.decodeIfPresent(String.self, forKey: .workingDirectory) ?? d.workingDirectory
+        fexAVX = try c.decodeIfPresent(Bool.self, forKey: .fexAVX) ?? d.fexAVX
+        reducedX87 = try c.decodeIfPresent(Bool.self, forKey: .reducedX87) ?? d.reducedX87
+        cpuCount = try c.decodeIfPresent(Int.self, forKey: .cpuCount) ?? d.cpuCount
+        dinputPad = try c.decodeIfPresent(Bool.self, forKey: .dinputPad) ?? d.dinputPad
+        anisotropyLimit = try c.decodeIfPresent(Int.self, forKey: .anisotropyLimit) ?? d.anisotropyLimit
+        gameWindows = try c.decodeIfPresent(TriState.self, forKey: .gameWindows) ?? d.gameWindows
+        waitChildren = try c.decodeIfPresent(Bool.self, forKey: .waitChildren) ?? d.waitChildren
+        virtualModeSet = try c.decodeIfPresent(TriState.self, forKey: .virtualModeSet) ?? d.virtualModeSet
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(resolutionScale, forKey: .resolutionScale)
+        try c.encode(fpsLimit, forKey: .fpsLimit)
+        try c.encode(metalFXUpscaling, forKey: .metalFXUpscaling)
+        try c.encode(syncMode, forKey: .syncMode)
+        try c.encode(syncEngine, forKey: .syncEngine)
+        try c.encode(graphicsBackend, forKey: .graphicsBackend)
+        try c.encode(environment, forKey: .environment)
+        try c.encode(launchArguments, forKey: .launchArguments)
+        try c.encode(workingDirectory, forKey: .workingDirectory)
+        try c.encode(fexAVX, forKey: .fexAVX)
+        try c.encode(reducedX87, forKey: .reducedX87)
+        try c.encode(cpuCount, forKey: .cpuCount)
+        try c.encode(dinputPad, forKey: .dinputPad)
+        try c.encode(anisotropyLimit, forKey: .anisotropyLimit)
+        try c.encode(gameWindows, forKey: .gameWindows)
+        try c.encode(waitChildren, forKey: .waitChildren)
+        try c.encode(virtualModeSet, forKey: .virtualModeSet)
+    }
 }
 
 // MARK: - Compatibility / anti-cheat summary (shown on the game page)
@@ -171,6 +335,9 @@ enum OnlineRisk: String, Codable, CaseIterable {
 
 /// An installed game. Store-held games and locally-imported folders both become
 /// one of these — the UI and the engine only ever see this type.
+///
+/// Like `GameSettings`, decoding is forgiving: a file written by an older (or
+/// newer) build must never empty the library because one key moved.
 struct InstalledGame: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String
@@ -196,6 +363,55 @@ struct InstalledGame: Identifiable, Codable, Hashable {
     var requiresOnline: Bool = false
 
     var execName: String { (executablePath as NSString).lastPathComponent }
+}
+
+extension InstalledGame {
+    enum CodingKeys: String, CodingKey {
+        case id, title, executablePath, workingDirectory, coverArtPath, heroArtPath
+        case storeID, storeItemID, addedAt, lastPlayedAt, playtimeSeconds
+        case compatibility, antiCheat, settings, cloudSaves, requiresOnline
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = InstalledGame(title: "", executablePath: "")
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? d.id
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        executablePath = try c.decodeIfPresent(String.self, forKey: .executablePath) ?? ""
+        workingDirectory = try c.decodeIfPresent(String.self, forKey: .workingDirectory) ?? d.workingDirectory
+        coverArtPath = try c.decodeIfPresent(String.self, forKey: .coverArtPath)
+        heroArtPath = try c.decodeIfPresent(String.self, forKey: .heroArtPath)
+        storeID = try c.decodeIfPresent(String.self, forKey: .storeID) ?? d.storeID
+        storeItemID = try c.decodeIfPresent(String.self, forKey: .storeItemID)
+        addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? d.addedAt
+        lastPlayedAt = try c.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
+        playtimeSeconds = try c.decodeIfPresent(Double.self, forKey: .playtimeSeconds) ?? d.playtimeSeconds
+        compatibility = try c.decodeIfPresent(CompatibilityStatus.self, forKey: .compatibility) ?? d.compatibility
+        antiCheat = try c.decodeIfPresent(AntiCheatInfo.self, forKey: .antiCheat)
+        settings = try c.decodeIfPresent(GameSettings.self, forKey: .settings) ?? d.settings
+        cloudSaves = try c.decodeIfPresent(Bool.self, forKey: .cloudSaves) ?? d.cloudSaves
+        requiresOnline = try c.decodeIfPresent(Bool.self, forKey: .requiresOnline) ?? d.requiresOnline
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(executablePath, forKey: .executablePath)
+        try c.encode(workingDirectory, forKey: .workingDirectory)
+        try c.encodeIfPresent(coverArtPath, forKey: .coverArtPath)
+        try c.encodeIfPresent(heroArtPath, forKey: .heroArtPath)
+        try c.encode(storeID, forKey: .storeID)
+        try c.encodeIfPresent(storeItemID, forKey: .storeItemID)
+        try c.encode(addedAt, forKey: .addedAt)
+        try c.encodeIfPresent(lastPlayedAt, forKey: .lastPlayedAt)
+        try c.encode(playtimeSeconds, forKey: .playtimeSeconds)
+        try c.encode(compatibility, forKey: .compatibility)
+        try c.encodeIfPresent(antiCheat, forKey: .antiCheat)
+        try c.encode(settings, forKey: .settings)
+        try c.encode(cloudSaves, forKey: .cloudSaves)
+        try c.encode(requiresOnline, forKey: .requiresOnline)
+    }
 }
 
 // MARK: - Engine status
@@ -244,6 +460,8 @@ enum EngineError: LocalizedError {
     case sessionAlreadyRanThisRun
     case wineProcessStartFailed
     case sessionCancelled
+    case storageRefused(String)
+    case sessionStalled(String)
 
     var errorDescription: String? {
         switch self {
@@ -263,6 +481,10 @@ enum EngineError: LocalizedError {
             return "The engine could not start the game's process thread. The log has the exact failing step."
         case .sessionCancelled:
             return "The launch was cancelled."
+        case .storageRefused(let detail):
+            return "This device refuses writes inside Windoz's own storage (\(detail)), so Wine cannot run a game — it needs to create files while it boots. The launch log's write-audit lines name every location that was probed. Reinstalling the app inside LiveContainer (fresh container) is the known repair."
+        case .sessionStalled(let stage):
+            return "The session stalled at “\(stage)” and was stopped. The engine log has the last steps the engine reported."
         }
     }
 }

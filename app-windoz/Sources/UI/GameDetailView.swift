@@ -482,6 +482,8 @@ struct GameSettingsSheet: View {
 
     @State private var settings = GameSettings.default
     @State private var loaded = false
+    @State private var environmentText = ""
+    @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -491,21 +493,89 @@ struct GameSettingsSheet: View {
                     VStack(alignment: .leading, spacing: 16) {
                         GlassCard {
                             VStack(alignment: .leading, spacing: 12) {
-                                SectionHeader(title: "Engine")
+                                SectionHeader(title: "Display")
                                 labeled("Resolution scale", "\(Int(settings.resolutionScale * 100)) %") {
                                     Slider(value: $settings.resolutionScale, in: 0.5...1.5, step: 0.05)
                                 }
-                                Stepper("FPS cap: \(settings.fpsCap == 0 ? "Unlimited" : "\(settings.fpsCap)")",
-                                        value: $settings.fpsCap, in: 0...240, step: 30)
-                                    .foregroundStyle(.white.opacity(0.9))
-                                Toggle("MetalFX upscaling", isOn: $settings.metalFXUpscaling)
-                                    .foregroundStyle(.white.opacity(0.9))
-                                Picker("Sync", selection: $settings.syncMode) {
+                                note("Applied — the guest monitor is sized from this at launch.", applied: true)
+                                Picker("Frame pacing", selection: $settings.fpsLimit) {
+                                    ForEach(FPSLimit.allCases) { Text($0.title).tag($0) }
+                                }
+                                .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — the engine's own frame-pacing call at session start.", applied: true)
+                                Picker("Present mode", selection: $settings.syncMode) {
                                     ForEach(SyncMode.allCases) { Text($0.title).tag($0) }
                                 }
+                                .foregroundStyle(.white.opacity(0.9))
+                                note("Stored — this build's engine has no switch for it.", applied: false)
+                                Toggle("MetalFX upscaling", isOn: $settings.metalFXUpscaling)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                note("Stored — not applied by this build.", applied: false)
+                            }
+                        }
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                SectionHeader(title: "Emulation & performance")
+                                Picker("Sync engine", selection: $settings.syncEngine) {
+                                    ForEach(SyncEngineChoice.allCases) { Text($0.title).tag($0) }
+                                }
+                                .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — MADEIRA_FASTSYNC at launch.", applied: true)
+                                Toggle("AVX and AVX2 (128-bit emulation)", isOn: $settings.fexAVX)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                Toggle("Reduced-precision x87", isOn: $settings.reducedX87)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                Stepper("CPU count: \(settings.cpuCount == 0 ? "Automatic" : "\(settings.cpuCount)")",
+                                        value: $settings.cpuCount, in: 0...12)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — MADEIRA_FEX_AVX / FEX_X87REDUCEDPRECISION / MADEIRA_CPU_COUNT at launch.", applied: true)
+                                Picker("Anisotropic filtering", selection: $settings.anisotropyLimit) {
+                                    Text("Automatic").tag(0)
+                                    Text("1×").tag(1)
+                                    Text("2×").tag(2)
+                                    Text("4×").tag(4)
+                                    Text("8×").tag(8)
+                                }
+                                .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — DXMT_D9_ANISO_LIMIT at launch.", applied: true)
+                            }
+                        }
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                SectionHeader(title: "Windows behaviour")
+                                Picker("Game windows", selection: $settings.gameWindows) {
+                                    ForEach(TriState.allCases) { Text($0.title).tag($0) }
+                                }
+                                .foregroundStyle(.white.opacity(0.9))
+                                Picker("Virtual display mode", selection: $settings.virtualModeSet) {
+                                    ForEach(TriState.allCases) { Text($0.title).tag($0) }
+                                }
+                                .foregroundStyle(.white.opacity(0.9))
+                                Toggle("Stay in-session for launcher child processes", isOn: $settings.waitChildren)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — MADEIRA_GAME_WINDOWS / MADEIRA_VIRTUAL_MODE_SET / MADEIRA_WAIT_CHILDREN at launch.", applied: true)
+                            }
+                        }
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                SectionHeader(title: "Input & graphics backend")
+                                Toggle("DirectInput joystick from a connected controller", isOn: $settings.dinputPad)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                note("Applied — MADEIRA_DINPUT_PAD at launch. Needs a controller the engine can see.", applied: true)
                                 Picker("Graphics backend", selection: $settings.graphicsBackend) {
                                     ForEach(GraphicsBackend.allCases) { Text($0.title).tag($0) }
                                 }
+                                .foregroundStyle(.white.opacity(0.9))
+                                note("Stored — not applied by this build.", applied: false)
+                            }
+                        }
+
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                SectionHeader(title: "Launch")
                                 TextField("Launch arguments", text: $settings.launchArguments)
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
@@ -514,9 +584,19 @@ struct GameSettingsSheet: View {
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
                                     .foregroundStyle(.white)
+                                Text("Extra environment (KEY=value per line)")
+                                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+                                TextEditor(text: $environmentText)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                    .scrollContentBackground(.hidden)
+                                    .background(.white.opacity(0.06))
+                                    .frame(minHeight: 84)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                note("Applied — arguments, working folder and every KEY=value line go to the launch unchanged.", applied: true)
                             }
                         }
-                        Text("Saved with the game. The launch uses the arguments, working folder, screen scale and custom switches; frame cap, sync, MetalFX and the backend choice are stored but not applied yet.")
+                        Text("Green = this build really applies it at launch (the exact engine call or variable is named above). Amber = saved with the game but not applied yet.")
                             .font(.caption2).foregroundStyle(.white.opacity(0.45))
 
                         SectionHeader(title: "Controls")
@@ -550,12 +630,50 @@ struct GameSettingsSheet: View {
         .onAppear {
             if let game = library.game(withID: gameID), !loaded {
                 settings = game.settings
+                environmentText = formatEnvironment(game.settings.environment)
                 loaded = true
             }
         }
         .onChange(of: settings) { _, newValue in
-            library.setSettings(newValue, for: gameID)
+            // Debounced: a text field in the sheet saves per keystroke
+            // otherwise, and every save touches the file *and* the Keychain
+            // mirror.
+            saveTask?.cancel()
+            saveTask = Task {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard !Task.isCancelled else { return }
+                library.setSettings(newValue, for: gameID)
+            }
         }
+        .onChange(of: environmentText) { _, newValue in
+            let parsed = parseEnvironment(newValue)
+            if parsed != settings.environment { settings.environment = parsed }
+        }
+    }
+
+    private func note(_ text: String, applied: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: applied ? "checkmark.circle.fill" : "tray.full")
+                .font(.system(size: 10))
+            Text(text).font(.system(size: 10))
+        }
+        .foregroundStyle(applied ? Theme.ok.opacity(0.9) : Theme.warn.opacity(0.85))
+    }
+
+    private func parseEnvironment(_ text: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for rawLine in text.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
+            let key = line[..<eq].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty { out[key] = value }
+        }
+        return out
+    }
+
+    private func formatEnvironment(_ dict: [String: String]) -> String {
+        dict.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n")
     }
 
     private func labeled<Content: View>(_ title: String, _ value: String,

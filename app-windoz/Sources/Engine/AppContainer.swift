@@ -10,7 +10,7 @@ enum AppContainer {
 
     /// Shown in Settings → About *and* printed in the first log line, so a
     /// device session can always be matched to a build.
-    static let displayVersion = "0.3.4"
+    static let displayVersion = "0.3.5"
 
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
@@ -64,6 +64,69 @@ enum AppContainer {
         documents.appendingPathComponent("windoz-downloads.json")
     }
 
+    /// Where Windoz keeps files it must be able to write *and keep* (the
+    /// library index, cover art, store records). Device history: some
+    /// containers refuse writes inside `Documents` itself while the sibling
+    /// `Library` folder still accepts them — so the root is decided by a real
+    /// create + write + delete test once per process, never assumed.
+    /// `documents` first (the layout every build before 0.3.5 used), then
+    /// `Library`, then `tmp`; the choice is logged so the launch log always
+    /// names it.
+    static let storageRoot: URL = resolveStorageRoot()
+
+    private static func resolveStorageRoot() -> URL {
+        for candidate in [("Documents", documents), ("Library", libraryRoot), ("tmp", temporary)] {
+            if acceptsWrites(candidate.1) {
+                if candidate.0 != "Documents" {
+                    EngineLogStream.shared.append(
+                        "[host] storage root: Documents refused writes — using \(candidate.0) (\(candidate.1.path))",
+                        level: .warning)
+                } else {
+                    EngineLogStream.shared.append("[host] storage root: \(candidate.1.path)")
+                }
+                return candidate.1
+            }
+        }
+        EngineLogStream.shared.append(
+            "[host] storage root: nothing accepted a write (Documents, Library, tmp) — Windoz keeps using the Documents path and every save will report its own refusal",
+            level: .error)
+        return documents
+    }
+
+    /// One create + write + delete through Foundation, then through the C
+    /// library — the same two-route pattern as the rest of the app.
+    static func acceptsWrites(_ directory: URL) -> Bool {
+        let fm = FileManager.default
+        let probe = directory.appendingPathComponent(".windoz-root-probe-\(getpid())")
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data([0x57]).write(to: probe)
+            try? fm.removeItem(at: probe)
+            return true
+        } catch {
+            let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
+            if raw.ok {
+                _ = ContainerFS.unlink(probe.path)
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Cover art and other small files that must survive a relaunch. Kept at
+    /// the resolved storage root, not hardcoded to Documents.
+    static var artDirectory: URL {
+        let url = storageRoot.appendingPathComponent("windoz-art", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// The library index at the resolved root. `libraryFile` (Documents) stays
+    /// as the legacy read fallback.
+    static var libraryFilePrimary: URL {
+        storageRoot.appendingPathComponent("windoz-library.json")
+    }
+
     /// Create the folders Windoz needs and stage the JIT script. Safe to call
     /// more than once; never throws into the UI.
     static func bootstrap() {
@@ -72,7 +135,7 @@ enum AppContainer {
             try? fm.createDirectory(at: url, withIntermediateDirectories: true)
         }
         stageJITScript()
-        EngineLogStream.shared.append("[host] windoz \(displayVersion) \(AppEnvironment.installKind); home=\(home.path)")
+        EngineLogStream.shared.append("[host] windoz \(displayVersion) \(AppEnvironment.installKind); home=\(home.path); storage=\(storageRoot.path)")
         if AppEnvironment.isLiveContainer {
             EngineLogStream.shared.append(
                 "[host] LiveContainer: guest bundle \(AppEnvironment.bundleIdentifier), pid \(getpid()), JIT script \(stagedJITScript.path)")

@@ -259,6 +259,9 @@ struct SteamLibrarySheet: View {
         let percent = Int((progress.fraction * 100).rounded())
         let done = ByteCountFormatter.string(fromByteCount: Int64(progress.doneBytes), countStyle: .file)
         let total = ByteCountFormatter.string(fromByteCount: Int64(progress.totalBytes), countStyle: .file)
+        if progress.fetchedBytes == 0 && progress.verifiedBytes > 0 {
+            return "\(percent)% · checking files already on the device (\(done) of \(total))"
+        }
         if progress.bytesPerSecond > 1 {
             let speed = ByteCountFormatter.string(fromByteCount: Int64(progress.bytesPerSecond), countStyle: .file)
             return "\(percent)% · \(done) of \(total) · \(speed)/s"

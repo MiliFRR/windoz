@@ -78,9 +78,12 @@ The honest limits of this first session host:
   app. Nothing here ever calls `wineserver_stop()` while a guest thread exists
   — that thread owns the call, and joining the service thread twice is not
   safe.
-- The `GameSettings` fields that need the engine's in-process API (frame cap,
-  sync mode, MetalFX, backend choice) are **stored but not applied yet**; the
-  launch log says exactly that per session.
+- `GameSettings` says which of its fields are applied and which are only
+  stored, in the settings sheet and in the launch log. Applied per launch: the
+  frame pacing (the engine's own `madeira_set_vsync_locked` call — see §3a)
+  and the per-game variables in the table below. Stored only, and labeled as
+  such: the present/queue mode, MetalFX upscaling and the D3D11/D3D12 backend
+  choice — this build has no engine switch or call for them.
 
 ## 3. Launch environment
 
@@ -96,19 +99,30 @@ pinned forks actually read. Sources are the fork/app files named below.
 | `MADEIRA_WORKDIR` | the working folder, **only** a `C:\` folder | when configured | `WineProcessBridge.m` (guarded chdir) |
 | `MADEIRA_DESKTOP` | run the Wine desktop (`explorer.exe`) | reserved | `Library.swift configureLaunch` |
 | `MADEIRA_STEAM_APPID` / `MADEIRA_STEAM_APPPATH` | a Steam game's own App ID / install folder | reserved for Dock | `WineProcessBridge.m` |
-| `FEX_X87REDUCEDPRECISION`, `MADEIRA_CPU_COUNT`, `DXMT_D9_ANISO_LIMIT`, … | the user's own fork switches | from `GameSettings.environment` | `Library.swift applyEnvironment` |
+| `MADEIRA_FASTSYNC` | Wine's sync engine — `auto`, `1`, `cells`, `0` | when the game's Sync engine choice is not "Engine default" | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
+| `FEX_X87REDUCEDPRECISION`, `MADEIRA_FEX_AVX`, `MADEIRA_CPU_COUNT`, `MADEIRA_DINPUT_PAD`, `DXMT_D9_ANISO_LIMIT`, `MADEIRA_GAME_WINDOWS`, `MADEIRA_WAIT_CHILDREN`, `MADEIRA_VIRTUAL_MODE_SET` | the per-game engine switches in the settings sheet — each is set *or* unset on every launch, so a previous game's choice never leaks into the next | when the game sets them | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
+| `FEX_X87REDUCEDPRECISION`, `MADEIRA_CPU_COUNT`, `DXMT_D9_ANISO_LIMIT`, … | the user's own fork switches (applied last, so an expert entry can override the sheet) | from `GameSettings.environment` | `Library.swift applyEnvironment` |
+
+### Frame pacing
+
+`GameSettings.fpsLimit` is applied through the engine's own in-process call
+`madeira_set_vsync_locked`, at session start and again when the guest's first
+frame is seen — the same call, with the same values, the pinned front end's
+FPS menu makes (`1` = 60, `3` = 30, `4` = 40, `0` = display maximum,
+`2` = uncapped). The symbol is resolved with `dlsym` at first use; if a build
+does not export it, the launch log says so and the choice stays stored — the
+call is never faked.
 
 Settings that have **no** environment variable are deliberately *not* faked:
 
 | `GameSettings` field | How the engine applies it | Why no env var |
 |---|---|---|
-| `fpsCap` | the app's frame-pacing call (`madeira_set_vsync_locked`) | it is an in-process API, not an env switch — **not called yet**; stored, not applied |
-| `syncMode` | presentation/queue policy in the app's session host | same — stored, not applied yet |
+| `syncMode` (present/queue) | presentation/queue policy in the app's session host | no engine switch exists — stored, not applied yet |
 | `graphicsBackend` (D3D11/D3D12) | which `d3d12.dll` implementation the loader resolves | there is no per-game switch in the forks (see §4); `auto` is what actually runs |
 | `metalFXUpscaling` | MetalFX spatial scaler created by the session host | no env switch; not created yet — stored, not applied |
 
-The log records these decisions for a session ("stored, not applied yet — no
-engine call for them in this build") so the UI can explain them without
+The log records these decisions for a session ("stored, not applied — no
+engine switch for them in this build") so the UI can explain them without
 inventing a switch.
 
 ### Path mapping

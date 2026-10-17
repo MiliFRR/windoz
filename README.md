@@ -42,6 +42,21 @@ ledger), which gates importing or installing the game a session would run,
 and 0.3.3's launch-time write-audit was built to name any writable location —
 its device result has not been reported yet.
 
+**On-device status (LiveContainer, 2026-10-18 — build 0.3.4):** the owner ran
+the session host on the phone; the five findings it produced are each recorded
+below with a root cause, and **Build 0.3.5** answers them: Epic's launcher
+sign-in now reads the authorization code from the redirect page's JSON body;
+the session screen updates its stage line through every startup step, starts
+on its own queue, refuses a session with the reason when the container refuses
+writes, and a watchdog ends a stalled launch with the stage's name; the
+library index is written with verified writes, mirrored into the Keychain and
+decoded forgivingly, so restarts and upgrades cannot wipe the shelf;
+re-installs say "checking files already on the device" and time themselves
+honestly; Steam installs fetch cover art from Steam's own CDN; and the
+per-game settings sheet grew real controls (frame pacing through the engine's
+own call, nine per-launch engine variables) with every stored-not-applied item
+labeled as such. 0.3.5 is **device-verification pending**.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -710,6 +725,71 @@ the fix that is still in the tree.*
   each connected store gets a filled capsule library button, sign-out moved
   one level down (per-store ellipsis menus and Settings → Accounts), and the
   Library tab carries a count badge.
+- **The owner's 0.3.4 device run: five findings, five named causes, fixed in
+  0.3.5 (device verification pending).**
+  - **Epic's launcher sign-in never finished — the code arrives in the page
+    body.** The owner's screenshots show Epic's web view landing on the
+    `…/id/api/redirect` page and rendering its JSON answer
+    (`{"warning":"Do not share this code…", …}`), while the sheet waited only
+    for a `?code=` query this flow never sends. Fix: the code page is allowed
+    to load and its body text is parsed (`code` or `authorizationCode`, JSON
+    first, then a literal key/value match) with a short retry while the page
+    renders; a navigation that carries `?code=` is still caught directly. The
+    exchange itself (launcher client, stored session) is unchanged.
+  - **The session screen could not say where a launch stalled.** The 0.3.4
+    line ("Preparing the session…") was written once and replaced only after
+    the guest process had started, so the owner's screenshot could not
+    distinguish the service-process wait from the CPU translator, the process
+    start or a wedged queue. Fix: every startup stage updates the line and the
+    log ("Starting the Windows service…" → "Starting the CPU translator…" →
+    "Launching the game…"), session startup runs on its own queue so a
+    diagnostics stop (a blocking join) cannot hold it, a storage preflight
+    refuses a launch with the reason when the prefix itself refuses writes,
+    and a watchdog turns a startup stalled over three minutes — or a session
+    that draws no frame in five — into an honest message with the last stage
+    name.
+  - **The library index was saved through a bare `try?` and read strictly.**
+    Two independent causes could empty the shelf after a restart: `persist()`
+    swallowed every write refusal silently (this container has refused
+    container writes since 0.3.2), and a file that failed to decode — what
+    happens the first time a build adds a field to a persisted struct and then
+    loads the older file — was ignored and then overwritten by the next save.
+    Fix: writes go to a write-tested storage root (Documents when it accepts
+    writes; Library and tmp are probed) and to a Keychain mirror, every
+    refusal is logged with its raw error, an unreadable file is copied aside
+    instead of replaced, and every persisted struct (`InstalledGame`,
+    `GameSettings`, the downloads list, the Steam caches) now decodes missing
+    fields to defaults — so this upgrade itself can no longer wipe anything.
+  - **"Downloading too quick — it said downloading but it wasn't."**
+    Re-installs verify the chunks already on disk and fetch only what is
+    missing, so a Steam install can legitimately finish in seconds — which
+    read as fake. Fix: the progress line now says "checking files already on
+    the device" whenever nothing is being fetched, the speed figure counts
+    only actually-fetched bytes, and the install log records the real elapsed
+    time. The download path itself is unchanged: the quick installs were real
+    installs made of verifications.
+  - **No cover art after install — because no art was ever requested.** The
+    Steam install path built the library entry with `coverArtPath: nil`. Fix:
+    installs fetch the cover (`library_600x900.jpg`) and header art from
+    Steam's own CDN, save them at the storage root, and the shelf shows them;
+    a refusal falls back to the generated tile and says so in the log.
+- **The game settings sheet grew controls that actually apply (0.3.5, device
+  verification pending).** The owner asked for a lot more settings control.
+  Every new row names its mechanism: frame pacing (display maximum / 60 / 40 /
+  30 / uncapped) goes through the engine's own `madeira_set_vsync_locked` call
+  at session start and again at the first frame — resolved with `dlsym`, and
+  if a build does not export the symbol the log says the choice stayed stored;
+  sync engine (`MADEIRA_FASTSYNC`), AVX (`MADEIRA_FEX_AVX`),
+  reduced-precision x87 (`FEX_X87REDUCEDPRECISION`), CPU count
+  (`MADEIRA_CPU_COUNT`), DirectInput pad (`MADEIRA_DINPUT_PAD`), anisotropic
+  limit (`DXMT_D9_ANISO_LIMIT`), game windows (`MADEIRA_GAME_WINDOWS`),
+  launcher child-process wait (`MADEIRA_WAIT_CHILDREN`) and virtual display
+  mode (`MADEIRA_VIRTUAL_MODE_SET`) are written as exactly the variables the
+  pinned forks read, each set *or* unset per launch; launch arguments,
+  working folder and a KEY=value environment editor pass through unchanged.
+  The present/queue mode, MetalFX and the backend choice remain **stored
+  only** and are labeled amber in the sheet — this build has no engine switch
+  for them.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

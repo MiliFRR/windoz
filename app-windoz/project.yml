@@ -87,8 +87,8 @@ targets:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "0.3.4"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "0.3.5"
+        CFBundleVersion: "3"
         CFBundleInfoDictionaryVersion: "6.0"
         LSRequiresIPhoneOS: true
         MinimumOSVersion: "26.0"

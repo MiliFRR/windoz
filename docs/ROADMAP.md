@@ -21,8 +21,8 @@ what it is.
 | JIT probe + StikDebug deep link | ✅ | `JITManager`; re-checked every launch |
 | Bundled JIT helper extension | ⛔ | no helper target yet, so the UI offers StikDebug only (the bundle is checked, not assumed) |
 | Memory-entitlement report | ✅ | honest "not active" when the signing lacks it |
-| **Game session host** (presentation, input, the guest process) | 🟡 | ported in 0.3.4: `launch` waits for the presenting layer, then starts wineserver → FEX → `wine_process_start`; the session ends on the guest process's exit. Device verification pending. Limits: one session per app run, single primary touch (aspect-fit 1:1) + hardware keyboard + a fixed on-screen key row |
-| Per-game settings → engine | 🟡 | the launch environment (arguments, working folder, screen scale, custom switches) is applied; frame cap / sync / MetalFX / backend choice are stored, **not applied yet** — the log says so per session |
+| **Game session host** (presentation, input, the guest process) | 🟡 | ported in 0.3.4: `launch` waits for the presenting layer, then starts wineserver → FEX → `wine_process_start`; the session ends on the guest process's exit. 0.3.5 adds stage-by-stage status, its own startup queue, a storage preflight and a watchdog (a stalled launch ends with a named stage). Device verification pending. Limits: one session per app run, single primary touch (aspect-fit 1:1) + hardware keyboard + a fixed on-screen key row |
+| Per-game settings → engine | 🟡 | applied: the launch environment (arguments, working folder, screen scale, custom switches), frame pacing through the engine's own `madeira_set_vsync_locked` call, and nine per-launch engine variables (sync engine, AVX, x87, CPU count, DirectInput pad, anisotropic limit, game windows, child-process wait, virtual display mode). Stored only, labeled as such: the present/queue mode, MetalFX and the backend choice |
 | Native D3D12 path | 🟡 | experimental in the engine; selectable per game, not yet applied |
 
 See `docs/ENGINE.md` for the boundary and the D3D12 detail.
@@ -33,7 +33,7 @@ See `docs/ENGINE.md` for the boundary and the D3D12 detail.
 |---|---|---|
 | Local games ("Add local game") | ✅ | import from Files; anti-cheat scan; runs into the library |
 | GOG | 🟡 | DRM-free: import the installed files; no Galaxy client needed |
-| Steam | 🟡 | native sign-in (Guard code / in-app approval / QR), owned library, depot downloads with journaled resume + per-chunk SHA-1 verify; installing adds the game to My games, where the session host (0.3.4) can start it. The game page reads achievements and friends from Steam (sign-in for the account's data, public profiles for the ownership scan). Device verification of install + launch pending |
+| Steam | 🟡 | native sign-in (Guard code / in-app approval / QR), owned library, depot downloads with journaled resume + per-chunk SHA-1 verify; installing adds the game to My games (with cover/header art from Steam's own CDN since 0.3.5), where the session host (0.3.4) can start it. The game page reads achievements and friends from Steam (sign-in for the account's data, public profiles for the ownership scan). Device verification of install + launch + art pending |
 | Epic | 🟡 | device-code sign-in (approved on Epic's own site) plus the launcher-scoped sign-in its library service requires, owned library with real art; chunked downloads are the next piece |
 | Rockstar, EA, GOG | ⛔ | official launcher in Wine; needs the launcher pipeline (the session host exists in 0.3.4; the pipeline that installs and wraps a launcher does not) |
 
@@ -76,16 +76,19 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 
 ## Next, in order
 
-1. **Device-verify 0.3.4** — the session host (install a game, press Play,
-   watch frames arrive), the Epic launcher session (library loads), and the
-   Steam achievements/friends tabs. The next device run is what confirms them.
+1. **Device-verify 0.3.5** — the session host (install a game, press Play,
+   watch frames arrive; a stall now names its stage), the Epic launcher
+   sign-in (the code read from the page body), library persistence across a
+   restart, and the new settings actually applying. The next device run is
+   what confirms them.
 2. **Epic chunked downloads** (sign-in, both authorizations and the owned
    library are in); then the launcher-in-Wine pipeline for GOG, Rockstar and
    EA.
 3. **Widget extension** for the Live Activity / Dynamic Island rendering.
-4. **Apply the stored graphics settings** — frame cap, sync mode, MetalFX —
-   through the engine's in-process API; draw the per-game touch layout into the
-   session overlay; gamepad + software keyboard.
+4. **The remaining stored settings** — the present/queue mode and MetalFX have
+   no engine switch in this build; the backend choice stays informational.
+   Draw the per-game touch layout into the session overlay; gamepad + software
+   keyboard.
 5. **Online / networking** work inside Wine (DNS, TLS, store auth) — tested on a
    real device before any claim is made.
 

@@ -9,7 +9,11 @@
 //   1. load   https://www.epicgames.com/id/login?redirectUrl=...
 //             (redirectUrl = .../id/api/redirect?clientId=<launcher>&responseType=code)
 //   2. the owner signs in on Epic's page — the password never touches Windoz
-//   3. Epic redirects to the redirectUrl with ?code=...
+//   3. Epic answers the redirectUrl with a JSON page carrying the code. The
+//      owner's device run (2026-10-18) showed the code rendered in the page
+//      *body* (`{"warning":"Do not share this code…", "code":"…"}`), not as a
+//      `?code=` query — so the sheet reads the body, and also takes a query
+//      code when a flow delivers one that way
 //   4. exchange  POST /account/api/oauth/token  (authorization_code grant,
 //                launcher client, token_type=eg1)
 //
@@ -82,9 +86,10 @@ enum EpicLauncherSignIn {
 enum EpicLauncherAuth {
     static let redirectURL = "https://www.epicgames.com/id/api/redirect"
 
-    /// The page the web view opens. Epic redirects to `redirectURL` with
-    /// `?code=...` once the owner has signed in; the web view intercepts that
-    /// navigation instead of loading it.
+    /// The page the web view opens. Epic answers `redirectURL` with a JSON page
+    /// once the owner is signed in; the web view either intercepts a navigation
+    /// that carries `?code=...` or reads the code out of the page's body (see
+    /// `authorizationCode(fromPageText:)`).
     static var loginURL: URL {
         var redirect = URLComponents(string: redirectURL)!
         redirect.queryItems = [
@@ -96,12 +101,42 @@ enum EpicLauncherAuth {
         return page.url!
     }
 
-    /// The authorization code carried by a redirect navigation, when that is
-    /// what this URL is.
+    /// The code page: the URL Epic lands on when it has an answer for us.
+    static func isCodePage(_ url: URL) -> Bool {
+        url.host == "www.epicgames.com" && url.path == "/id/api/redirect"
+    }
+
+    /// The authorization code carried by a redirect navigation, when the code
+    /// is in the URL itself.
     static func authorizationCode(from url: URL) -> String? {
-        guard url.host == "www.epicgames.com", url.path == "/id/api/redirect" else { return nil }
+        guard isCodePage(url) else { return nil }
         return URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "code" })?.value
+    }
+
+    /// The code inside the redirect page's JSON body. WebKit renders that
+    /// response as text, so the body's text is the JSON; the parser accepts it
+    /// with or without surrounding text and accepts both key spellings Epic
+    /// has shipped (`code`, `authorizationCode`).
+    static func authorizationCode(fromPageText text: String) -> String? {
+        if let data = text.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for key in ["authorizationCode", "code"] {
+                if let value = object[key] as? String, !value.isEmpty { return value }
+            }
+        }
+        // The page may wrap the JSON in other text; take the first
+        // JSON-looking `"key":"value"` pair.
+        for key in ["authorizationCode", "code"] {
+            let pattern = "\"\(key)\"\\s*:\\s*\"([A-Za-z0-9\\-_.]+)\""
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+               match.numberOfRanges == 2,
+               let range = Range(match.range(at: 1), in: text) {
+                return String(text[range])
+            }
+        }
+        return nil
     }
 
     /// Exchange the code for a session (launcher client, authorization_code
@@ -288,8 +323,10 @@ struct EpicLauncherSignInSheet: View {
 
 // MARK: - The web view
 
-/// The one navigation rule: when Epic redirects to the code URL, catch it and
-/// hand the code up — never load it. Everything else is Epic's page.
+/// Epic's page in a cookie-less web view. Two rules: a navigation that carries
+/// `?code=...` is caught and never loaded; the code page itself is allowed to
+/// render and its body is read for the JSON answer (device report
+/// 2026-10-18 — the code arrives in the page body).
 struct EpicLauncherWebView: UIViewRepresentable {
     let url: URL
     let onCode: (String) -> Void
@@ -314,6 +351,7 @@ struct EpicLauncherWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let parent: EpicLauncherWebView
         private var finished = false
+        private var codeReads = 0
 
         init(_ parent: EpicLauncherWebView) { self.parent = parent }
 
@@ -322,12 +360,17 @@ struct EpicLauncherWebView: UIViewRepresentable {
             if let url = navigationAction.request.url,
                let code = EpicLauncherAuth.authorizationCode(from: url) {
                 decisionHandler(.cancel)
-                guard !finished else { return }
-                finished = true
-                parent.onCode(code)
+                complete(code)
                 return
             }
             decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // The code page answers with a JSON body; read it instead of
+            // waiting for a navigation that may never carry a query code.
+            guard !finished, let url = webView.url, EpicLauncherAuth.isCodePage(url) else { return }
+            readCode(from: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
@@ -337,6 +380,38 @@ struct EpicLauncherWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             parent.onFailure("Epic's page failed while loading: \(error.localizedDescription)")
+        }
+
+        /// Read the code page's body text. The JSON may take a moment to
+        /// render, so this retries briefly; `finished` stops every path once
+        /// a code was handed up.
+        private func readCode(from webView: WKWebView) {
+            guard !finished else { return }
+            guard codeReads < 15 else {
+                parent.onFailure("The sign-in page answered without a code Windoz could read. Try again — the final page should show a JSON answer.")
+                return
+            }
+            codeReads += 1
+            let script = "(document.body && document.body.innerText) || "
+                + "(document.documentElement && document.documentElement.textContent) || ''"
+            webView.evaluateJavaScript(script) { [weak self] value, _ in
+                guard let self, !self.finished else { return }
+                if let text = value as? String,
+                   let code = EpicLauncherAuth.authorizationCode(fromPageText: text) {
+                    self.complete(code)
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self, !self.finished else { return }
+                    self.readCode(from: webView)
+                }
+            }
+        }
+
+        private func complete(_ code: String) {
+            guard !finished else { return }
+            finished = true
+            parent.onCode(code)
         }
     }
 }

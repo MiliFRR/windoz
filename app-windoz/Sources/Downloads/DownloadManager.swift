@@ -59,10 +59,12 @@ final class DownloadManager: NSObject, ObservableObject {
     private var maxConcurrent = 2
     private let pathMonitor = NWPathMonitor()
     private let persistenceURL: URL
+    private let legacyPersistenceURL: URL
 
     private override init() {
         wifiOnly = UserDefaults.standard.bool(forKey: "windoz.downloads.wifiOnly")
-        persistenceURL = AppContainer.downloadsFile
+        persistenceURL = AppContainer.storageRoot.appendingPathComponent("windoz-downloads.json")
+        legacyPersistenceURL = AppContainer.downloadsFile
         super.init()
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
@@ -287,13 +289,29 @@ final class DownloadManager: NSObject, ObservableObject {
                           receivedBytes: $0.receivedBytes, storeID: $0.storeID)
         }
         if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: persistenceURL, options: .atomic)
+            var written = Set<String>()
+            for url in [persistenceURL, legacyPersistenceURL] where written.insert(url.standardizedFileURL.path).inserted {
+                do {
+                    try data.write(to: url, options: .atomic)
+                    return
+                } catch {
+                    if ContainerFS.writeFile(url.path, data).ok { return }
+                }
+            }
+            EngineLogStream.shared.append("[downloads] the resume list could not be saved anywhere this device allows", level: .warning)
         }
     }
 
     func restore() {
-        guard let data = try? Data(contentsOf: persistenceURL),
-              let saved = try? JSONDecoder().decode([PersistedItem].self, from: data) else { return }
+        var saved: [PersistedItem]?
+        for url in [persistenceURL, legacyPersistenceURL] {
+            if let data = try? Data(contentsOf: url),
+               let decoded = try? JSONDecoder().decode([PersistedItem].self, from: data) {
+                saved = decoded
+                break
+            }
+        }
+        guard let saved else { return }
         for s in saved where !items.contains(where: { $0.destination == s.destination }) {
             items.append(DownloadItem(title: s.title, remoteURL: s.remoteURL, destination: s.destination,
                                       expectedSHA256: s.expectedSHA256, totalBytes: s.totalBytes,

@@ -88,6 +88,10 @@ final class SteamStore: ObservableObject, StoreProvider {
     static var steamApps: URL { SteamLibraryLocator.resolved() }
 
     private static var cacheURL: URL {
+        AppContainer.storageRoot.appendingPathComponent("windoz-steam-library.json")
+    }
+
+    private static var legacyCacheURL: URL {
         AppContainer.documents.appendingPathComponent("windoz-steam-library.json")
     }
 
@@ -217,18 +221,30 @@ final class SteamStore: ObservableObject, StoreProvider {
     private func loadCache() {
         let account = Self.accountKey(SteamSignIn.accountName)
         cachedAccount = account
-        guard let data = try? Data(contentsOf: Self.cacheURL), data.count <= 64 << 20,
-              let cache = try? JSONDecoder().decode(Cache.self, from: data),
-              cache.version == 1, cache.account == account else { return }
-        games = cache.games
-        libraryUpdated = cache.updated
+        for url in [Self.cacheURL, Self.legacyCacheURL] {
+            guard let data = try? Data(contentsOf: url), data.count <= 64 << 20,
+                  let cache = try? JSONDecoder().decode(Cache.self, from: data),
+                  cache.version == 1, cache.account == account else { continue }
+            games = cache.games
+            libraryUpdated = cache.updated
+            return
+        }
     }
 
     private func writeCache() {
         guard let account = cachedAccount, let updated = libraryUpdated else { return }
         let cache = Cache(version: 1, updated: updated, account: account, games: games)
         guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? data.write(to: Self.cacheURL, options: .atomic)
+        var written = Set<String>()
+        for url in [Self.cacheURL, Self.legacyCacheURL] where written.insert(url.standardizedFileURL.path).inserted {
+            do {
+                try data.write(to: url, options: .atomic)
+                return
+            } catch {
+                if ContainerFS.writeFile(url.path, data).ok { return }
+            }
+        }
+        SteamLog.event("[steam-library] the game-list cache could not be saved anywhere this device allows")
     }
 
     // MARK: - StoreGame mapping
@@ -387,6 +403,7 @@ final class SteamStore: ObservableObject, StoreProvider {
             if choice.changed {
                 SteamLog.event("[steam-library] using \(choice.relative) (the previous location refused writes)")
             }
+            let installStarted = Date()
             let folder = try await downloader.install(
                 info,
                 steamApps: choice.url,
@@ -394,8 +411,13 @@ final class SteamStore: ObservableObject, StoreProvider {
             ) { [weak self] progress in
                 self?.downloads[appID]?.progress = progress
             }
+            // Files already on the device are verified, not re-downloaded —
+            // which can make an "install" finish in seconds. Say so in the log
+            // instead of letting it look like a fake download.
+            SteamLog.event("[steam-depot] install finished in \(Int(Date().timeIntervalSince(installStarted)))s app=\(info.appID) (existing files were verified, not fetched again)")
+            let art = await Self.fetchArtwork(appID: info.appID)
             downloads[appID] = nil
-            registerInstalled(info: info, folder: folder)
+            registerInstalled(info: info, folder: folder, art: art)
         } catch is CancellationError {
             downloads[appID] = Download(
                 state: .failed("Download cancelled. Finished parts are kept — Install resumes from them."),
@@ -411,9 +433,9 @@ final class SteamStore: ObservableObject, StoreProvider {
 
     /// The depot download finished: the game is now a real installed game in
     /// Windoz's library (and in `steamapps` in Valve's own layout).
-    private func registerInstalled(info: SteamAppInfo, folder: URL) {
+    private func registerInstalled(info: SteamAppInfo, folder: URL, art: (cover: URL?, hero: URL?)) {
         let appID = "\(info.appID)"
-        let installed = Self.installedGame(info: info, folder: folder)
+        let installed = Self.installedGame(info: info, folder: folder, art: art)
         GameLibrary.shared.add(installed)
         if let index = games.firstIndex(where: { $0.id == appID }) {
             games[index].installed = true
@@ -422,20 +444,66 @@ final class SteamStore: ObservableObject, StoreProvider {
         SteamLog.event("[steam-depot] installed app=\(info.appID) exe-found=\(installed.executablePath.isEmpty ? 0 : 1)")
     }
 
-    static func installedGame(info: SteamAppInfo, folder: URL) -> InstalledGame {
+    static func installedGame(info: SteamAppInfo, folder: URL,
+                              art: (cover: URL?, hero: URL?) = (nil, nil)) -> InstalledGame {
         let exe = launchExecutable(info: info, folder: folder)
         var game = InstalledGame(
             title: info.name.isEmpty ? "App \(info.appID)" : info.name,
             executablePath: exe ?? "",
             workingDirectory: folder.path,
-            coverArtPath: nil,
-            heroArtPath: nil,
+            coverArtPath: art.cover?.path,
+            heroArtPath: art.hero?.path,
             storeID: StoreID.steam.rawValue,
             storeItemID: "\(info.appID)")
         let antiCheat = AntiCheatDetector.detect(inFolder: folder.path)
         game.antiCheat = antiCheat
         game.compatibility = antiCheat?.onlineRisk == .unsupported ? .unsupported : .playable
         return game
+    }
+
+    // MARK: - Artwork
+
+    /// Steam's own content network carries the store art. Windoz fetches the
+    /// cover and header once per install and keeps them at the resolved
+    /// storage root, so the shelf shows real covers. A refusal is logged and
+    /// the shelf falls back to its generated tile — never a silent blank.
+    static func fetchArtwork(appID: UInt32) async -> (cover: URL?, hero: URL?) {
+        let directory = AppContainer.artDirectory
+        let cover = directory.appendingPathComponent("\(appID)-cover.jpg")
+        let hero = directory.appendingPathComponent("\(appID)-hero.jpg")
+        async let coverResult = fetchArtworkFile(
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/\(appID)/library_600x900.jpg", to: cover)
+        async let heroResult = fetchArtworkFile(
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/\(appID)/header.jpg", to: hero)
+        let (coverOK, heroOK) = await (coverResult, heroResult)
+        SteamLog.event("[steam-art] app=\(appID) cover=\(coverOK == nil ? "none" : "ok") hero=\(heroOK == nil ? "none" : "ok")")
+        return (coverOK, heroOK)
+    }
+
+    private static func fetchArtworkFile(_ urlString: String, to destination: URL) async -> URL? {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path),
+           let existing = try? Data(contentsOf: destination), !existing.isEmpty {
+            return destination
+        }
+        guard let url = URL(string: urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { return nil }
+            do {
+                try data.write(to: destination, options: .atomic)
+                return destination
+            } catch {
+                if ContainerFS.writeFile(destination.path, data).ok { return destination }
+                SteamLog.event("[steam-art] could not save \(destination.lastPathComponent): \(error.localizedDescription)")
+                return nil
+            }
+        } catch {
+            SteamLog.event("[steam-art] fetch failed app-art \(url.lastPathComponent): \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: - The game's program

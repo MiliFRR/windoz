@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// The engine boundary. **Nothing above this file may import Wine, FEX or DXMT
 /// symbols.** The UI talks to `WindozEngine` and to plain value types only.
@@ -55,6 +56,23 @@ final class WindozEngine: ObservableObject {
     private var sessionTimer: Timer?
     private var sawWineProcess = false
     private var sessionBaselineFrames: UInt64 = 0
+
+    /// The session's startup runs on its own queue. The core queue can sit in
+    /// a blocking `wineserver_stop()` join; a session must never wait behind
+    /// that (device report 2026-10-18: a session stayed at “Preparing the
+    /// session…” with no later stage ever running).
+    private let sessionQueue = DispatchQueue(label: "windoz.session", qos: .userInitiated)
+
+    /// Fires once a second while a launch is in flight so a stalled startup
+    /// (or a session that never draws) becomes an honest message instead of
+    /// a black screen that never ends.
+    private var launchWatchdog: Timer?
+    private var lastStageLine = ""
+    /// The frame pacing choice for the running session; re-applied once the
+    /// guest's first frame is seen (the engine's own call is the one the
+    /// pinned front end uses — see `applyFPSLock`).
+    private var launchFPSLimit: FPSLimit = .displayMaximum
+    private var fpsReapplied = false
 
     init(prefix: PrefixManager = PrefixManager(base: AppContainer.documents)) {
         self.prefix = prefix
@@ -223,11 +241,17 @@ final class WindozEngine: ObservableObject {
             throw EngineError.executableMissing(game.executablePath)
         }
 
-        // 4. Guest environment for the engine's launcher.
+        // 4. Storage. Wine writes while it boots (registry, sockets, temp
+        //    files); a container that refuses writes would otherwise show up
+        //    as a black screen that never ends. This turns that case into a
+        //    named refusal *before* the session screen opens.
+        try verifySessionStorage()
+
+        // 5. Guest environment for the engine's launcher.
         applyLaunchEnvironment(for: game)
         log.append("[launch] preflight passed for \(game.title)")
 
-        // 5. Hand the game to the session screen. It registers the presenting
+        // 6. Hand the game to the session screen. It registers the presenting
         //    CAMetalLayer and calls sessionSurfaceReady(); the launch waits for
         //    that below. The ordering is the engine's requirement: its display
         //    shim resolves the layer once per process, and the guest's first
@@ -235,6 +259,9 @@ final class WindozEngine: ObservableObject {
         resetSessionSurface()
         sessionFrames = 0
         sessionDetail = "Preparing the session…"
+        lastStageLine = "Preparing the session…"
+        launchFPSLimit = game.settings.fpsLimit
+        fpsReapplied = false
         currentGameID = game.id
         sessionStart = Date()
         sessionBaselineFrames = madeira_get_present_count()
@@ -242,7 +269,9 @@ final class WindozEngine: ObservableObject {
         phase = .starting
         sessionGame = game
         log.append("[session] session screen requested.")
+        startLaunchWatchdog()
 
+        let surfaceWaitStart = Date()
         let deadline = Date().addingTimeInterval(30)
         while !sessionSurfaceIsReady {
             if Task.isCancelled {
@@ -255,19 +284,24 @@ final class WindozEngine: ObservableObject {
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+        log.append("[session] presentation surface ready after "
+                   + String(format: "%.1f", Date().timeIntervalSince(surfaceWaitStart)) + " s.")
 
-        // 6. Start the engine core and the guest process on the engine queue:
+        // 7. Start the engine core and the guest process on the session queue:
         //    those calls block (one of them waits up to 60 s for the service
-        //    process), so they stay off the main thread.
+        //    process), so they stay off the main thread — and off the core
+        //    queue, which a blocking diagnostics stop can hold.
+        let settings = game.settings
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            queue.async {
+            sessionQueue.async {
                 do {
-                    try self.startGuestProcess()
+                    try self.startGuestProcess(settings: settings)
                     DispatchQueue.main.async {
                         self.sessionsThisRun += 1
                         self.sawWineProcess = false
                         self.phase = .running
                         self.sessionDetail = "Starting the game…"
+                        self.lastStageLine = "Starting the game…"
                         self.startSessionPolling()
                         self.log.append("[session] guest process started.")
                     }
@@ -280,11 +314,19 @@ final class WindozEngine: ObservableObject {
         }
     }
 
-    /// Runs on the engine queue. Brings the Wine service process and the CPU
-    /// translator up if they are not already, resets the engine's exit report,
-    /// then starts the guest process thread.
-    private func startGuestProcess() throws {
+    /// Runs on the session queue. Brings the Wine service process and the CPU
+    /// translator up if they are not already, sets the frame pacing, resets
+    /// the engine's exit report, then starts the guest process thread. Every
+    /// step updates the session screen's line so the visible stage is always
+    /// the real one.
+    private func startGuestProcess(settings: GameSettings) throws {
+        // Frame pacing before the process exists — the pinned front end
+        // applies its own choice at exactly this point (Madeira
+        // `Library.applyEnvironment`).
+        applyFPSLock(settings.fpsLimit)
+
         if wineserver_is_running() == 0 {
+            setStage("Starting the Windows service…")
             guard wineserver_start(prefix.url.path) == 0 else { throw EngineError.wineserverStartFailed }
             let deadline = Date().addingTimeInterval(60)
             while wineserver_is_ready() != 1 {
@@ -292,8 +334,12 @@ final class WindozEngine: ObservableObject {
                 Thread.sleep(forTimeInterval: 0.5)
             }
             log.append("Wine service process ready.", level: .success)
+        } else {
+            setStage("The Windows service is already up.")
         }
+        setStage("Starting the CPU translator…")
         guard fex_initialize() else { throw EngineError.fexInitFailed }
+        setStage("Launching the game…")
         // The engine reports the exit of the process Windoz hands it through
         // wine_launched_process_did_exit → wine_crash_exit_status; forget the
         // previous session's report first.
@@ -301,10 +347,95 @@ final class WindozEngine: ObservableObject {
         guard wine_process_start(prefix.url.path) == 0 else { throw EngineError.wineProcessStartFailed }
     }
 
+    /// One line for the session screen and the log, callable from whichever
+    /// queue a startup step is on.
+    private func setStage(_ text: String) {
+        lastStageLine = text
+        log.append("[session] \(text)")
+        DispatchQueue.main.async {
+            if self.phase == .starting { self.sessionDetail = text }
+        }
+    }
+
+    /// The engine's own frame-pacing call (`madeira_set_vsync_locked`, the
+    /// one the pinned front end's FPS menu uses). Resolved at runtime so a
+    /// build without the symbol degrades to an honest log line instead of a
+    /// link failure. Values are the engine's: 1 = 60, 3 = 30, 4 = 40,
+    /// 0 = display maximum, 2 = uncapped.
+    private typealias VsyncLockFn = @convention(c) (Int32) -> Void
+    private static let vsyncLock: VsyncLockFn? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "madeira_set_vsync_locked") else { return nil }
+        return unsafeBitCast(symbol, to: VsyncLockFn.self)
+    }()
+
+    private func applyFPSLock(_ limit: FPSLimit) {
+        guard let lock = Self.vsyncLock else {
+            log.append("[session] frame pacing: this engine build does not export madeira_set_vsync_locked — the choice stays stored",
+                       level: .warning)
+            return
+        }
+        lock(Int32(limit.rawValue))
+        log.append("[session] frame pacing set to \(limit.title) (madeira_set_vsync_locked(\(limit.rawValue))).",
+                   level: .success)
+    }
+
+    /// Wine writes while it boots. If the container refuses every write, the
+    /// launch refuses too, with the reason — instead of a black screen that
+    /// never ends (device report 2026-10-18).
+    private func verifySessionStorage() throws {
+        let targets: [(name: String, url: URL)] = [
+            ("prefix", prefix.url),
+            ("drive_c", prefix.url.appendingPathComponent("drive_c")),
+            ("tmp", AppContainer.temporary),
+        ]
+        var refused: [String] = []
+        var writable = 0
+        for (name, dir) in targets {
+            if AppContainer.acceptsWrites(dir) { writable += 1 } else { refused.append(name) }
+        }
+        log.append("[launch] storage check: \(writable)/\(targets.count) locations accepted a write"
+                   + (refused.isEmpty ? "" : " — refused: \(refused.joined(separator: ", "))"))
+        if writable == 0 {
+            throw EngineError.storageRefused(refused.joined(separator: ", "))
+        }
+    }
+
+    /// Watches a launch from the main thread: a stalled startup, or a session
+    /// that never draws a frame, becomes an honest message instead of an
+    /// endless black screen. Budgets are generous — a first boot (service
+    /// cold start + translator + the game's own loader) is genuinely slow.
+    private func startLaunchWatchdog() {
+        launchWatchdog?.invalidate()
+        launchWatchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.checkLaunchWatchdog()
+        }
+        launchWatchdog?.tolerance = 0.3
+    }
+
+    private func checkLaunchWatchdog() {
+        guard sessionGame != nil || phase.isActive, let start = sessionStart else {
+            launchWatchdog?.invalidate(); launchWatchdog = nil
+            return
+        }
+        let age = Date().timeIntervalSince(start)
+        switch phase {
+        case .starting where age > 180:
+            failStartingSession(EngineError.sessionStalled(lastStageLine.isEmpty ? "starting" : lastStageLine))
+        case .running where sessionFrames == 0 && age > 300:
+            launchWatchdog?.invalidate(); launchWatchdog = nil
+            detachSession(reason: "\(sessionGame?.title ?? "The game") did not draw a frame within five minutes")
+        case .running where sessionFrames > 0:
+            launchWatchdog?.invalidate(); launchWatchdog = nil
+        default:
+            break
+        }
+    }
+
     /// The launch failed before the guest process started: take the session
     /// screen down and leave the message where the game page shows it.
     private func failStartingSession(_ error: Error) {
         sessionTimer?.invalidate(); sessionTimer = nil
+        launchWatchdog?.invalidate(); launchWatchdog = nil
         let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
         phase = .failed(message)
         sessionGame = nil
@@ -320,6 +451,7 @@ final class WindozEngine: ObservableObject {
     /// than abandoned silently.
     private func cancelStartingSession() {
         sessionTimer?.invalidate(); sessionTimer = nil
+        launchWatchdog?.invalidate(); launchWatchdog = nil
         if wineserver_is_running() != 0 && wine_process_is_running() != 0 {
             detachSession(reason: "The launch screen closed after the game process had already started.")
         } else {
@@ -339,11 +471,11 @@ final class WindozEngine: ObservableObject {
     /// Write the environment the engine's launcher (`wine_process_start`) reads.
     ///
     /// **Only switch names the pinned forks actually read are written** (see
-    /// `docs/ENGINE.md` for the list and its sources). Settings the engine
-    /// applies through its own in-process API — the frame cap, the present/sync
-    /// mode, the D3D11/D3D12 choice and MetalFX — have no environment variable,
-    /// and this build's session host does **not** call that API yet, so they are
-    /// stored and reported here rather than faked. Nothing is invented.
+    /// `docs/ENGINE.md` for the list and its sources). The frame pacing goes
+    /// through the engine's own call (`madeira_set_vsync_locked`) at session
+    /// start. What has neither a variable nor an engine call this build can
+    /// make — the present/mailbox mode, MetalFX upscaling and the D3D11/D3D12
+    /// backend choice — is stored and *said to be stored*. Nothing is invented.
     private func applyLaunchEnvironment(for game: InstalledGame) {
         let settings = game.settings
 
@@ -376,20 +508,40 @@ final class WindozEngine: ObservableObject {
             setenv("MADEIRA_WORKDIR", guest, 1)
         }
 
+        // Per-game engine switches. All of them are variables the pinned forks
+        // read (WineProcessBridge.m's per-launch list and Library.swift's game
+        // options). Controlled keys are always set *or* unset, so a previous
+        // launch's choice can never leak into this one.
+        func switchVar(_ name: String, _ value: String?) {
+            if let value { setenv(name, value, 1) } else { unsetenv(name) }
+        }
+        switchVar("MADEIRA_FASTSYNC", settings.syncEngine.environmentValue)
+        switchVar("FEX_X87REDUCEDPRECISION", settings.reducedX87 ? "1" : nil)
+        switchVar("MADEIRA_FEX_AVX", settings.fexAVX ? "1" : nil)
+        switchVar("MADEIRA_CPU_COUNT", (1..<64).contains(settings.cpuCount) ? String(settings.cpuCount) : nil)
+        switchVar("MADEIRA_DINPUT_PAD", settings.dinputPad ? "1" : nil)
+        switchVar("DXMT_D9_ANISO_LIMIT", [1, 2, 4, 8].contains(settings.anisotropyLimit)
+            ? String(settings.anisotropyLimit) : nil)
+        switchVar("MADEIRA_GAME_WINDOWS", settings.gameWindows.environmentValue)
+        switchVar("MADEIRA_WAIT_CHILDREN", settings.waitChildren ? "1" : nil)
+        switchVar("MADEIRA_VIRTUAL_MODE_SET", settings.virtualModeSet.environmentValue)
+
         // The user's own forks switches, named as the forks name them
         // (FEX_X87REDUCEDPRECISION, MADEIRA_CPU_COUNT, DXMT_D9_ANISO_LIMIT, ...).
-        // Windoz never invents a key of its own.
+        // Windoz never invents a key of its own; these apply last so an expert
+        // entry can override the switches above.
         for (key, value) in settings.environment where !key.isEmpty {
             setenv(key, value, 1)
         }
 
-        // Reported, with the truth about where they stand: these have no env
-        // switch, and this build's session host does not call the engine's
-        // in-process API for them yet.
-        log.append("[launch] frame cap \(settings.fpsCap > 0 ? "\(settings.fpsCap) FPS" : "uncapped"), "
-                   + "sync \(settings.syncMode.title), MetalFX \(settings.metalFXUpscaling ? "on" : "off") "
-                   + "— stored, not applied yet (no engine call for them in this build)")
-        log.append("[launch] guest env prepared (exe=\(guestExe), backend=\(settings.graphicsBackend.title))")
+        // Reported, with the truth about where each one stands this build.
+        log.append("[launch] frame pacing \(settings.fpsLimit.title) → the engine's own call at session start; "
+                   + "sync engine \(settings.syncEngine.title), x87 \(settings.reducedX87 ? "reduced" : "default"), "
+                   + "AVX \(settings.fexAVX ? "on" : "default"), CPUs \(settings.cpuCount == 0 ? "auto" : String(settings.cpuCount)), "
+                   + "aniso \(settings.anisotropyLimit == 0 ? "default" : String(settings.anisotropyLimit)) → environment")
+        log.append("[launch] present mode \(settings.syncMode.title), MetalFX \(settings.metalFXUpscaling ? "on" : "off"), "
+                   + "backend \(settings.graphicsBackend.title) — stored, not applied (no engine switch for them in this build)")
+        log.append("[launch] guest env prepared (exe=\(guestExe))")
     }
 
     /// A guest Windows path for a folder inside the prefix, or nil. The
@@ -455,6 +607,12 @@ final class WindozEngine: ObservableObject {
         }
         let raw = madeira_get_present_count()
         sessionFrames = raw >= sessionBaselineFrames ? raw - sessionBaselineFrames : raw
+        if sessionFrames > 0 && !fpsReapplied {
+            // Re-apply now that the guest's swapchain exists — the same call
+            // the pinned front end makes from its FPS menu.
+            fpsReapplied = true
+            applyFPSLock(launchFPSLimit)
+        }
         if wine_process_is_running() != 0 {
             sawWineProcess = true
             sessionDetail = sessionFrames > 0
@@ -473,6 +631,7 @@ final class WindozEngine: ObservableObject {
     /// kept for the game page.
     private func finishSession(early: Bool = false) {
         sessionTimer?.invalidate(); sessionTimer = nil
+        launchWatchdog?.invalidate(); launchWatchdog = nil
         var status: UInt32 = 0
         let crashed = wine_crash_exit_status(&status) == 1
         let title = sessionGame?.title ?? "The game"
@@ -523,6 +682,7 @@ final class WindozEngine: ObservableObject {
     func detachSession(reason: String? = nil) {
         guard sessionGame != nil || phase.isActive else { return }
         sessionTimer?.invalidate(); sessionTimer = nil
+        launchWatchdog?.invalidate(); launchWatchdog = nil
         let title = sessionGame?.title ?? "The game"
         let seconds = sessionStart.map { Date().timeIntervalSince($0) } ?? 0
         if let id = currentGameID {
