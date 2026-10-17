@@ -7,6 +7,10 @@ import Darwin
 /// path goes through here instead of `URL.documentsDirectory`.
 enum AppContainer {
 
+    /// Shown in Settings → About *and* printed in the first log line, so a
+    /// device session can always be matched to a build.
+    static let displayVersion = "0.3.2"
+
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
     static var home: URL {
@@ -17,6 +21,19 @@ enum AppContainer {
 
     static var documents: URL {
         home.appendingPathComponent("Documents", isDirectory: true)
+    }
+
+    /// `Library` and `tmp` — siblings of Documents. Device test, 2026-10-17:
+    /// a container can refuse writes *inside Documents itself* (its own
+    /// diagnostics reported the folder as W-DENIED) while CFNetwork still
+    /// wrote its download temp file — so these two are probed as last-resort
+    /// homes for staging that does not have to sit in Documents.
+    static var libraryRoot: URL {
+        home.appendingPathComponent("Library", isDirectory: true)
+    }
+
+    static var temporary: URL {
+        home.appendingPathComponent("tmp", isDirectory: true)
     }
 
     static var importedGames: URL {
@@ -50,11 +67,11 @@ enum AppContainer {
     /// more than once; never throws into the UI.
     static func bootstrap() {
         let fm = FileManager.default
-        for url in [documents, importedGames, runtimes, liveContainerSupport] {
+        for url in [documents, importedGames, runtimes, liveContainerSupport, libraryRoot, temporary] {
             try? fm.createDirectory(at: url, withIntermediateDirectories: true)
         }
         stageJITScript()
-        EngineLogStream.shared.append("[host] \(AppEnvironment.installKind); home=\(home.path)")
+        EngineLogStream.shared.append("[host] windoz \(displayVersion) \(AppEnvironment.installKind); home=\(home.path)")
         if AppEnvironment.isLiveContainer {
             EngineLogStream.shared.append(
                 "[host] LiveContainer: guest bundle \(AppEnvironment.bundleIdentifier), pid \(getpid()), JIT script \(stagedJITScript.path)")
@@ -66,12 +83,28 @@ enum AppContainer {
     /// through the C library, including deletes and BSD flags: if a device's
     /// data folder is not writable (or cannot replace an existing file), this
     /// names it at the top of the log instead of leaving a mystery 513 for a
-    /// later download to trip over.
+    /// later download to trip over. A set immutable flag is cleared first when
+    /// the folder is ours (at or below Documents): it blocks creates and
+    /// deletes no matter the mode bits, and clearing `UF_IMMUTABLE` needs only
+    /// our own write permission.
     private static func logWriteHealth() {
         var problems: [String] = []
+        let docPath = documents.standardizedFileURL.path
         for (name, url) in [("Documents", documents), ("Imported", importedGames),
-                            ("Runtimes", runtimes), ("LiveContainer", liveContainerSupport)] {
+                            ("Runtimes", runtimes), ("LiveContainer", liveContainerSupport),
+                            ("Library", libraryRoot), ("tmp", temporary)] {
             let probe = url.appendingPathComponent(".windoz-write-probe")
+            if let flags = ContainerFS.flags(url.path), flags != 0 {
+                let path = url.standardizedFileURL.path
+                if (path == docPath || path.hasPrefix(docPath + "/")),
+                   ContainerFS.clearFlags(url.path).ok,
+                   (ContainerFS.flags(url.path) ?? 1) == 0 {
+                    EngineLogStream.shared.append(
+                        "[host] container write check: cleared BSD flags=0x\(String(flags, radix: 16)) on \(name)")
+                } else {
+                    problems.append("\(name) carries BSD flags=0x\(String(flags, radix: 16)) (the immutable bit blocks creates and deletes)")
+                }
+            }
             // Foundation: write, delete, and replace a real file.
             do {
                 try Data([0x57]).write(to: probe)
@@ -90,17 +123,65 @@ enum AppContainer {
             } else if !ContainerFS.unlink(probe.path).ok {
                 problems.append("\(name) C-library delete refused")
             }
-            if let flags = ContainerFS.flags(url.path), flags != 0 {
-                problems.append("\(name) carries BSD flags=0x\(String(flags, radix: 16)) (the immutable bit blocks creates and deletes)")
-            }
         }
         if problems.isEmpty {
-            EngineLogStream.shared.append("[host] container write check: all four folders writable")
+            EngineLogStream.shared.append("[host] container write check: all six folders writable")
         } else {
             for line in problems {
                 EngineLogStream.shared.append("[host] container write check: \(line)", level: .warning)
             }
         }
+    }
+
+    /// First directory named `name` that accepts a real create + write +
+    /// delete, tried under each base in order (callers pass Documents first,
+    /// then Library, then tmp). Foundation is tried per base first, then the
+    /// C library — the same dual-route pattern as everywhere else. Every
+    /// refusal is logged, so the log names why a fallback was needed.
+    static func writableDirectory(named name: String, among bases: [URL]) -> URL? {
+        let fm = FileManager.default
+        let preferred = documents.standardizedFileURL
+        for base in bases {
+            let dir = base.appendingPathComponent(name, isDirectory: true)
+            let probe = dir.appendingPathComponent(".windoz-probe-\(getpid())")
+            var works = false
+            do {
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                do {
+                    try Data([0x57]).write(to: probe)
+                    try? fm.removeItem(at: probe)
+                    works = true
+                } catch {
+                    EngineLogStream.shared.append(
+                        "[host] \(name): Foundation write refused in \(base.lastPathComponent): \(describe(error))", level: .warning)
+                }
+            } catch {
+                EngineLogStream.shared.append(
+                    "[host] \(name): Foundation mkdir refused in \(base.lastPathComponent): \(describe(error))", level: .warning)
+            }
+            if !works {
+                let dirs = ContainerFS.mkdirs(dir.path)
+                if dirs.ok {
+                    let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
+                    if raw.ok {
+                        _ = ContainerFS.unlink(probe.path)
+                        works = true
+                    } else {
+                        EngineLogStream.shared.append(
+                            "[host] \(name): C-library write refused in \(base.lastPathComponent): \(raw.detail)", level: .warning)
+                    }
+                } else {
+                    EngineLogStream.shared.append("[host] \(name): \(dirs.lines.joined(separator: "; "))", level: .warning)
+                }
+            }
+            if works {
+                if base.standardizedFileURL != preferred {
+                    EngineLogStream.shared.append("[host] \(name): Documents refused — using \(dir.path)", level: .warning)
+                }
+                return dir
+            }
+        }
+        return nil
     }
 
     /// Copy the engine's StikDebug script into Documents so LiveContainer can

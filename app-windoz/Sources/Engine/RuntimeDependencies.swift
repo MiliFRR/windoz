@@ -70,7 +70,15 @@ final class RuntimeInstaller: ObservableObject {
 
     @Published private(set) var states: [RuntimeComponent: RuntimeState] = [:]
 
-    private var staging: URL { AppContainer.runtimes }
+    /// Where installers are staged: Documents when the device allows it,
+    /// then Library, then tmp — a device can refuse writes inside Documents
+    /// itself while tmp keeps working (CFNetwork's download temp lives
+    /// there). Whatever was found is logged; `windoz-runtimes` under
+    /// Documents stays the normal home.
+    private lazy var staging: URL =
+        AppContainer.writableDirectory(named: "windoz-runtimes",
+                                       among: [AppContainer.documents, AppContainer.libraryRoot, AppContainer.temporary])
+        ?? AppContainer.runtimes
 
     func refresh(prefix: PrefixManager) {
         let system32 = prefix.windowsPath.appendingPathComponent("system32")

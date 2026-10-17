@@ -5,13 +5,18 @@
 // (`windoz-prefix/drive_c/Program Files (x86)/Steam/steamapps`) refused every
 // creation — Foundation 513 ("You don't have permission to save the file
 // “steamapps” in the folder “Steam”") — while every level of the path
-// reported `mode=755 uid=501 owner-w`. Instead of leaving installs dead at
-// that spot, the location is negotiated before a download: each candidate is
-// tested with the exact operations an install runs (create `steamapps/common`,
-// write and delete a file), through Foundation *and* through the C library,
-// and the first one that passes is remembered in
-// `windoz-steam-library-location.txt`. In-prefix choices are still `C:\` to
-// Wine; the last fallback sits outside the prefix (Wine reaches it as `Z:`).
+// reported `mode=755 uid=501 owner-w`. The owner's next screenshots showed
+// the refusals had widened: even the app's own `Documents` folder answered
+// W-DENIED, while reading and network downloads kept working. Instead of
+// leaving installs dead at that spot, the location is negotiated before a
+// download: each candidate is tested with the exact operations an install
+// runs (create `steamapps/common`, write and delete a file), through
+// Foundation *and* through the C library, and the first one that passes is
+// remembered in `windoz-steam-library-location.txt`. In-prefix choices are
+// still `C:\` to Wine; the fallbacks leave the prefix — and the last two
+// leave Documents itself (`Library`, `tmp`) for devices that refuse writes
+// inside Documents. All rule values are home-relative from 0.3.2 on (values
+// written by 0.3.1 read as Documents-relative).
 
 import Foundation
 
@@ -22,27 +27,41 @@ enum SteamLibraryLocator {
     static var ruleURL: URL { AppContainer.documents.appendingPathComponent(ruleFileName) }
 
     /// Steam's own client layout (`C:\Program Files (x86)\Steam\steamapps`).
-    static var preferredRelative: String { "drive_c/\(SteamInstallPaths.libraryRelative)" }
+    static var preferredRelative: String { "Documents/drive_c/\(SteamInstallPaths.libraryRelative)" }
 
     /// Tried in order after the preferred path refuses: two more places Wine
-    /// sees as `C:\`, then one outside the prefix.
+    /// sees as `C:\`, one outside the prefix under Documents, and — because a
+    /// device can refuse writes in Documents *itself* — one under `Library`
+    /// and one under `tmp`. Everything is reachable in Wine later (the
+    /// outside-prefix ones as `Z:`).
     static let fallbackRelatives = [
-        "drive_c/SteamLibrary/steamapps",
-        "drive_c/steamapps",
-        "windoz-game-library/steamapps",
+        "Documents/drive_c/SteamLibrary/steamapps",
+        "Documents/drive_c/steamapps",
+        "Documents/windoz-game-library/steamapps",
+        "Library/windoz-game-library/steamapps",
+        "tmp/windoz-game-library/steamapps",
     ]
 
     static var allRelatives: [String] { [preferredRelative] + fallbackRelatives }
 
+    /// Relative paths are home-relative, so a candidate can leave Documents.
     static func url(forRelative relative: String) -> URL {
-        AppContainer.documents.appendingPathComponent(relative, isDirectory: true)
+        AppContainer.home.appendingPathComponent(relative, isDirectory: true)
     }
 
     /// The location reads use now: a remembered one when there is one (it was
     /// tested on this device), otherwise the preferred one.
     static func resolved() -> URL {
-        if let remembered, allRelatives.contains(remembered) { return url(forRelative: remembered) }
+        if let remembered, let relative = normalized(remembered) { return url(forRelative: relative) }
         return url(forRelative: preferredRelative)
+    }
+
+    /// Accepts the current home-relative rule values and the Documents-relative
+    /// values build 0.3.1 wrote.
+    private static func normalized(_ raw: String) -> String? {
+        if allRelatives.contains(raw) { return raw }
+        let legacy = "Documents/\(raw)"
+        return allRelatives.contains(legacy) ? legacy : nil
     }
 
     /// The location remembered in `windoz-steam-library-location.txt`.
@@ -76,10 +95,11 @@ enum SteamLibraryLocator {
     /// throws: when every candidate refuses, the resolved location is returned
     /// anyway and the log (and the downloader's deep check) carries the why.
     static func prepareForDownload() -> Choice {
-        let before = remembered ?? preferredRelative
+        let rememberedRelative = remembered.flatMap(normalized)
+        let before = rememberedRelative ?? preferredRelative
         var lines: [String] = []
         var order: [String] = []
-        for relative in ([remembered].compactMap { $0 } + allRelatives) where !order.contains(relative) {
+        for relative in ([rememberedRelative].compactMap { $0 } + allRelatives) where !order.contains(relative) {
             order.append(relative)
         }
         var backup: (relative: String, foundationOK: Bool, rawOK: Bool)?

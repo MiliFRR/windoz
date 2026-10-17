@@ -97,6 +97,15 @@ enum ContainerFS {
         return st.st_flags
     }
 
+    /// Clear every BSD flag on `path`. Only called for entries at or below the
+    /// app's own Documents folder. Clearing `UF_IMMUTABLE` needs only our own
+    /// write permission on the entry's parent; clearing `SF_IMMUTABLE` needs
+    /// root, and that refusal is reported, never hidden.
+    static func clearFlags(_ path: String) -> Result {
+        if Darwin.chflags(path, 0) == 0 { return .fine }
+        return Result(ok: false, errnoValue: errno)
+    }
+
     /// The entries directly inside `path`, through `readdir` (the C-library
     /// route). Bounded; each name carries its type and BSD flags.
     static func children(_ path: String, limit: Int = 40) -> (ok: Bool, errnoValue: Int32, entries: [(name: String, type: String, flags: UInt32)]) {

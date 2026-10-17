@@ -95,10 +95,10 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section("About") {
-            LabeledContent("Version", value: "0.3.1")
+            LabeledContent("Version", value: AppContainer.displayVersion)
             LabeledContent("Engine", value: "Wine ARM64EC · FEX · DXMT · D3D12")
             LabeledContent("Install", value: AppEnvironment.installKind)
-            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz-v2")!)
+            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz")!)
             NavigationLink("Licenses") { LicensesView() }
         }
     }
@@ -271,7 +271,7 @@ struct LicensesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Windoz is licensed GPL-3.0-or-later. Its complete source is at https://github.com/MiliFRR/windoz-v2, so any IPA you receive can be rebuilt from it.")
+                Text("Windoz is licensed GPL-3.0-or-later. Its complete source is at https://github.com/MiliFRR/windoz, so any IPA you receive can be rebuilt from it.")
                 Text("Windoz uses the Wine (ARM64EC), FEX-Emu, DXMT and native-D3D12 engine forks. Their notices and the full licence texts are bundled in the app's licenses folder.")
                 Text("Microsoft Windows runtime files are downloaded on-device from Microsoft's own servers; Windoz does not redistribute them.")
             }

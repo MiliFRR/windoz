@@ -575,6 +575,21 @@ the fix that is still in the tree.*
   is also the fallback for every critical write (install folders, install
   records, the JIT script copy, app downloads). Device confirmation
   pending.
+- **The refusals can cover the whole data folder, not just the prefix —
+  build 0.3.2 routes around it (2026-10-17).** The owner's next screenshots
+  (still from build 0.3.0 — 0.3.1's messages differ, which the version shown
+  in About now settles) show the refusals had widened: the diagnostics
+  verdict reported the app's own `Documents` folder as `W-DENIED` while
+  reading and network downloads kept working, and saving the VC++/.NET
+  installers into `Documents/windoz-runtimes` was refused with the same 513.
+  0.3.2 answers with three changes: the launch write-check now covers six
+  folders (adds `Library` and `tmp`), clears a set immutable flag on folders
+  at or below Documents (the flag blocks creates and deletes no matter the
+  mode bits) and reports the outcome; the runtime staging and the
+  Steam-library negotiation list `Library/` and `tmp/` as last-resort homes
+  (reachable in Wine as `Z:` later), so a download can land somewhere real
+  even when `Documents` refuses; and the version is printed in the first log
+  line, so every exported log names its build. Device confirmation pending.
 - **Runtime installer downloads could not save their file (2026-10-17).**
   The Downloads tab showed "the downloaded file could not be saved" for the
   VC++ / .NET installers: moving CFNetwork's temp file into the container

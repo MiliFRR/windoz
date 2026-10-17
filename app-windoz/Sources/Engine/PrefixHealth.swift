@@ -11,7 +11,9 @@
 // therefore an executor, not just a reporter:
 //
 //   1. report every level — lstat (symlinks, types, raw errno, BSD flags)
-//      plus stat, plus access(W_OK)
+//      plus stat, plus access(W_OK); a set flag on a level at or below
+//      Documents is cleared first (an immutable bit blocks creates and
+//      deletes no matter the mode bits), and the outcome is reported
 //   2. probe each level with real operations through *both* routes —
 //      Foundation (Data.write + removeItem) and the C library
 //      (creat/mkdir + unlink/rmdir) — so a route that refuses names itself
@@ -91,6 +93,26 @@ enum PrefixHealth {
         // 1. Every level: type, rights, flags — then one real operation pair.
         var before = levels(steamApps: steamApps)
         for level in before { lines.append(level.description) }
+        // 1b. A set BSD flag (immutable and friends) blocks creates and
+        //     deletes no matter the mode bits. Anything at or below our
+        //     Documents folder is ours to clear; refusals are reported —
+        //     clearing SF_IMMUTABLE would need root. The probe pass below
+        //     then reports the truth after the repair.
+        let docPath = AppContainer.documents.standardizedFileURL.path
+        for (index, level) in before.enumerated() where level.exists && level.flags != 0 {
+            let url = level.url.standardizedFileURL
+            guard url.path == docPath || url.path.hasPrefix(docPath + "/") else {
+                lines.append("\(url.path) carries flags=0x\(String(level.flags, radix: 16)) — left alone (outside the app's Documents folder)")
+                continue
+            }
+            let cleared = ContainerFS.clearFlags(url.path)
+            if cleared.ok, (ContainerFS.flags(url.path) ?? 1) == 0 {
+                before[index] = inspect(level.url)
+                lines.append("cleared BSD flags=0x\(String(level.flags, radix: 16)) on \(url.path)")
+            } else {
+                lines.append("could not clear BSD flags=0x\(String(level.flags, radix: 16)) on \(url.path): \(cleared.detail)")
+            }
+        }
         var failing: [(url: URL, detail: String)] = []
         for level in before where level.exists && level.isDirectory {
             let probe = dualProbe(level.url)
