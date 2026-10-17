@@ -354,7 +354,10 @@ final class SteamStore: ObservableObject, StoreProvider {
     private func pump() {
         guard active == nil, !queue.isEmpty else { return }
         let appID = queue.removeFirst()
-        let task = Task { [weak self] in await self?.run(appID) }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.run(appID)
+        }
         active = (appID, task)
     }
 
