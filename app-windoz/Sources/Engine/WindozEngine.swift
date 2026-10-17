@@ -66,8 +66,11 @@ final class WindozEngine: ObservableObject {
         if AppEnvironment.isSimulator {
             return "JIT is not available in the Simulator."
         }
+        if JITManager.flaggedWithoutDebugger {
+            return "JIT was enabled, but the debugger is no longer attached — the engine's JIT requests need one to answer them. Enable JIT again and keep StikDebug attached."
+        }
         if AppEnvironment.isLiveContainer {
-            return "JIT is off. Inside LiveContainer, enable it with the separate StikDebug app (Windoz's bundled helper cannot be used here)."
+            return "JIT is off. Inside LiveContainer, turn on “Launch with JIT”, point its script at Documents/LiveContainer/windoz-jit.js, then attach StikDebug (Windoz's bundled helper cannot be used here)."
         }
         return "JIT is off. Enable it from Setup with StikDebug, or with Windoz's bundled helper on a normal sideload."
     }

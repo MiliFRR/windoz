@@ -10,13 +10,24 @@ import Darwin
 /// `madeira-jit.js` script, which the engine's `jit26_*` BRK protocol needs.
 enum JITManager {
 
-    /// True when executable memory is actually usable right now. We trust the
-    /// live probe first: `jit_check_debugged()` stays set even after a debugger
-    /// detaches, so the sticky flag alone is not proof.
+    /// True when JIT can actually serve a launch right now. The probe maps and
+    /// executes nothing: on iOS 26 the platform rejects RX pages an app mapped
+    /// itself (the engine's JITAllocator documents the resulting "fault loop"),
+    /// and an unanswered jit26_* BRK kills the process. The rule is the
+    /// engine's own (Madeira's StikJITHelper.ready): `CS_DEBUGGED` is set AND a
+    /// debugger is attached right now to answer the BRK protocol. The sticky
+    /// flag alone is not proof — it stays set after a debugger detaches.
     static func probeEnabled() -> Bool {
-        if windoz_jit_probe() != 0 { return true }
-        return jit_check_debugged()
+        windoz_jit_probe() != 0
     }
+
+    /// A debugger is attached to this process right now (`P_TRACED`).
+    static var liveDebuggerAttached: Bool { windoz_jit_debugger_attached() != 0 }
+
+    /// `CS_DEBUGGED` is set but no debugger is attached to answer the engine's
+    /// JIT requests (enable-then-leave tools leave exactly this state): JIT has
+    /// to be enabled again before a session could run.
+    static var flaggedWithoutDebugger: Bool { jit_check_debugged() && !liveDebuggerAttached }
 
     /// Whether the bundled helper extension may be used here. It has to be
     /// genuinely present in the bundle: the extension is not part of this build

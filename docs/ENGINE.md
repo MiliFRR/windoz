@@ -47,7 +47,7 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 | Wine service process (wineserver as a thread) | **working** | `wineserver_start`, `wineserver_is_ready`, `wineserver_stop` |
 | CPU translator (FEX) init / shutdown | **working** | `fex_initialize`, `fex_shutdown` |
 | Engine logs (FEX + JIT) into the in-app log | **working** | `fex_set_log_callback`, `jit_set_log_callback` |
-| JIT availability probe | **working** | `windoz_jit_probe` (own code) + `jit_check_debugged` |
+| JIT readiness probe | **working** | `windoz_jit_probe` (own code): sticky `CS_DEBUGGED` **and** a live debugger (`P_TRACED`) — maps and executes nothing |
 | Increased-memory entitlement report | **working** | `task_info(TASK_VM_INFO)` + `jit_available_memory` |
 | Windows runtime detection / official download | **working** | `RuntimeInstaller` (files + `DownloadManager`) |
 | Game **session host** (JIT pool + Metal presentation + input) | **not ported** | `WindozEngine.launch` throws `.sessionHostingNotImplemented` |
