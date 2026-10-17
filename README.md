@@ -590,6 +590,35 @@ the fix that is still in the tree.*
   (reachable in Wine as `Z:` later), so a download can land somewhere real
   even when `Documents` refuses; and the version is printed in the first log
   line, so every exported log names its build. Device confirmation pending.
+- **Build 0.3.2 ran on the device: the refusal is the whole container, at
+  policy level — and Epic's instant sign-out was a misread, both answered
+  (2026-10-17).** The owner's 0.3.2 log settles what three earlier logs could
+  not: *every* location the app can name — Documents, Imported,
+  windoz-runtimes, LiveContainer, `Library`, `tmp`, and all five
+  Steam-library candidates — refused a real write through Foundation (513)
+  *and* the C library (raw `errno 1`, EPERM); `readdir` on Documents was
+  refused too, `access(W_OK)` was denied, while `lstat` succeeded, the
+  process ran as uid 501, and reads plus network downloads kept working
+  (CFNetwork's temp file even completed). EPERM from both routes on
+  create/delete/enumerate, with metadata reads fine, is not a permissions
+  problem any path can route around — it is the container itself refusing
+  writes at a policy level on this LiveContainer install, which is why no
+  previous workaround could work on this device; the log now says so instead
+  of leaving it a mystery. 0.3.3 adds a write-audit at launch (the home root,
+  app-group containers taken from our own entitlements, the system and
+  shared temp dirs) whose hits are offered to installer staging and the
+  Steam-library fallbacks, logs each location's raw refusal, and states
+  plainly when *nothing* is writable that the container must be repaired
+  (reinstalling LiveContainer and re-adding Windoz normally rebuilds it).
+  The same log also shows the Steam sign-in *did* work and the owned library
+  loaded — and the Epic "sign in, instant sign-out" is explained in code:
+  the library call's HTTP 401/403 was misread as an expired session and
+  flipped the UI to signed-out; a service refusing one call no longer signs
+  the owner out (the status is shown instead), only a refused refresh grant
+  does, and Epic's session now also lives in memory for the run, so a
+  Keychain that refuses round-trips (raw OSStatus now logged for every
+  operation) can no longer undo a fresh sign-in. Device confirmation
+  pending.
 - **Runtime installer downloads could not save their file (2026-10-17).**
   The Downloads tab showed "the downloaded file could not be saved" for the
   VC++ / .NET installers: moving CFNetwork's temp file into the container

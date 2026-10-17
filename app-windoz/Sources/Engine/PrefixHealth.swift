@@ -242,7 +242,11 @@ enum PrefixHealth {
                 + (repaired ? " A broken folder was replaced." : "")
                 + (rebuilt ? " The prefix was rebuilt." : "")
         } else if let first = failing.first {
-            summary = "Windows-prefix write path: FAILED — \(first.url.path): \(first.detail) The full per-level report is in the log."
+            var text = "Windows-prefix write path: FAILED — \(first.url.path): \(first.detail) The full per-level report is in the log."
+            if first.url.standardizedFileURL.path == AppContainer.documents.standardizedFileURL.path {
+                text += " The refusal is in the app's own data folder itself — nothing inside the app can store files until its container is repaired (reinstalling LiveContainer and re-adding Windoz normally rebuilds it)."
+            }
+            summary = text
         } else {
             summary = "Windows-prefix write path: FAILED — creating steamapps/common was refused; the log names every level, route and errno."
         }

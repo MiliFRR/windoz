@@ -166,8 +166,11 @@ final class EpicStore: ObservableObject, StoreProvider {
         } catch {
             libraryMessage = Self.message(error)
             if let epic = error as? EpicAuthError, epic == .signInExpired {
-                // userToken() already removed the stored session; the observer
-                // will flip the UI to signed-out.
+                // Only a refused refresh grant lands here — `userToken()`
+                // cleared the stored session. A service refusing one call
+                // (e.g. HTTP 403 from an endpoint scoped to another client)
+                // keeps the session; the sheet shows the status instead of
+                // silently signing the owner out.
                 authState = .signedOut
             }
             throw error
@@ -267,6 +270,9 @@ final class EpicStore: ObservableObject, StoreProvider {
     }
 
     static func reason(_ error: Error) -> String {
-        String(describing: type(of: error))
+        if let epic = error as? EpicAuthError, case .http(let status, _) = epic {
+            return "http \(status)"
+        }
+        return String(describing: type(of: error))
     }
 }

@@ -25,7 +25,9 @@ enum Keychain {
         SecItemDelete(q as CFDictionary)
         q[kSecValueData as String] = data
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+        let status = SecItemAdd(q as CFDictionary, nil)
+        log(status == errSecSuccess ? "set" : "set refused", account, status)
+        return status == errSecSuccess
     }
 
     @discardableResult
@@ -38,7 +40,11 @@ enum Keychain {
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status != errSecSuccess, status != errSecItemNotFound {
+            log("get refused", account, status)
+        }
+        guard status == errSecSuccess else { return nil }
         return out as? Data
     }
 
@@ -47,10 +53,36 @@ enum Keychain {
     }
 
     static func remove(account: String) {
-        SecItemDelete(query(account: account) as CFDictionary)
+        let status = SecItemDelete(query(account: account) as CFDictionary)
+        if status != errSecSuccess, status != errSecItemNotFound {
+            log("remove refused", account, status)
+        }
     }
 
     static func has(account: String) -> Bool {
         get(account: account) != nil
+    }
+
+    // MARK: - Diagnostics
+
+    /// One log line per Keychain operation that touched state (or was refused
+    /// unusually). Device test, 2026-10-17: signs-in that reported success did
+    /// not survive — this names the raw OSStatus instead of guessing.
+    private static func log(_ operation: String, _ account: String, _ status: OSStatus) {
+        let level: LogLine.Level = status == errSecSuccess ? .info : .warning
+        EngineLogStream.shared.append("[keychain] \(operation) \(account): \(statusName(status))", level: level)
+    }
+
+    private static func statusName(_ status: OSStatus) -> String {
+        switch status {
+        case errSecSuccess: return "ok"
+        case errSecItemNotFound: return "item not found (\(status))"
+        case errSecMissingEntitlement: return "missing entitlement (\(status))"
+        case errSecDuplicateItem: return "duplicate item (\(status))"
+        case errSecAuthFailed: return "auth failed (\(status))"
+        case errSecNotAvailable: return "not available (\(status))"
+        case errSecInteractionNotAllowed: return "interaction not allowed (\(status))"
+        default: return "OSStatus \(status)"
+        }
     }
 }

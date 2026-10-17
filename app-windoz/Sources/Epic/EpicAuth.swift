@@ -78,14 +78,26 @@ enum EpicSignIn {
 
     private static let account = "epic.session"
 
+    /// The session for the current run. Device test, 2026-10-17: the owner's
+    /// sign-in reported success and the app flipped back to signed-out
+    /// seconds later — the Keychain item written a moment earlier read back
+    /// empty (see the [keychain] log lines for the raw OSStatus). The memory
+    /// copy wins for this run, so a working Keychain changes nothing and a
+    /// refusing one can no longer sign the user out mid-session; only a
+    /// restart still needs the Keychain.
+    private static var live: StoredSession?
+
     static func storedSession() -> StoredSession? {
+        if let live { return live }
         BootTrace.mark("EpicSignIn.storedSession: keychain read")
         guard let data = Keychain.get(account: account) else {
             BootTrace.mark("EpicSignIn.storedSession: nothing stored")
             return nil
         }
         BootTrace.mark("EpicSignIn.storedSession: \(data.count) bytes")
-        return try? JSONDecoder().decode(StoredSession.self, from: data)
+        let session = try? JSONDecoder().decode(StoredSession.self, from: data)
+        if let session { live = session }
+        return session
     }
 
     static var isSignedIn: Bool { storedSession() != nil }
@@ -97,12 +109,14 @@ enum EpicSignIn {
 
     @discardableResult
     static func store(_ session: StoredSession) -> Bool {
+        live = session
         guard let data = try? JSONEncoder().encode(session) else { return false }
         return Keychain.set(data, account: account)
     }
 
     @MainActor
     static func signOut() {
+        live = nil
         Keychain.remove(account: account)
         EpicAuthClient.shared.clear()
         EpicLog.event("[epic-signin] signed out")
@@ -397,10 +411,12 @@ final class EpicSignInController: ObservableObject {
             refreshToken: refresh,
             accountId: token.account_id ?? "",
             displayName: token.displayName ?? "")
-        guard EpicSignIn.store(session) else { throw EpicAuthError.keychain }
+        let persisted = EpicSignIn.store(session)
         EpicAuthClient.shared.adopt(accessToken: token.access_token, expiresIn: token.expires_in ?? 3600)
         stage = .done
-        EpicLog.event("[epic-signin] sign-in stored")
+        EpicLog.event(persisted
+            ? "[epic-signin] sign-in stored"
+            : "[epic-signin] sign-in stored for this run only — the Keychain refused to save it (see [keychain] lines); a restart will ask to sign in again")
         EpicSignIn.notifyChange()
     }
 

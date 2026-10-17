@@ -132,7 +132,15 @@ enum EpicAPI {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status < 400 else {
-            if authScoped, status == 401 || status == 403 { throw EpicAuthError.signInExpired }
+            // A service refusing one call — even with 401/403 — is NOT proof
+            // the sign-in is dead: Epic scopes some endpoints to specific
+            // clients, and treating that as "expired" signed the owner out
+            // seconds after a fresh sign-in (device report, 2026-10-17).
+            // Only a refused refresh grant (`EpicAuth.refresh`) signs out;
+            // here the caller gets the status and shows it.
+            if authScoped, status == 401 || status == 403 {
+                throw EpicAuthError.http(status: status, message: "Epic's service refused this session (HTTP \(status)).")
+            }
             throw EpicAuthError.http(status: status, message: "Epic's service answered with HTTP \(status).")
         }
         return data

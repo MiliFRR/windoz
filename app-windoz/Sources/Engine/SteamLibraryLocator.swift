@@ -15,8 +15,11 @@
 // remembered in `windoz-steam-library-location.txt`. In-prefix choices are
 // still `C:\` to Wine; the fallbacks leave the prefix — and the last two
 // leave Documents itself (`Library`, `tmp`) for devices that refuse writes
-// inside Documents. All rule values are home-relative from 0.3.2 on (values
-// written by 0.3.1 read as Documents-relative).
+// inside Documents. Build 0.3.3 appends one candidate inside every writable
+// location the launch write-audit finds (app-group containers, temp dirs),
+// so a device whose container folders all refuse can still land its games
+// somewhere real. Rule values are home-relative paths or absolute paths
+// (0.3.1 wrote Documents-relative values; those still read).
 
 import Foundation
 
@@ -49,19 +52,33 @@ enum SteamLibraryLocator {
         AppContainer.home.appendingPathComponent(relative, isDirectory: true)
     }
 
+    /// Every candidate: the name the rule file stores and its URL. The static
+    /// list is home-relative; each writable root the boot audit found adds a
+    /// candidate under its absolute path.
+    static var allCandidates: [(name: String, url: URL)] {
+        var out: [(name: String, url: URL)] = allRelatives.map { ($0, url(forRelative: $0)) }
+        for root in AppContainer.discoveredRoots {
+            let url = root.appendingPathComponent("windoz-game-library/steamapps", isDirectory: true)
+            if !out.contains(where: { $0.url.standardizedFileURL.path == url.standardizedFileURL.path }) {
+                out.append((url.path, url))
+            }
+        }
+        return out
+    }
+
     /// The location reads use now: a remembered one when there is one (it was
     /// tested on this device), otherwise the preferred one.
     static func resolved() -> URL {
-        if let remembered, let relative = normalized(remembered) { return url(forRelative: relative) }
+        if let remembered, let candidate = candidate(named: remembered) { return candidate.url }
         return url(forRelative: preferredRelative)
     }
 
-    /// Accepts the current home-relative rule values and the Documents-relative
-    /// values build 0.3.1 wrote.
-    private static func normalized(_ raw: String) -> String? {
-        if allRelatives.contains(raw) { return raw }
+    /// The candidate a rule value names — current values are home-relative or
+    /// absolute paths; build 0.3.1 wrote Documents-relative ones.
+    private static func candidate(named raw: String) -> (name: String, url: URL)? {
+        if let hit = allCandidates.first(where: { $0.name == raw }) { return hit }
         let legacy = "Documents/\(raw)"
-        return allRelatives.contains(legacy) ? legacy : nil
+        return allCandidates.first(where: { $0.name == legacy })
     }
 
     /// The location remembered in `windoz-steam-library-location.txt`.
@@ -95,41 +112,46 @@ enum SteamLibraryLocator {
     /// throws: when every candidate refuses, the resolved location is returned
     /// anyway and the log (and the downloader's deep check) carries the why.
     static func prepareForDownload() -> Choice {
-        let rememberedRelative = remembered.flatMap(normalized)
-        let before = rememberedRelative ?? preferredRelative
+        let rememberedCandidate = remembered.flatMap { candidate(named: $0) }
+        let before = rememberedCandidate?.name ?? preferredRelative
         var lines: [String] = []
-        var order: [String] = []
-        for relative in ([rememberedRelative].compactMap { $0 } + allRelatives) where !order.contains(relative) {
-            order.append(relative)
+        var order: [(name: String, url: URL)] = allCandidates
+        if let rememberedCandidate,
+           let index = order.firstIndex(where: { $0.name == rememberedCandidate.name }) {
+            order.remove(at: index)
+            order.insert(rememberedCandidate, at: 0)
         }
-        var backup: (relative: String, foundationOK: Bool, rawOK: Bool)?
-        for relative in order {
-            guard let result = test(relative, lines: &lines) else { continue }
+        var backup: (name: String, foundationOK: Bool, rawOK: Bool)?
+        for entry in order {
+            guard let result = test(entry, lines: &lines) else { continue }
             if result.foundationOK && result.rawOK {
-                return chosen(relative, before: before, result: result, lines: &lines)
+                return chosen(entry, before: before, result: result, lines: &lines)
             }
             if backup == nil {
-                backup = (relative, result.foundationOK, result.rawOK)
-                lines.append("\(relative): only one route works (Foundation \(result.foundationOK ? "ok" : "refused"), C library \(result.rawOK ? "ok" : "refused")) — kept as fallback")
+                backup = (entry.name, result.foundationOK, result.rawOK)
+                lines.append("\(entry.name): only one route works (Foundation \(result.foundationOK ? "ok" : "refused"), C library \(result.rawOK ? "ok" : "refused")) — kept as fallback")
             }
         }
         if let backup {
-            return chosen(backup.relative, before: before, result: (backup.foundationOK, backup.rawOK), lines: &lines)
+            if let entry = allCandidates.first(where: { $0.name == backup.name }) {
+                return chosen(entry, before: before, result: (backup.foundationOK, backup.rawOK), lines: &lines)
+            }
         }
         lines.append("no location passed the write test (see [prefix-health] for the per-level report)")
         log(lines, level: .error)
         BootTrace.mark("[steam-library] no writable location found")
-        return Choice(relative: before, url: url(forRelative: before), changed: false,
+        let fallbackURL = candidate(named: before)?.url ?? url(forRelative: preferredRelative)
+        return Choice(relative: before, url: fallbackURL, changed: false,
                       foundationOK: false, rawOK: false, lines: lines)
     }
 
-    private static func chosen(_ relative: String, before: String, result: (foundationOK: Bool, rawOK: Bool), lines: inout [String]) -> Choice {
-        remember(relative)
-        if relative != before { lines.append("using \(relative) instead of \(before)") }
-        let level: LogLine.Level = (relative == before && result.foundationOK) ? .info : .warning
+    private static func chosen(_ entry: (name: String, url: URL), before: String, result: (foundationOK: Bool, rawOK: Bool), lines: inout [String]) -> Choice {
+        remember(entry.name)
+        if entry.name != before { lines.append("using \(entry.name) instead of \(before)") }
+        let level: LogLine.Level = (entry.name == before && result.foundationOK) ? .info : .warning
         log(lines, level: level)
-        BootTrace.mark("[steam-library] \(relative) foundation=\(result.foundationOK ? 1 : 0) raw=\(result.rawOK ? 1 : 0)")
-        return Choice(relative: relative, url: url(forRelative: relative), changed: relative != before,
+        BootTrace.mark("[steam-library] \(entry.name) foundation=\(result.foundationOK ? 1 : 0) raw=\(result.rawOK ? 1 : 0)")
+        return Choice(relative: entry.name, url: entry.url, changed: entry.name != before,
                       foundationOK: result.foundationOK, rawOK: result.rawOK, lines: lines)
     }
 
@@ -137,10 +159,10 @@ enum SteamLibraryLocator {
     /// `steamapps/common`, write a probe file into it, delete the probe — once
     /// through Foundation, once through the C library. Returns nil when both
     /// routes refuse.
-    private static func test(_ relative: String, lines: inout [String]) -> (foundationOK: Bool, rawOK: Bool)? {
-        let url = url(forRelative: relative)
+    private static func test(_ entry: (name: String, url: URL), lines: inout [String]) -> (foundationOK: Bool, rawOK: Bool)? {
+        let url = entry.url
         let common = url.appendingPathComponent("common", isDirectory: true)
-        lines.append("trying \(relative)")
+        lines.append("trying \(entry.name)")
 
         // Foundation — the route DepotDownloader's createDirectory uses.
         var foundationOK = false

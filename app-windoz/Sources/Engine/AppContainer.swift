@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Security
 
 /// Where Windoz stores its own files (prefix, library, downloads, staged JIT
 /// script). Inside LiveContainer the guest's `NSHomeDirectory()` is *usually*
@@ -9,7 +10,7 @@ enum AppContainer {
 
     /// Shown in Settings → About *and* printed in the first log line, so a
     /// device session can always be matched to a build.
-    static let displayVersion = "0.3.2"
+    static let displayVersion = "0.3.3"
 
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
@@ -77,6 +78,98 @@ enum AppContainer {
                 "[host] LiveContainer: guest bundle \(AppEnvironment.bundleIdentifier), pid \(getpid()), JIT script \(stagedJITScript.path)")
         }
         logWriteHealth()
+        auditWritableLocations()
+    }
+
+    /// Locations beyond the six folders that accepted a real write, in probe
+    /// order (home root, app-group containers, temp dirs). Empty when the
+    /// device refused everything.
+    static private(set) var discoveredRoots: [URL] = []
+
+    /// Device test, 2026-10-17 (build 0.3.2 log): every container folder
+    /// refused writes with raw errno 1 (EPERM) through both routes — while
+    /// reads and network stayed fine — so no in-folder fallback could ever
+    /// work. This audit answers the only question left: is *any* location on
+    /// this device writable for Windoz? Each probe is logged, and the
+    /// writable ones are offered to installer staging and to the
+    /// Steam-library fallbacks. "None writable" is itself the answer the
+    /// next log needs to carry.
+    static func auditWritableLocations() {
+        var roots: [URL] = []
+
+        func probe(_ label: String, _ directory: URL) {
+            let probe = directory.appendingPathComponent(".windoz-audit-\(getpid())")
+            do {
+                try Data([0x57]).write(to: probe)
+                try? FileManager.default.removeItem(at: probe)
+                roots.append(directory)
+                EngineLogStream.shared.append("[host] write-audit: \(label) \(directory.path) → writable")
+                return
+            } catch {
+                let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
+                if raw.ok {
+                    _ = ContainerFS.unlink(probe.path)
+                    roots.append(directory)
+                    EngineLogStream.shared.append("[host] write-audit: \(label) \(directory.path) → writable (C-library route)")
+                } else {
+                    EngineLogStream.shared.append(
+                        "[host] write-audit: \(label) \(directory.path) → refused (\(describe(error)); C library \(raw.detail))",
+                        level: .warning)
+                }
+            }
+        }
+
+        EngineLogStream.shared.append(
+            "[host] write-audit: TMPDIR=\(ProcessInfo.processInfo.environment["TMPDIR"] ?? "(unset)") NSTemporaryDirectory=\(NSTemporaryDirectory())")
+        let env = ProcessInfo.processInfo.environment.filter { key, _ in
+            let upper = key.uppercased()
+            return upper.hasPrefix("LC") || upper.contains("SHARED") || upper.contains("CONTAINER")
+                || upper.contains("HOME") || upper.contains("TMP")
+        }
+        if !env.isEmpty {
+            EngineLogStream.shared.append(
+                "[host] write-audit env: " + env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+        }
+        probe("home root", home)
+        if let groups = ownEntitlement("com.apple.security.application-groups") as? [String], !groups.isEmpty {
+            for id in groups {
+                if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) {
+                    probe("app group \(id)", url)
+                } else {
+                    EngineLogStream.shared.append(
+                        "[host] write-audit: app group \(id) has no container on this device", level: .warning)
+                }
+            }
+        } else {
+            EngineLogStream.shared.append("[host] write-audit: no application-groups entitlement")
+        }
+        probe("system temp", URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true))
+        probe("shared temp", URL(fileURLWithPath: "/private/var/mobile/tmp", isDirectory: true))
+
+        discoveredRoots = roots
+        if roots.isEmpty {
+            EngineLogStream.shared.append(
+                "[host] write-audit: no writable location on this device — Windoz cannot store anything until the container is repaired",
+                level: .error)
+        } else {
+            EngineLogStream.shared.append("[host] write-audit: writable roots: \(roots.map(\.path).joined(separator: ", "))")
+        }
+    }
+
+    /// The current process's own entitlement value — LiveContainer's, since
+    /// the guest runs inside it. The SecTask functions exist in the Security
+    /// framework on every iOS version Windoz runs on, but are not declared in
+    /// the iOS SDK, so they are looked up at runtime instead of guessed.
+    static func ownEntitlement(_ key: String) -> Any? {
+        typealias CreateFn = @convention(c) (CFAllocator?) -> CFTypeRef?
+        typealias CopyFn = @convention(c) (CFTypeRef, CFString, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> CFTypeRef?
+        guard let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW),
+              let createSymbol = dlsym(handle, "SecTaskCreateFromSelf"),
+              let copySymbol = dlsym(handle, "SecTaskCopyValueForEntitlement") else { return nil }
+        let create = unsafeBitCast(createSymbol, to: CreateFn.self)
+        let copy = unsafeBitCast(copySymbol, to: CopyFn.self)
+        guard let task = create(nil) else { return nil }
+        return copy(task, key as CFString, nil)
     }
 
     /// One write probe per container folder at launch — through Foundation and
@@ -135,13 +228,18 @@ enum AppContainer {
 
     /// First directory named `name` that accepts a real create + write +
     /// delete, tried under each base in order (callers pass Documents first,
-    /// then Library, then tmp). Foundation is tried per base first, then the
-    /// C library — the same dual-route pattern as everywhere else. Every
-    /// refusal is logged, so the log names why a fallback was needed.
+    /// then Library, then tmp), then under every writable location the boot
+    /// audit found. Foundation is tried per base first, then the C library —
+    /// the same dual-route pattern as everywhere else. Every refusal is
+    /// logged, so the log names why a fallback was needed.
     static func writableDirectory(named name: String, among bases: [URL]) -> URL? {
         let fm = FileManager.default
         let preferred = documents.standardizedFileURL
-        for base in bases {
+        var allBases = bases
+        for root in discoveredRoots where !allBases.contains(where: { $0.standardizedFileURL.path == root.standardizedFileURL.path }) {
+            allBases.append(root)
+        }
+        for base in allBases {
             let dir = base.appendingPathComponent(name, isDirectory: true)
             let probe = dir.appendingPathComponent(".windoz-probe-\(getpid())")
             var works = false

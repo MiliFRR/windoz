@@ -53,7 +53,9 @@ class SteamTokenStore {
         if status == errSecSuccess {
             SteamLog.trace("Tokens saved to Keychain")
         } else {
-            SteamLog.trace("Failed to save tokens to Keychain: \(status)")
+            // Events, not traces: when the Keychain refuses, the next launch
+            // signs the user out — the log must say why.
+            SteamLog.event("[steam-keychain] save refused: OSStatus \(status)")
         }
     }
 
@@ -69,6 +71,10 @@ class SteamTokenStore {
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        if status != errSecSuccess, status != errSecItemNotFound {
+            SteamLog.event("[steam-keychain] read refused: OSStatus \(status)")
+        }
 
         guard status == errSecSuccess,
               let data = result as? Data,
