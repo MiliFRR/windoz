@@ -520,10 +520,12 @@ the fix that is still in the tree.*
   so it is a from-scratch build — see the entry below.
 - **Epic: device-code sign-in and the owned library are real (2026-10-17).**
   Steam shipped first; Epic follows it under the same rule — nothing is
-  claimed that was not exercised. The flow was verified against the live API
-  before any UI was written: Windoz fetches a client token, asks Epic for a
-  device code, the owner approves it on `epicgames.com/activate`, and Epic
-  issues the session to the owner's own account. Only the refresh token is
+  claimed that was not exercised. The flow's API shape was verified live
+  before any UI was written — and its client-token half proved wrong on the
+  device, corrected in the sign-in entry below. Windoz fetches a client
+  token, asks Epic for a device code, the owner approves it on
+  `epicgames.com/activate`, and Epic issues the session to the owner's own
+  account. Only the refresh token is
   stored, in the Keychain (`epic.session`); the owner's password is never
   typed into the app and never seen by it. The owned library is the account's
   own library-service records; titles, developers and art come from the
@@ -535,35 +537,54 @@ the fix that is still in the tree.*
   round starts by settling that second, launcher-scoped authorization (the
   approach Legendary uses). Device verification of sign-in and the library is
   pending the owner's next run.
-- **Steam+Epic build bounced at launch on device (2026-10-17).** Build #6
-  (`7f139c7`) throws the user back to the home screen a moment after launch in
-  LiveContainer, with or without JIT; the Steam-only build (#5, `5a6e47d`)
-  and the pre-store build both launch fine, so the regression lives inside the
-  Epic commit's delta (`5b674e0`) or its effect on the launch path. Static
-  review found nothing load-time outside the registry's `EpicStore`
-  construction, whose keychain read matches patterns that already run in the
-  working builds. This build adds a boot breadcrumb (`BootTrace`, one line per
-  step in `Documents/windoz-boot.log`) and a gate screen that shows the
-  previous session's log before any store code runs, so one bounce names the
-  exact step; root cause and fix follow the evidence. The gate disappears once
-  the crash is fixed.
-- **Steam download hit a write-permission error on device (2026-10-17).**
-  Starting a download on the Steam-only build failed with Foundation's
-  "You don't have permission to save the file … in the folder “common”"
-  (error 513, EACCES) when the downloader created `steamapps/common/<game>`
-  inside the Wine prefix. The shipped `prefix-template.tar.gz` extracts every
-  directory owner-writable (verified entry by entry), so the cause is on the
-  device's data, not in the template. This build adds `PrefixHealth`: it
-  reports each level's mode and owner, re-adds owner access, probes the exact
-  failing operation, logs the detail, and retries the download once — a
-  repaired path or an exact diagnosis, never silence. Device confirmation
-  pending.
-- **JIT status could read "off" while still checking (fixed in this build).**
-  Running the engine-core test queues work on the engine's serial queue, and
-  the status probe shared that queue: the JIT/memory rows sat at "Checking…"
-  (and the top banner said "JIT is off") until the core test finished. Probes
-  now run on their own queue and the "off"-style UI only appears when the
-  probe has actually answered. Device confirmation pending.
+- **The Steam+Epic launch bounce did not reproduce — kept honest
+  (2026-10-17).** Build #6 (`7f139c7`) bounced to the home screen in
+  LiveContainer while #5 (Steam-only) ran; the Epic delta became the suspect.
+  The next build carried silent boot breadcrumbs (`BootTrace` writes one line
+  per launch step to `Documents/windoz-boot.log`), and on the device that
+  build — the same combined Steam+Epic code — launched and ran. No crash was
+  caught, so no cause is claimed: this stays "not reproduced", not "fixed".
+  The breadcrumbs stay in the app and would name the exact step if the bounce
+  ever returns.
+- **Steam on device: sign-in and the owned library verified; installs still
+  hit the write-permission error (2026-10-17).** The owner signed in natively
+  and the full owned library rendered with real art. Starting an install
+  still failed with Foundation's "You don't have permission to save the file
+  … in the folder “common”" (error 513) when the downloader creates
+  `steamapps/common/<game>`. The shipped `prefix-template.tar.gz` extracts
+  every directory owner-writable (verified entry by entry), so the blocker is
+  on the device's own data. `PrefixHealth` — run from Settings → Advanced →
+  Diagnostics, or automatically on a failing write — now reports every level
+  (lstat/stat/access plus a real write probe with its raw errno), renames the
+  first broken level at or below `windoz-prefix` out of the way
+  (`*.windoz-broken-<ts>`, kept for inspection), rebuilds the chain and
+  retries; a still-failing download names the blocking level and errno in the
+  sheet and the log instead of a mystery. Device confirmation pending.
+- **Runtime installer downloads could not save their file (2026-10-17).**
+  The Downloads tab showed "the downloaded file could not be saved" for the
+  VC++ / .NET installers: moving CFNetwork's temp file into the container
+  answered "you don't have permission". The move now falls back to a plain
+  copy through Data, and both attempts log the raw NSError (domain and code).
+  Device confirmation pending.
+- **JIT status fix verified on device (2026-10-17).** The probe no longer
+  shares the engine queue, and the "off"-style UI only appears when the probe
+  has answered — the owner's device shows JIT and increased memory as Ready,
+  with no stuck "Checking…".
+- **Epic device sign-in: wrong client token; root cause found and fixed
+  (2026-10-17).** The device was answered "Sorry, your client does not have
+  the proper grant_type for access." — reproduced live from a desktop: the
+  device-authorization call carried a bearer minted from the *launcher*
+  client, which is not allowed that grant; the same call under Epic's own
+  public *console* client issues a device code immediately (verified live: a
+  code came back, and a bogus-code poll answers a plain `invalid_grant`).
+  Fix: the client token for `deviceAuthorization` now comes from the console
+  client; the launcher client stays for the catalog. Device retest pending.
+- **Settings simplified (2026-10-17).** The owner asked for a less
+  complicated UI. The diagnostic gate screen is gone (the breadcrumbs are
+  silent); the main Settings screen keeps Engine (status + JIT setup), the
+  LiveContainer setup link, and one "Advanced" page holding the Windows
+  environment, runtime staging, downloads rule, diagnostics and the log; the
+  Library's store explanation is now a short paragraph.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

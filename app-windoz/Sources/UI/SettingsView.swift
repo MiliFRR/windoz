@@ -4,15 +4,9 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject private var engine: WindozEngine
     @ObservedObject private var installer = RuntimeInstaller.shared
-    @ObservedObject private var log = EngineLogStream.shared
-    @ObservedObject private var controller = ControllerManager.shared
 
     @AppStorage("windoz.jitMethod") private var jitMethodRaw =
         (AppEnvironment.availableJITMethods.first ?? .stikDebug).rawValue
-    @AppStorage("windoz.preferOffline") private var preferOffline = false
-    @State private var confirmDelete = false
-    @State private var confirmRepair = false
-    @State private var coreMessage: String?
 
     var body: some View {
         ZStack {
@@ -22,11 +16,13 @@ struct SettingsView: View {
                 if AppEnvironment.isLiveContainer {
                     liveContainerSection
                 }
-                jitSection
-                prefixSection
-                runtimeSection
-                downloadSection
-                diagnosticsSection
+                Section {
+                    NavigationLink {
+                        AdvancedSettingsView()
+                    } label: {
+                        Label("Advanced", systemImage: "wrench.and.screwdriver")
+                    }
+                }
                 aboutSection
             }
             .scrollContentBackground(.hidden)
@@ -35,18 +31,6 @@ struct SettingsView: View {
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)
-        }
-        .confirmationDialog("Delete the Windows environment?",
-                            isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { perform { try engine.deletePrefix() } }
-        } message: {
-            Text("Installed games outside the environment are kept, but their saved data inside it is removed.")
-        }
-        .confirmationDialog("Repair the Windows environment?",
-                            isPresented: $confirmRepair, titleVisibility: .visible) {
-            Button("Repair", role: .destructive) { perform { try engine.repairPrefix() } }
-        } message: {
-            Text("A clean Windows environment is extracted. Games you installed stay where they are.")
         }
     }
 
@@ -74,31 +58,16 @@ struct SettingsView: View {
                 }
             }
             Button("Check again") { engine.refreshStatus() }
-        }
-    }
 
-    private var liveContainerSection: some View {
-        Section("LiveContainer") {
-            NavigationLink("Setup for LiveContainer") {
-                LiveContainerView().environmentObject(engine)
-            }
-            Text("JIT, extra RAM, Live Activities and background tasks follow LiveContainer's host entitlements. Windoz does not pretend those guest features exist.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var jitSection: some View {
-        Section("JIT") {
-            // Only offer a choice when there genuinely is one: this build has no
-            // helper extension in the bundle, so the StikDebug app is the route.
+            // JIT setup, folded in so there is one engine story on one screen.
             if AppEnvironment.availableJITMethods.count > 1 {
-                Picker("Method", selection: $jitMethodRaw) {
+                Picker("JIT method", selection: $jitMethodRaw) {
                     ForEach(AppEnvironment.availableJITMethods) { method in
                         Text(method.title).tag(method.rawValue)
                     }
                 }
             } else if let only = AppEnvironment.availableJITMethods.first {
-                LabeledContent("Method", value: only.title)
+                LabeledContent("JIT method", value: only.title)
             }
             Text(AppEnvironment.jitSituation)
                 .font(.caption).foregroundStyle(.secondary)
@@ -113,6 +82,83 @@ struct SettingsView: View {
             }
         }
     }
+
+    private var liveContainerSection: some View {
+        Section("LiveContainer") {
+            NavigationLink("Setup for LiveContainer") {
+                LiveContainerView().environmentObject(engine)
+            }
+            Text("JIT, extra RAM, Live Activities and background tasks follow LiveContainer's host entitlements. Windoz does not pretend those guest features exist.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var aboutSection: some View {
+        Section("About") {
+            LabeledContent("Version", value: "0.3.0")
+            LabeledContent("Engine", value: "Wine ARM64EC · FEX · DXMT · D3D12")
+            LabeledContent("Install", value: AppEnvironment.installKind)
+            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz-v2")!)
+            NavigationLink("Licenses") { LicensesView() }
+        }
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder private func statusRow(_ name: String, _ health: EngineHealth) -> some View {
+        HStack {
+            Text(name)
+            Spacer()
+            switch health {
+            case .ready: Text("Ready").foregroundStyle(Theme.ok)
+            case .checking: Text("Checking…").foregroundStyle(Theme.warn)
+            case .unknown: Text("—").foregroundStyle(.secondary)
+            case .unavailable(let why): Text("Not active").foregroundStyle(Theme.bad).help(why)
+            }
+        }
+    }
+}
+
+/// The rarely-needed half of Settings: the Windows environment, runtime
+/// staging, the diagnostics tools and the log. Keeps the main screen short.
+struct AdvancedSettingsView: View {
+    @EnvironmentObject private var engine: WindozEngine
+    @ObservedObject private var installer = RuntimeInstaller.shared
+    @ObservedObject private var log = EngineLogStream.shared
+    @ObservedObject private var controller = ControllerManager.shared
+
+    @State private var confirmDelete = false
+    @State private var confirmRepair = false
+    @State private var coreMessage: String?
+
+    var body: some View {
+        ZStack {
+            ConsoleBackground()
+            List {
+                prefixSection
+                runtimeSection
+                downloadSection
+                diagnosticsSection
+            }
+            .scrollContentBackground(.hidden)
+        }
+        .navigationTitle("Advanced")
+        .onAppear { installer.refresh(prefix: engine.prefix) }
+        .confirmationDialog("Delete the Windows environment?",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { perform { try engine.deletePrefix() } }
+        } message: {
+            Text("Installed games outside the environment are kept, but their saved data inside it is removed.")
+        }
+        .confirmationDialog("Repair the Windows environment?",
+                            isPresented: $confirmRepair, titleVisibility: .visible) {
+            Button("Repair", role: .destructive) { perform { try engine.repairPrefix() } }
+        } message: {
+            Text("A clean Windows environment is extracted. Games you installed stay where they are.")
+        }
+    }
+
+    // MARK: - Sections
 
     private var prefixSection: some View {
         Section("Windows environment") {
@@ -178,30 +224,7 @@ struct SettingsView: View {
         }
     }
 
-    private var aboutSection: some View {
-        Section("About") {
-            LabeledContent("Version", value: "0.2.0")
-            LabeledContent("Engine", value: "Wine ARM64EC · FEX · DXMT · D3D12")
-            LabeledContent("Install", value: AppEnvironment.installKind)
-            Link("Source code (GPL-3.0-or-later)", destination: URL(string: "https://github.com/MiliFRR/windoz-v2")!)
-            NavigationLink("Licenses") { LicensesView() }
-        }
-    }
-
     // MARK: - Helpers
-
-    @ViewBuilder private func statusRow(_ name: String, _ health: EngineHealth) -> some View {
-        HStack {
-            Text(name)
-            Spacer()
-            switch health {
-            case .ready: Text("Ready").foregroundStyle(Theme.ok)
-            case .checking: Text("Checking…").foregroundStyle(Theme.warn)
-            case .unknown: Text("—").foregroundStyle(.secondary)
-            case .unavailable(let why): Text("Not active").foregroundStyle(Theme.bad).help(why)
-            }
-        }
-    }
 
     private func runtimeBadge(_ component: RuntimeComponent) -> some View {
         Group {

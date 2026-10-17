@@ -109,7 +109,7 @@ struct LibraryView: View {
             StoreRow(summary: summary, registry: registry,
                      extraAction: extraAction(for: summary))
         }
-        Text("Windoz uses your own accounts with each store and follows their terms. Steam signs in natively (password + Steam Guard or a QR code) and downloads owned depots into the Windows prefix. Epic signs in with a device code — you approve it on Epic's own site, no password ever typed into the app — and lists your owned library; its chunked downloads are the next piece. The remaining stores are meant to run the vendor's official launcher inside Wine once the game-session host is ported; until then they report themselves as not implemented.")
+        Text("Steam signs in natively and installs owned games into the Windows environment. Epic signs in with a device code you approve on Epic's own site — no password ever touches the app. The other stores will run their official launcher in Wine once that is ported; until then they say so.")
             .font(.caption2).foregroundStyle(.white.opacity(0.4))
     }
 

@@ -59,6 +59,32 @@ enum AppContainer {
             EngineLogStream.shared.append(
                 "[host] LiveContainer: guest bundle \(AppEnvironment.bundleIdentifier), pid \(getpid()), JIT script \(stagedJITScript.path)")
         }
+        logWriteHealth()
+    }
+
+    /// One write probe per container folder at launch: if a device's data
+    /// folder is not writable, this names it at the top of the log instead of
+    /// leaving a mystery 513 for a later download to trip over.
+    private static func logWriteHealth() {
+        var problems: [String] = []
+        for (name, url) in [("Documents", documents), ("Imported", importedGames),
+                            ("Runtimes", runtimes), ("LiveContainer", liveContainerSupport)] {
+            let probe = url.appendingPathComponent(".windoz-write-probe")
+            do {
+                try Data([0x57]).write(to: probe)
+                try? FileManager.default.removeItem(at: probe)
+            } catch {
+                let raw = error as NSError
+                problems.append("\(name) NOT WRITABLE: \(raw.domain) \(raw.code) — \(raw.localizedDescription)")
+            }
+        }
+        if problems.isEmpty {
+            EngineLogStream.shared.append("[host] container write check: all four folders writable")
+        } else {
+            for line in problems {
+                EngineLogStream.shared.append("[host] container write check: \(line)", level: .warning)
+            }
+        }
     }
 
     /// Copy the engine's StikDebug script into Documents so LiveContainer can

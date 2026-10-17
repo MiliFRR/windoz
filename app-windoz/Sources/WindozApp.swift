@@ -6,9 +6,9 @@ struct WindozApp: App {
     @StateObject private var library = GameLibrary.shared
 
     init() {
-        // Diagnostic build (2026-10-17): every launch step leaves a breadcrumb
-        // in Documents/windoz-boot.log, and the root gate shows the previous
-        // session's tail before any store code can run.
+        // Launch breadcrumbs stay in the app (they cost nothing): LiveContainer
+        // gives no crash logs for guests, so if a launch crash ever returns,
+        // Documents/windoz-boot.log names the exact step it died on.
         BootTrace.mark("---- session start (app init) ----")
         AppContainer.bootstrap()
         DownloadManager.shared.restore()
@@ -17,29 +17,11 @@ struct WindozApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootGateView()
+            ConsoleRootView()
                 .environmentObject(engine)
                 .environmentObject(library)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
-        }
-    }
-}
-
-/// Diagnostic-build root: the boot gate first — it renders before any store
-/// or engine code runs, so it survives a launch crash and can show the log of
-/// the session that died. Continue swaps in the real console.
-private struct RootGateView: View {
-    @State private var proceed = false
-
-    var body: some View {
-        if proceed {
-            ConsoleRootView()
-        } else {
-            BootGateView(onContinue: {
-                BootTrace.mark("gate: continue tapped")
-                proceed = true
-            })
         }
     }
 }

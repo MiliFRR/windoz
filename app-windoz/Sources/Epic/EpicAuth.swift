@@ -19,6 +19,12 @@
 // API research and used by the community the way Legendary uses the launcher
 // client. Nothing is impersonated: the token belongs to the owner's account.
 //
+// Device-grant client, verified live 2026-10-17: Epic requires the *console*
+// client for /deviceAuthorization — minting that bearer with the launcher
+// client answers "Sorry, your client does not have the proper grant_type for
+// access." (reproduced against the live API; the device screen showed exactly
+// these words). The launcher client stays for the catalog metadata only.
+//
 // Open question for the downloads round: Epic's launcher/CDN endpoints are
 // scoped to the launcher client (they answered 403 to a device-flow session
 // during development), so depot downloads may need a second, launcher-scoped
@@ -163,9 +169,10 @@ enum EpicAuth {
 
     // MARK: - Requests
 
-    /// Step 1+2: get a client token, then ask Epic for a user code.
+    /// Step 1+2: get a client token (console client — the device grant is not
+    /// allowed to the launcher client), then ask Epic for a user code.
     static func requestDeviceAuthorization() async throws -> DeviceAuthorization {
-        let clientToken = try await clientCredentialsToken()
+        let clientToken = try await clientCredentialsToken(client: deviceClient)
         var request = URLRequest(url: URL(string: "https://\(oauthHost)/account/api/oauth/deviceAuthorization")!)
         request.httpMethod = "POST"
         request.setValue("bearer \(clientToken)", forHTTPHeaderField: "Authorization")
@@ -196,10 +203,15 @@ enum EpicAuth {
 
     /// A client-credentials token for the catalog calls (no user context).
     static func clientCredentialsToken() async throws -> String {
+        try await clientCredentialsToken(client: catalogClient)
+    }
+
+    /// A client-credentials token for a specific client.
+    static func clientCredentialsToken(client: (id: String, secret: String)) async throws -> String {
         let token = try await tokenRequest(grant: [
             ("grant_type", "client_credentials"),
             ("token_type", "eg1"),
-        ], client: catalogClient)
+        ], client: client)
         return token.access_token
     }
 

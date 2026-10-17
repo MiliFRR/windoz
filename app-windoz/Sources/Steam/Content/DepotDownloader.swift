@@ -95,13 +95,21 @@ final class DepotDownloader {
         } catch {
             // Device test, 2026-10-17: Foundation 513 ("You don't have
             // permission to save the file … in the folder “common”") on the
-            // first install-folder creation; cause unknown on the device.
-            // Log the exact failure, report the path chain, repair what can be
-            // repaired, then retry once.
+            // first install-folder creation. Repair (rename a broken level out
+            // of the way, rebuild the chain), then retry once; if it still
+            // fails the sheet gets the failing level and raw errno, not a
+            // mystery.
             SteamLog.event("[steam-depot] install dir create failed: \(error.localizedDescription)")
-            _ = PrefixHealth.checkAndRepair(steamApps: steamApps)
-            try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+            let verdict = PrefixHealth.checkAndRepair(steamApps: steamApps)
+            do {
+                try FileManager.default.createDirectory(at: installURL, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: journalDir, withIntermediateDirectories: true)
+            } catch {
+                SteamLog.event("[steam-depot] retry after repair failed: \(error.localizedDescription)")
+                throw NSError(domain: "windoz.steam", code: 513, userInfo: [
+                    NSLocalizedDescriptionKey: "Windows could not write inside the environment. \(verdict)",
+                ])
+            }
         }
 
         var state = SteamDownloadProgress()

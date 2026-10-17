@@ -338,10 +338,24 @@ extension DownloadManager: URLSessionDownloadDelegate {
         do {
             try FileManager.default.moveItem(at: location, to: item.destination)
         } catch {
-            DispatchQueue.main.async {
-                self.setState(id, .failed("the downloaded file could not be saved: \(error.localizedDescription)"))
+            // Device test, 2026-10-17: moving CFNetwork's temp file into the
+            // container answered "you don't have permission". Fall back to a
+            // plain copy through Data (a different code path in the same
+            // sandbox) and log the raw NSError either way.
+            let raw = error as NSError
+            EngineLogStream.shared.append("[downloads] move failed for \(item.destination.lastPathComponent): \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+            do {
+                let data = try Data(contentsOf: location)
+                try data.write(to: item.destination)
+                try? FileManager.default.removeItem(at: location)
+            } catch {
+                let raw = error as NSError
+                EngineLogStream.shared.append("[downloads] copy fallback failed: \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .error)
+                DispatchQueue.main.async {
+                    self.setState(id, .failed("the downloaded file could not be saved: \(error.localizedDescription)"))
+                }
+                return
             }
-            return
         }
 
         DispatchQueue.main.async {

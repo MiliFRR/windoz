@@ -4,8 +4,8 @@
 // The 2026-10-17 Steam+Epic build bounced to the home screen at launch inside
 // LiveContainer, and LiveContainer gives no crash log for guests. This tracer
 // appends one line per launch step to Documents/windoz-boot.log through raw
-// POSIX calls, and BootGateView shows the tail on the next launch before any
-// store or engine code can run. Temporary: removed once the crash is fixed.
+// POSIX calls. It stays in the app — silent unless read — because that single
+// file is the only launch-crash evidence available in this environment.
 //
 // Crash-proof by construction: every call swallows failures, never throws,
 // never force-unwraps, and the file handle is closed on each line so a crash

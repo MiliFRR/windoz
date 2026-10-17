@@ -73,8 +73,8 @@ struct ConsoleRootView: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                 Text(AppEnvironment.isLiveContainer
-                     ? "JIT is off — in LiveContainer turn on Launch with JIT, then StikDebug. Tap to set it up."
-                     : "JIT is off — games can't run yet. Tap to set it up.")
+                     ? "JIT is off — tap to set it up."
+                     : "JIT is off — tap to set it up.")
                     .font(.footnote.weight(.semibold))
                 Spacer()
             }
