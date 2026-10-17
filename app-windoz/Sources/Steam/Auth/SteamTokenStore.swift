@@ -91,6 +91,16 @@ class SteamTokenStore {
         SteamLog.trace("Tokens cleared from Keychain")
     }
 
+    /// Remember the account's SteamID once it has been resolved (older
+    /// sign-ins stored 0; the Web API layer resolves it from the token and
+    /// writes it back here so the next call does not have to).
+    func updateSteamID(_ steamID: UInt64) {
+        guard steamID != 0, var tokens = loadTokens(), tokens.steamID != steamID else { return }
+        tokens.steamID = steamID
+        saveTokens(accountName: tokens.accountName, refreshToken: tokens.refreshToken,
+                   accessToken: tokens.accessToken, steamID: steamID)
+    }
+
     /// Check if we have stored tokens
     var hasTokens: Bool {
         loadTokens() != nil

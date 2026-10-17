@@ -4,6 +4,8 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject private var engine: WindozEngine
     @ObservedObject private var installer = RuntimeInstaller.shared
+    @ObservedObject private var steamStore = StoreRegistry.shared.steam
+    @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
     @AppStorage("windoz.jitMethod") private var jitMethodRaw =
         (AppEnvironment.availableJITMethods.first ?? .stikDebug).rawValue
@@ -13,6 +15,7 @@ struct SettingsView: View {
             ConsoleBackground()
             List {
                 engineSection
+                accountsSection
                 if AppEnvironment.isLiveContainer {
                     liveContainerSection
                 }
@@ -83,6 +86,28 @@ struct SettingsView: View {
         }
     }
 
+    /// Who is signed in, and the way out. Sign-out also stays tucked under
+    /// the ellipsis menus on the store rows; this is the one place that lists
+    /// every session, including Epic's launcher session.
+    private var accountsSection: some View {
+        Section("Accounts") {
+            LabeledContent("Steam", value: accountValue(steamStore.authState))
+            if steamStore.authState.isSignedIn {
+                Button("Sign out of Steam", role: .destructive) { steamStore.signOut() }
+            }
+            LabeledContent("Epic", value: accountValue(epicStore.authState))
+            LabeledContent("Epic launcher session",
+                           value: epicStore.launcherSignedIn
+                               ? (EpicLauncherSignIn.accountName ?? "Connected")
+                               : "Not connected")
+            if epicStore.authState.isSignedIn || epicStore.launcherSignedIn {
+                Button("Sign out of Epic", role: .destructive) { epicStore.signOut() }
+            }
+            Text("Sign-ins live in this device's Keychain — no passwords, only tokens.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private var liveContainerSection: some View {
         Section("LiveContainer") {
             NavigationLink("Setup for LiveContainer") {
@@ -115,6 +140,15 @@ struct SettingsView: View {
             case .unknown: Text("—").foregroundStyle(.secondary)
             case .unavailable(let why): Text("Not active").foregroundStyle(Theme.bad).help(why)
             }
+        }
+    }
+
+    private func accountValue(_ state: StoreAuthState) -> String {
+        switch state {
+        case .signedOut: return "Signed out"
+        case .signingIn(let what): return what
+        case .signedIn(let who): return who
+        case .error(let why): return why
         }
     }
 }

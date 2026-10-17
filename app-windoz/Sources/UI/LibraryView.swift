@@ -109,7 +109,7 @@ struct LibraryView: View {
             StoreRow(summary: summary, registry: registry,
                      extraAction: extraAction(for: summary))
         }
-        Text("Steam signs in natively and installs owned games into the Windows environment. Epic signs in with a device code you approve on Epic's own site — no password ever touches the app. The other stores will run their official launcher in Wine once that is ported; until then they say so.")
+        Text("Steam signs in natively, installs owned games into the Windows environment, and shows each game's achievements and friends on its page. Epic signs in with a device code you approve on Epic's own site — no password ever touches the app — and its library uses the launcher sign-in. The other stores will run their official launcher in Wine once that is ported; until then they say so.")
             .font(.caption2).foregroundStyle(.white.opacity(0.4))
     }
 
@@ -212,8 +212,7 @@ struct StoreRow: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Image(systemName: summary.symbolName)
-                        .foregroundStyle(Theme.accent)
+                    StoreIcon(id: summary.id, size: 30)
                     Text(summary.title).font(.headline).foregroundStyle(.white)
                     Spacer()
                     authBadge
@@ -230,19 +229,38 @@ struct StoreRow: View {
                         Badge(text: "Launcher in Wine", systemImage: "shippingbox", tint: Theme.warn)
                     }
                 }
-                HStack(spacing: 16) {
-                    if summary.capability.signIn != .none {
-                        Button(summary.authState.isSignedIn ? "Sign out" : "Sign in") {
-                            if summary.authState.isSignedIn { registry.signOut(summary.id) }
-                            else { registry.signIn(summary.id) }
+                HStack(spacing: 12) {
+                    if summary.authState.isSignedIn, let extraAction {
+                        // The library action pops: a filled capsule is the
+                        // one thing to do on a connected store.
+                        Button(action: extraAction.handler) {
+                            Label(extraAction.title, systemImage: "books.vertical.fill")
+                                .font(.footnote.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(Capsule().fill(Theme.accent))
+                                .foregroundStyle(.white)
                         }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
                     }
-                    if let extraAction {
-                        Button(extraAction.title, action: extraAction.handler)
+                    if summary.capability.signIn != .none, !summary.authState.isSignedIn {
+                        Button("Sign in") { registry.signIn(summary.id) }
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(Theme.accent)
+                    }
+                    Spacer()
+                    if summary.authState.isSignedIn {
+                        // Sign-out lives one level down, under the ellipsis:
+                        // easy to find when wanted, out of the way otherwise.
+                        Menu {
+                            Button("Sign out of \(summary.title)", role: .destructive) {
+                                registry.signOut(summary.id)
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(.white.opacity(0.6))
+                        .accessibilityLabel("\(summary.title) account actions")
                     }
                 }
             }

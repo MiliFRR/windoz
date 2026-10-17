@@ -15,6 +15,13 @@
 #import "../../../madeira/app/Madeira/PadOutput.h"
 #import "JITProbe.h"
 
+// The presented-frame counter exported by DXMT's unix side (the pinned engine
+// trees declare it the same way). The session overlay reads it to tell
+// "waiting for the first frame" from "rendering", so the status line never
+// claims a game is drawing before it has.
+#include <stdint.h>
+uint64_t madeira_get_present_count(void);
+
 // The Steam depot downloader's C helpers (chunked-zip framing, an LZMA
 // decoder shim and an educational zstd decoder), ported with the SwiftSteam
 // client from Madeira (GPL-3.0-or-later + Madeira Converter Exception).

@@ -21,8 +21,8 @@ what it is.
 | JIT probe + StikDebug deep link | ✅ | `JITManager`; re-checked every launch |
 | Bundled JIT helper extension | ⛔ | no helper target yet, so the UI offers StikDebug only (the bundle is checked, not assumed) |
 | Memory-entitlement report | ✅ | honest "not active" when the signing lacks it |
-| **Game session host** (JIT pool, CAMetalLayer, input) | ⛔ | `launch` throws `sessionHostingNotImplemented` after a real preflight |
-| Per-game settings → engine | 🟡 | stored and validated; applied by the (unported) session host |
+| **Game session host** (presentation, input, the guest process) | 🟡 | ported in 0.3.4: `launch` waits for the presenting layer, then starts wineserver → FEX → `wine_process_start`; the session ends on the guest process's exit. Device verification pending. Limits: one session per app run, single primary touch (aspect-fit 1:1) + hardware keyboard + a fixed on-screen key row |
+| Per-game settings → engine | 🟡 | the launch environment (arguments, working folder, screen scale, custom switches) is applied; frame cap / sync / MetalFX / backend choice are stored, **not applied yet** — the log says so per session |
 | Native D3D12 path | 🟡 | experimental in the engine; selectable per game, not yet applied |
 
 See `docs/ENGINE.md` for the boundary and the D3D12 detail.
@@ -33,9 +33,9 @@ See `docs/ENGINE.md` for the boundary and the D3D12 detail.
 |---|---|---|
 | Local games ("Add local game") | ✅ | import from Files; anti-cheat scan; runs into the library |
 | GOG | 🟡 | DRM-free: import the installed files; no Galaxy client needed |
-| Steam | 🟡 | native sign-in (Guard code / in-app approval / QR), owned library, depot downloads with journaled resume + per-chunk SHA-1 verify — implemented and typecheck-green; first device verification pending. Launching the games needs the session host |
-| Epic | 🟡 | device-code sign-in (approved on Epic's own site) + owned library with real art — implemented; first device verification pending. Chunked downloads are the next piece |
-| Rockstar, EA | ⛔ | official launcher in Wine; needs the session host |
+| Steam | 🟡 | native sign-in (Guard code / in-app approval / QR), owned library, depot downloads with journaled resume + per-chunk SHA-1 verify; installing adds the game to My games, where the session host (0.3.4) can start it. The game page reads achievements and friends from Steam (sign-in for the account's data, public profiles for the ownership scan). Device verification of install + launch pending |
+| Epic | 🟡 | device-code sign-in (approved on Epic's own site) plus the launcher-scoped sign-in its library service requires, owned library with real art; chunked downloads are the next piece |
+| Rockstar, EA, GOG | ⛔ | official launcher in Wine; needs the launcher pipeline (the session host exists in 0.3.4; the pipeline that installs and wraps a launcher does not) |
 
 Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 
@@ -57,10 +57,10 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 |---|---|
 | Console shell (Home / Library / Downloads / Settings) | ✅ |
 | Cover carousel, Continue Playing, Recently Added | ✅ |
-| Game page (hero, Play, playtime, compatibility, anti-cheat badge) | ✅ |
+| Game page (hero, Play, tabs: Overview / Achievements / Friends, gear settings sheet) | ✅ |
 | First-run setup wizard (JIT, memory, storage, runtimes) | ✅ |
 | Controller navigation + focus model | ✅ |
-| Touch-overlay editor (per-game, saveable) | ✅ layout editing; renders in-session once the host is ported |
+| Touch-overlay editor (per-game, saveable) | 🟡 layout editing works; the 0.3.4 session overlay shows a fixed key row, so these controls are not drawn in-session yet |
 | 120 Hz / Dynamic Type / VoiceOver / Reduce Motion | 🟡 honoured where applicable |
 | Liquid Glass (`glassEffect`) | ⛔ v1 uses `.ultraThinMaterial` to keep the build safe |
 
@@ -76,16 +76,16 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 
 ## Next, in order
 
-1. **Port the session host** (JIT pool + Metal presentation + input routing)
-   behind `WindozEngine`, so `launch` runs a game instead of throwing. Then the
-   per-game settings actually take effect.
-2. **Widget extension** for the Live Activity / Dynamic Island rendering.
-3. **Verify the Steam client on device** — sign-in, the owned library and
-   depot downloads are implemented (see the README ledger); the next device
-   run is what confirms them. Then keep hardening it.
-4. **Epic chunked downloads** (sign-in and the owned library are implemented;
-   the next device run confirms them); launcher-in-Wine for the stores
-   without a usable API.
+1. **Device-verify 0.3.4** — the session host (install a game, press Play,
+   watch frames arrive), the Epic launcher session (library loads), and the
+   Steam achievements/friends tabs. The next device run is what confirms them.
+2. **Epic chunked downloads** (sign-in, both authorizations and the owned
+   library are in); then the launcher-in-Wine pipeline for GOG, Rockstar and
+   EA.
+3. **Widget extension** for the Live Activity / Dynamic Island rendering.
+4. **Apply the stored graphics settings** — frame cap, sync mode, MetalFX —
+   through the engine's in-process API; draw the per-game touch layout into the
+   session overlay; gamepad + software keyboard.
 5. **Online / networking** work inside Wine (DNS, TLS, store auth) — tested on a
    real device before any claim is made.
 

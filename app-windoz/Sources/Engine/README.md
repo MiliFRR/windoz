@@ -9,8 +9,8 @@ types in `EngineTypes.swift` — never a Wine, FEX or DXMT symbol.
 
 | File | Role |
 |---|---|
-| `WindozEngine.swift` | the boundary: health, prefix, engine core, launch, stop |
-| `EngineTypes.swift` | `EngineStatus`, `EngineHealth`, `SessionPhase`, `GameSettings`, `InstalledGame`, `EngineError` |
+| `WindozEngine.swift` | the boundary: health, prefix, engine core, session launch/poll/end, stop |
+| `EngineTypes.swift` | `EngineStatus`, `EngineHealth`, `SessionPhase`, `SessionOutcome`, `GameSettings`, `InstalledGame`, `EngineError` |
 | `PrefixManager.swift` | the Wine prefix (`Documents/windoz-prefix`) and host ↔ guest path mapping |
 | `GameLibrary.swift` | the installed games, their settings and playtime |
 | `JITManager.swift` | JIT probing, the StikDebug deep link, memory and signing facts |
@@ -40,8 +40,10 @@ any other app.
 
 Every method here either does what it says or throws an `EngineError` naming the
 missing piece. `launch` runs a real preflight (JIT, prefix, executable, guest
-environment) and then throws `.sessionHostingNotImplemented`, because hosting a
-game session — the JIT pool, the Metal presentation layer and input routing — is
-the part that has not been ported. `docs/ENGINE.md` lists what is wired and what
-is not, with sources, and `docs/ROADMAP.md` keeps the same status for the whole
-app.
+environment), waits for the session screen's presenting layer, and then starts
+the engine core and the guest process; the session ends on the guest process's
+own exit, and every failure names the exact step. The honest limits — one
+session per app run, single-touch plus hardware-keyboard input, graphics
+switches that are stored but not applied — are in `docs/ENGINE.md`, which lists
+what is wired and what is not, with sources; `docs/ROADMAP.md` keeps the same
+status for the whole app.

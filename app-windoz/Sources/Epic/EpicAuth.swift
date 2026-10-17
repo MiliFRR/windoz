@@ -215,6 +215,25 @@ enum EpicAuth {
         ], client: deviceClient)
     }
 
+    /// Exchange a launcher authorization code for a session (the web code
+    /// flow in EpicLauncherAuth.swift; launcher client).
+    static func authorizationCodeToken(code: String) async throws -> Token {
+        try await tokenRequest(grant: [
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("token_type", "eg1"),
+        ], client: catalogClient)
+    }
+
+    /// Refresh a launcher-scoped session with the stored refresh token.
+    static func refreshLauncher(refreshToken: String) async throws -> Token {
+        try await tokenRequest(grant: [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refreshToken),
+            ("token_type", "eg1"),
+        ], client: catalogClient)
+    }
+
     /// A client-credentials token for the catalog calls (no user context).
     static func clientCredentialsToken() async throws -> String {
         try await clientCredentialsToken(client: catalogClient)

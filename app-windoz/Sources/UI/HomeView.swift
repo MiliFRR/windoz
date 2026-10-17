@@ -135,7 +135,7 @@ struct HomeView: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
                 Text("No games yet").font(.headline).foregroundStyle(.white)
-                Text("Add a game from Files, or connect a store in the Stores tab. DRM-free games run best.")
+                Text("Add a game from Files, or connect a store in the Library tab. DRM-free games run best.")
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
             }
         }

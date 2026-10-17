@@ -9,14 +9,31 @@ import Foundation
 /// point maps to.
 ///
 /// Honesty contract: every method either does the thing it says, or throws an
-/// `EngineError` that names the exact missing piece. Nothing here pretends to
-/// run a game when the session host has not been ported yet.
+/// `EngineError` that names the exact missing piece. The session host (the
+/// presenting layer, input routing, the guest process) talks to the C glue
+/// below through this file only — nothing above it sees an engine symbol.
 final class WindozEngine: ObservableObject {
     static let shared = WindozEngine()
 
     @Published private(set) var status = EngineStatus()
     @Published private(set) var phase: SessionPhase = .idle
     @Published private(set) var currentGameID: UUID?
+
+    /// The game the session screen (rendering + input host) is presenting.
+    /// Set right before `.starting`, cleared when the session ends — which is
+    /// also what dismisses the session screen.
+    @Published private(set) var sessionGame: InstalledGame?
+    /// Frames the guest has presented *this session*, read from the engine's
+    /// own counter. 0 means "the game has not drawn yet".
+    @Published private(set) var sessionFrames: UInt64 = 0
+    /// One plain-language line for the in-session overlay.
+    @Published private(set) var sessionDetail = ""
+    /// The story of the last finished session, for the game page.
+    @Published private(set) var lastSessionOutcome: SessionOutcome?
+    /// Wine can host one session per app run here (its service process keeps
+    /// the first session's registry state). After the first session, launching
+    /// asks for a restart instead of pretending a second one works.
+    @Published private(set) var sessionsThisRun = 0
 
     let log = EngineLogStream.shared
     private(set) var prefix: PrefixManager
@@ -28,6 +45,16 @@ final class WindozEngine: ObservableObject {
     private let probes = DispatchQueue(label: "windoz.probes", qos: .userInitiated)
     private var sessionStart: Date?
     private var callbacksInstalled = false
+
+    /// The surface handshake: the session screen registers its CAMetalLayer
+    /// with the engine's display shim and then calls `sessionSurfaceReady()`.
+    /// The launch waits for that flag, because the engine's shim resolves the
+    /// layer once per process and presenting must not start before it exists.
+    private let surfaceLock = NSLock()
+    private var sessionSurfaceReadyFlag = false
+    private var sessionTimer: Timer?
+    private var sawWineProcess = false
+    private var sessionBaselineFrames: UInt64 = 0
 
     init(prefix: PrefixManager = PrefixManager(base: AppContainer.documents)) {
         self.prefix = prefix
@@ -90,6 +117,30 @@ final class WindozEngine: ObservableObject {
 
     var isSessionActive: Bool { phase.isActive }
 
+    /// Called by the session screen once the presenting CAMetalLayer is on the
+    /// window and registered with the engine's display shim. The launch below
+    /// waits for this; nothing here invents an ordering of its own.
+    func sessionSurfaceReady() {
+        surfaceLock.lock()
+        sessionSurfaceReadyFlag = true
+        surfaceLock.unlock()
+        log.append("[session] presentation surface is up.")
+    }
+
+    private var sessionSurfaceIsReady: Bool {
+        surfaceLock.lock(); defer { surfaceLock.unlock() }
+        return sessionSurfaceReadyFlag
+    }
+
+    private func resetSessionSurface() {
+        surfaceLock.lock(); sessionSurfaceReadyFlag = false; surfaceLock.unlock()
+    }
+
+    /// The line the in-session overlay shows, updated by the session poll.
+    var sessionHUDLine: String {
+        sessionDetail.isEmpty ? "Starting the game…" : sessionDetail
+    }
+
     // MARK: - Prefix
 
     var prefixIsReady: Bool { prefix.exists }
@@ -117,6 +168,8 @@ final class WindozEngine: ObservableObject {
     /// translator) without a game. This is the part that is fully wired and is
     /// what the diagnostics screen exercises on device.
     func startEngineCore() async throws {
+        guard !phase.isActive, sessionGame == nil else { throw EngineError.sessionAlreadyRunning }
+        guard sessionsThisRun == 0 else { throw EngineError.sessionAlreadyRanThisRun }
         try prefix.createIfNeeded()
 
         let ready = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
@@ -149,14 +202,13 @@ final class WindozEngine: ObservableObject {
 
     // MARK: - Launch
 
-    /// Preflight + launch. The preflight is real and complete: it checks JIT,
-    /// the prefix and the executable, then writes the guest environment the
-    /// engine's forks read. Starting the *session host* (the JIT pool, the Metal
-    /// presentation layer and input routing) is the remaining port, so this
-    /// currently throws `.sessionHostingNotImplemented` with a clear message
-    /// rather than pretending to play the game.
+    /// Preflight + launch, for real: JIT, prefix, executable, the guest
+    /// environment, then the session screen (which registers the presenting
+    /// Metal layer), then the engine core and the guest process thread. The
+    /// session ends when the guest process does — `pollSession` watches for it.
     func launch(_ game: InstalledGame) async throws {
-        guard !phase.isActive else { throw EngineError.sessionAlreadyRunning }
+        guard !phase.isActive, sessionGame == nil else { throw EngineError.sessionAlreadyRunning }
+        guard sessionsThisRun == 0 else { throw EngineError.sessionAlreadyRanThisRun }
 
         // 1. JIT — re-checked on every launch, as required.
         guard JITManager.probeEnabled() else {
@@ -175,14 +227,109 @@ final class WindozEngine: ObservableObject {
         applyLaunchEnvironment(for: game)
         log.append("[launch] preflight passed for \(game.title)")
 
-        phase = .starting
+        // 5. Hand the game to the session screen. It registers the presenting
+        //    CAMetalLayer and calls sessionSurfaceReady(); the launch waits for
+        //    that below. The ordering is the engine's requirement: its display
+        //    shim resolves the layer once per process, and the guest's first
+        //    swapchain must find it already registered.
+        resetSessionSurface()
+        sessionFrames = 0
+        sessionDetail = "Preparing the session…"
         currentGameID = game.id
         sessionStart = Date()
+        sessionBaselineFrames = madeira_get_present_count()
         GameLibrary.shared.markPlayed(id: game.id)
+        phase = .starting
+        sessionGame = game
+        log.append("[session] session screen requested.")
 
-        // 5. Session host (JIT pool + CAMetalLayer + input) — not ported yet.
-        phase = .failed(EngineError.sessionHostingNotImplemented.localizedDescription)
-        throw EngineError.sessionHostingNotImplemented
+        let deadline = Date().addingTimeInterval(30)
+        while !sessionSurfaceIsReady {
+            if Task.isCancelled {
+                cancelStartingSession()
+                throw EngineError.sessionCancelled
+            }
+            if Date() >= deadline {
+                cancelStartingSession()
+                throw EngineError.sessionSurfaceTimeout
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        // 6. Start the engine core and the guest process on the engine queue:
+        //    those calls block (one of them waits up to 60 s for the service
+        //    process), so they stay off the main thread.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    try self.startGuestProcess()
+                    DispatchQueue.main.async {
+                        self.sessionsThisRun += 1
+                        self.sawWineProcess = false
+                        self.phase = .running
+                        self.sessionDetail = "Starting the game…"
+                        self.startSessionPolling()
+                        self.log.append("[session] guest process started.")
+                    }
+                    continuation.resume()
+                } catch {
+                    DispatchQueue.main.async { self.failStartingSession(error) }
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Runs on the engine queue. Brings the Wine service process and the CPU
+    /// translator up if they are not already, resets the engine's exit report,
+    /// then starts the guest process thread.
+    private func startGuestProcess() throws {
+        if wineserver_is_running() == 0 {
+            guard wineserver_start(prefix.url.path) == 0 else { throw EngineError.wineserverStartFailed }
+            let deadline = Date().addingTimeInterval(60)
+            while wineserver_is_ready() != 1 {
+                if Date() >= deadline { throw EngineError.wineserverNotReady }
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            log.append("Wine service process ready.", level: .success)
+        }
+        guard fex_initialize() else { throw EngineError.fexInitFailed }
+        // The engine reports the exit of the process Windoz hands it through
+        // wine_launched_process_did_exit → wine_crash_exit_status; forget the
+        // previous session's report first.
+        wine_exit_status_reset()
+        guard wine_process_start(prefix.url.path) == 0 else { throw EngineError.wineProcessStartFailed }
+    }
+
+    /// The launch failed before the guest process started: take the session
+    /// screen down and leave the message where the game page shows it.
+    private func failStartingSession(_ error: Error) {
+        sessionTimer?.invalidate(); sessionTimer = nil
+        let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
+        phase = .failed(message)
+        sessionGame = nil
+        sessionDetail = ""
+        currentGameID = nil
+        sessionStart = nil
+        log.append("[session] \(message)", level: .error)
+    }
+
+    /// The session screen went away mid-launch and the launch was cancelled.
+    /// If the guest process had already made it out, it keeps running (only an
+    /// app restart ends it) — so the session is detached, honestly, rather
+    /// than abandoned silently.
+    private func cancelStartingSession() {
+        sessionTimer?.invalidate(); sessionTimer = nil
+        if wineserver_is_running() != 0 && wine_process_is_running() != 0 {
+            detachSession(reason: "The launch screen closed after the game process had already started.")
+        } else {
+            phase = .idle
+            sessionGame = nil
+            sessionDetail = ""
+            currentGameID = nil
+            sessionStart = nil
+            log.append("[session] launch cancelled before the process started.")
+        }
     }
 
     /// The engine's virtual monitor default before `MADEIRA_SCREEN_W/H` is
@@ -195,8 +342,8 @@ final class WindozEngine: ObservableObject {
     /// `docs/ENGINE.md` for the list and its sources). Settings the engine
     /// applies through its own in-process API — the frame cap, the present/sync
     /// mode, the D3D11/D3D12 choice and MetalFX — have no environment variable,
-    /// so they are reported here rather than faked; the (unported) session host
-    /// is what applies them. Nothing is invented.
+    /// and this build's session host does **not** call that API yet, so they are
+    /// stored and reported here rather than faked. Nothing is invented.
     private func applyLaunchEnvironment(for game: InstalledGame) {
         let settings = game.settings
 
@@ -236,11 +383,12 @@ final class WindozEngine: ObservableObject {
             setenv(key, value, 1)
         }
 
-        // Applied by the engine's in-process API, not the environment. Reported
-        // so the log says what this session was configured to do.
+        // Reported, with the truth about where they stand: these have no env
+        // switch, and this build's session host does not call the engine's
+        // in-process API for them yet.
         log.append("[launch] frame cap \(settings.fpsCap > 0 ? "\(settings.fpsCap) FPS" : "uncapped"), "
                    + "sync \(settings.syncMode.title), MetalFX \(settings.metalFXUpscaling ? "on" : "off") "
-                   + "— applied by the session host, not env")
+                   + "— stored, not applied yet (no engine call for them in this build)")
         log.append("[launch] guest env prepared (exe=\(guestExe), backend=\(settings.graphicsBackend.title))")
     }
 
@@ -285,25 +433,132 @@ final class WindozEngine: ObservableObject {
                 "windoz:\(String(format: "%.2f", clamped))")
     }
 
+    // MARK: - Session end
+
+    /// Watch the guest process from the main thread. `wine_process_is_running`
+    /// drops when the engine's process thread is done; that thread also stops
+    /// the service process at its end, so both at zero is the honest
+    /// end-of-session signal.
+    private func startSessionPolling() {
+        sessionTimer?.invalidate()
+        sawWineProcess = false
+        sessionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.pollSession()
+        }
+        sessionTimer?.tolerance = 0.15
+    }
+
+    private func pollSession() {
+        guard sessionGame != nil || phase.isActive else {
+            sessionTimer?.invalidate(); sessionTimer = nil
+            return
+        }
+        let raw = madeira_get_present_count()
+        sessionFrames = raw >= sessionBaselineFrames ? raw - sessionBaselineFrames : raw
+        if wine_process_is_running() != 0 {
+            sawWineProcess = true
+            sessionDetail = sessionFrames > 0
+                ? "Rendering — \(sessionFrames) frame\(sessionFrames == 1 ? "" : "s") presented."
+                : "The game is starting (no frame yet)."
+        } else if sawWineProcess && wineserver_is_running() == 0 {
+            finishSession()
+        } else if !sawWineProcess, let start = sessionStart,
+                  Date().timeIntervalSince(start) > 90, wineserver_is_running() == 0 {
+            finishSession(early: true)
+        }
+    }
+
+    /// The single end-of-session path: playtime is recorded once, the engine's
+    /// exit report is read, the session screen is dismissed and the story is
+    /// kept for the game page.
+    private func finishSession(early: Bool = false) {
+        sessionTimer?.invalidate(); sessionTimer = nil
+        var status: UInt32 = 0
+        let crashed = wine_crash_exit_status(&status) == 1
+        let title = sessionGame?.title ?? "The game"
+        let seconds = sessionStart.map { Date().timeIntervalSince($0) } ?? 0
+        if let id = currentGameID {
+            GameLibrary.shared.addPlaytime(id: id, seconds: seconds)
+        }
+
+        let body: String
+        if crashed {
+            body = "\(title) ended with an error (status 0x\(String(status, radix: 16, uppercase: true))). The engine log has the details."
+        } else if early {
+            body = "\(title) stopped before its first frame — the engine log names what happened."
+        } else {
+            body = "\(title) has exited."
+        }
+        let message = body + " Wine can start only one game per app run — close Windoz from the app switcher and open it again to play another game."
+        lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: crashed,
+                                            status: status, seconds: seconds, message: message)
+        log.append("[session] \(message)")
+        sessionGame = nil
+        sessionDetail = ""
+        currentGameID = nil
+        sessionStart = nil
+        phase = .idle
+    }
+
+    /// Ask the game to close (Alt+F4). The guest's own save-and-exit path
+    /// runs; the session ends when its process does.
+    func requestQuit() {
+        guard sessionGame != nil || phase.isActive else { return }
+        phase = .stopping
+        sessionDetail = "Close requested — the game should save and exit."
+        winios_post_key(0x12, 1)                 // Alt down
+        winios_post_key(0x73, 1)                 // F4 down
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            winios_post_key(0x73, 0)
+            winios_post_key(0x12, 0)
+        }
+        log.append("[session] close requested (Alt+F4).")
+    }
+
+    /// Leave the session from Windoz's side. Honest about the rest: Wine's
+    /// service process keeps running until the app ends, and the one-session
+    /// per run rule stands. Never calls `wineserver_stop()` here — the guest
+    /// thread owns that call at its end, and joining the service thread twice
+    /// is not safe.
+    func detachSession(reason: String? = nil) {
+        guard sessionGame != nil || phase.isActive else { return }
+        sessionTimer?.invalidate(); sessionTimer = nil
+        let title = sessionGame?.title ?? "The game"
+        let seconds = sessionStart.map { Date().timeIntervalSince($0) } ?? 0
+        if let id = currentGameID {
+            GameLibrary.shared.addPlaytime(id: id, seconds: seconds)
+        }
+        let message = (reason.map { $0 + " " } ?? "")
+            + "Windoz left the session screen. If \(title) is still running it ends when Windoz does — Wine can host one session per app run here."
+        lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: false,
+                                            status: 0, seconds: seconds, message: message)
+        log.append("[session] \(message)")
+        sessionGame = nil
+        sessionDetail = ""
+        currentGameID = nil
+        sessionStart = nil
+        phase = .idle
+    }
+
     // MARK: - Stop
 
+    /// Stop what the app is doing. A live game session is asked to close and
+    /// then detached (see `detachSession`); the guest thread stops the service
+    /// process itself. Before any session, this shuts the core services down.
     func stop() {
-        guard phase.isActive else { return }
-        phase = .stopping
-        let started = sessionStart
-        queue.async { [weak self] in
+        if sessionGame != nil || phase.isActive {
+            requestQuit()
+            detachSession(reason: "Stop was pressed.")
+            return
+        }
+        guard sessionsThisRun == 0 else {
+            log.append("Nothing to stop: the Wine service process is owned by the session that already ran.")
+            return
+        }
+        queue.async {
             fex_shutdown()
             wineserver_stop()
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let started, let id = self.currentGameID {
-                    GameLibrary.shared.addPlaytime(id: id, seconds: Date().timeIntervalSince(started))
-                }
-                self.sessionStart = nil
-                self.currentGameID = nil
-                self.phase = .idle
-                self.log.append("Session stopped.")
-            }
         }
+        log.append("Engine core stopped.")
     }
 }

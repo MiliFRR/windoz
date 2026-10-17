@@ -39,6 +39,59 @@ struct CoverArtView: View {
     }
 }
 
+/// A store's icon: a rounded monogram tile drawn in code — letters and
+/// gradients only, no vendor asset files anywhere. The letter is the store's
+/// own initial(s); the colours are Windoz's.
+struct StoreIcon: View {
+    let id: StoreID
+    var size: CGFloat = 44
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                .fill(LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing))
+            Text(monogram)
+                .font(.system(size: size * (monogram.count > 1 ? 0.34 : 0.44),
+                              weight: .heavy, design: .rounded))
+                .foregroundStyle(.white.opacity(0.92))
+                .shadow(radius: 2)
+        }
+        .frame(width: size, height: size)
+        .overlay(
+            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                .strokeBorder(.white.opacity(0.12)))
+        .accessibilityLabel(id.title)
+    }
+
+    private var monogram: String {
+        switch id {
+        case .local: return "L"
+        case .steam: return "S"
+        case .epic: return "E"
+        case .gog: return "G"
+        case .rockstar: return "R"
+        case .ea: return "EA"
+        }
+    }
+
+    private var palette: [Color] {
+        switch id {
+        case .local:
+            return [Color(red: 0.32, green: 0.36, blue: 0.44), Color(red: 0.16, green: 0.18, blue: 0.24)]
+        case .steam:
+            return [Color(red: 0.16, green: 0.36, blue: 0.58), Color(red: 0.05, green: 0.12, blue: 0.24)]
+        case .epic:
+            return [Color(red: 0.22, green: 0.22, blue: 0.25), Color(red: 0.05, green: 0.05, blue: 0.07)]
+        case .gog:
+            return [Color(red: 0.45, green: 0.28, blue: 0.72), Color(red: 0.18, green: 0.09, blue: 0.34)]
+        case .rockstar:
+            return [Color(red: 0.85, green: 0.55, blue: 0.15), Color(red: 0.38, green: 0.20, blue: 0.05)]
+        case .ea:
+            return [Color(red: 0.78, green: 0.18, blue: 0.22), Color(red: 0.32, green: 0.05, blue: 0.08)]
+        }
+    }
+}
+
 /// A small capsule badge (store, anti-cheat, compatibility).
 struct Badge: View {
     let text: String

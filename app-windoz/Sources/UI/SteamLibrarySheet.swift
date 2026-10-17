@@ -54,7 +54,7 @@ struct SteamLibrarySheet: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Image(systemName: "gamecontroller").foregroundStyle(Theme.accent)
+                    StoreIcon(id: .steam, size: 30)
                     Text("Steam").font(.headline).foregroundStyle(.white)
                     Spacer()
                     switch store.authState {
@@ -83,18 +83,24 @@ struct SteamLibrarySheet: View {
                             Text("Updated \(Self.relative.localizedString(for: updated, relativeTo: Date()))")
                                 .font(.caption2).foregroundStyle(.white.opacity(0.4))
                         }
+                        Spacer()
+                        // Sign-out is one level down, under the ellipsis.
+                        Menu {
+                            Button("Sign out of Steam", role: .destructive) { store.signOut() }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityLabel("Steam account actions")
                     }
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.accent)
-                    Button("Sign out") { store.signOut() }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.warn)
                 } else {
                     Button("Sign in to Steam") { store.showingSignIn = true }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.accent)
                 }
-                Text("Downloads go to C:\\Program Files (x86)\\Steam\\steamapps inside Windoz's Windows prefix — the same layout Valve's client writes. Starting the games themselves needs the game-session host; downloads, updates and verification work now.")
+                Text("Downloads go to C:\\Program Files (x86)\\Steam\\steamapps inside Windoz's Windows prefix — the same layout Valve's client writes. Installing also adds the game to My games, and starting it there runs it through the game session. Downloads, updates and verification work now.")
                     .font(.caption2).foregroundStyle(.white.opacity(0.4))
             }
         }

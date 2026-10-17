@@ -17,25 +17,30 @@ IPA" — and uploaded a ~70 MB unsigned `windoz.ipa` (`windoz-unsigned-ipa`
 artifact, 14-day retention; download it from that run's page). Even with a
 cold LLVM cache the run took under 50 minutes.
 
-An unsigned IPA that **builds** is the claim — no more. Running it on a device
-(sideload, JIT, launching anything) is not proven here yet, and hosting a full
-game session (rendering + input) is the remaining engine port; Play reports
-that honestly. The run-by-run ledger, including what the first restored-repo
+An unsigned IPA that **builds** is the claim — no more. Everything past that
+(sideloading, JIT, rendering a live game session, store data) is stated
+per-item in the ledger below, and every claim says which build and which run
+it rests on. The run-by-run record, including what the first restored-repo
 runs and the new typecheck gate caught, is in **Known issues** below.
 
-**On-device status (LiveContainer, 2026-10-17):** the launch-crash fix was
-confirmed by the owner — the app opens. **Steam is now a real client, not a
-stub:** sign-in (password + Steam Guard, or a QR code), the account's owned
-library, and headless depot downloads into the prefix in Valve's own
-`steamapps` layout, with journaled resume and per-chunk SHA-1 verification
-(`Sources/Steam/`, wired in `Sources/Stores/SteamStore.swift`). Device
-verification of the download path is pending the owner's first run; starting
-Steam games still needs the session host. **Epic is real too, up to the
-library:** sign-in is a device code approved on Epic's own website — no
-password is ever typed into the app — and the owned library lists with real
-art (`Sources/Epic/`, wired in `Sources/Stores/EpicStore.swift`); Epic's
-chunked downloads are the next piece and the UI says so. The remaining stores
-stay honest stubs.
+**On-device status (LiveContainer, 2026-10-17 — build 0.3.3):** the app
+launches, JIT and increased-memory report Ready, Steam signs in natively with
+the full owned library rendering real art, and Epic's sign-in survives a
+restart. Two device findings drove the next round: the **Epic owned-library
+call was refused (HTTP 403)** with the device-flow session — the service is
+scoped to Epic's launcher client — and every store page still said launching
+"needs the session host". **Build 0.3.4 carries the missing half of both:**
+the game session host is ported (presentation, input, the guest process — see
+the ledger), so a game in the library can actually be started and played;
+Epic gains the launcher-scoped sign-in its library demands; the Steam game
+page reads achievements and friends; and the Stores UI was rebuilt (in-code
+store icons, sign-out tucked into Settings → Accounts and per-store ellipsis
+menus). Everything in 0.3.4 is **device-verification pending**, and two open
+device matters will touch the same run: this LiveContainer container has
+refused writes at policy level since 0.3.2 (every location, `EPERM` — see the
+ledger), which gates importing or installing the game a session would run,
+and 0.3.3's launch-time write-audit was built to name any writable location —
+its device result has not been reported yet.
 
 ## app-windoz — the current app
 
@@ -54,14 +59,16 @@ is reused from the pinned `madeira` submodule behind one boundary,
   iPhone (Sideloadly / SideStore / LiveContainer), JIT via StikDebug, and the
   free-Apple-ID realities.
 - [`docs/DOZDOCK.md`](docs/DOZDOCK.md) — what Doz Dock is, what exists today
-  (the download engine; Steam as a real native client; Epic and the launcher
-  stores as honest stubs), and the rules it will keep (no DRM circumvention,
-  no fake clients).
+  (the download engine; Steam as a real native client; Epic real up to the
+  library with its launcher-scoped sign-in; the launcher stores as honest
+  stubs), and the rules it will keep (no DRM circumvention, no fake clients).
 
-The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection and
-downloads are real and testable today. **Hosting a full game session (rendering +
-input) is the remaining engine port**; until it lands, Play runs a real preflight
-and then reports that honestly instead of pretending to play.
+The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection,
+downloads, the game session that runs a game (**ported in 0.3.4** —
+presentation, input and the guest process behind `WindozEngine.launch`), and
+the Steam/Epic clients are real and testable today. Device verification of the
+newest layers is pending; the ledger says exactly which claim rests on which
+run.
 
 ## Decisions (recorded 2026-10-15)
 
@@ -122,30 +129,37 @@ are public as of 2026-10-14). The pipeline:
   LLVM cache and uploaded the ~70 MB unsigned `windoz.ipa`
   (`Payload/Windoz.app`). The LLVM cache is saved across runs, so later builds
   skip the ~25 min LLVM compile.
-- [ ] **Phase 1 — Runtime.** Launch a simple 64-bit game from a local
-  folder; Settings shows JIT + Memory+ status; launch blocked with a clear
-  message when not ready.
-- [ ] **Phase 2 — UI shell.** Console-style Library with mock data: cover-art
-  carousel, focus/selection animation, ambient blur, dark theme.
-  **In progress — Phase 2 step 1 shipped:** the app now roots into a windoz
-  console home (dark theme, cover carousel with focus animation, "OPEN
-  CONSOLE" entry into the full engine/library). Delivered as a build-time
-  override (`overrides/app/Madeira/MadeiraApp.swift`) so no Xcode project
-  surgery is needed; display name is `windoz`. Next: real library data in
-  the carousel, app icon, ambient blur from selected art.
-- [ ] **Phase 3 — Steam (code complete; device verification pending).** Login
-  (password + Steam Guard, QR), owned library with cover art, and headless
-  depot downloads — the SwiftSteam port in `app-windoz/Sources/Steam/`, wired
-  by `SteamStore.swift`. Awaiting the owner's first on-device run before this
-  is called done; see the ledger.
+- [ ] **Phase 1 — Runtime (session host ported in 0.3.4; device verification
+  pending).** Launch a game from the library: `WindozEngine.launch` runs a
+  real preflight, starts the guest process and presents it; Settings shows
+  JIT + Memory+ status; launch is blocked with a clear message when not
+  ready. Honest limits (one session per app run, single-touch + keyboard
+  input, graphics switches stored but not applied) are in the ledger.
+- [ ] **Phase 2 — UI shell (in progress).** Console-style home with a
+  cover-art carousel, focus/selection animation and a dark theme; the Library
+  tab lists real games with a stores section and a count badge; the game page
+  has Overview / Achievements / Friends tabs and a settings sheet. The app is
+  its own XcodeGen project since the 2026-10-16 rewrite (`app-windoz/`) — the
+  old Phase-0 `overrides/` shell is no longer how windoz ships. Next: app
+  icon, ambient blur from the selected art.
+- [ ] **Phase 3 — Steam (sign-in and owned library verified on device; depot
+  downloads pending).** Login (password + Steam Guard, QR) and the owned
+  library with real art are confirmed on the owner's phone (2026-10-17).
+  Depot downloads — the SwiftSteam port in `app-windoz/Sources/Steam/`, wired
+  by `SteamStore.swift` — are code-complete but have not had a first device
+  install: the container's write refusal on this LiveContainer install (see
+  the ledger) still gates it. 0.3.4 adds the game page's achievements and
+  friends (Steam Web API with a community-XML fallback).
 - [ ] **Phase 4 — Downloads (Steam side mostly done; generic pipeline still
   open).** Depot downloads are resumable (journals) and verify every chunk
   against its SHA-1; the generic engine keeps its queue/verify rules for
   runtime files. BGContinuedProcessingTask + Live Activity for depot
   downloads and pause-from-UI are still open.
 - [ ] **Phase 5 — Doz Dock.** Madeira Dock ported/renamed/improved; official
-  Steam-DRM games launch through Valve's own client running in Wine
-  (design and honest state: [`docs/DOZDOCK.md`](docs/DOZDOCK.md)).
+  Steam-DRM games launch through Valve's own client running in Wine. The
+  session host a launcher needs landed in 0.3.4; the pipeline that installs
+  and wraps a launcher is the next piece (design and honest state:
+  [`docs/DOZDOCK.md`](docs/DOZDOCK.md)).
 - [ ] **Phase 6 — Settings & polish.** Graphics options, storage management,
   log export, Steam account management.
 - [ ] **Phase 7 — Per-game options & logging.** Per-game Wine/DXMT options,
@@ -645,6 +659,57 @@ the fix that is still in the tree.*
   LiveContainer setup link, and one "Advanced" page holding the Windows
   environment, runtime staging, downloads rule, diagnostics and the log; the
   Library's store explanation is now a short paragraph.
+- **Games are playable: the session host is ported (0.3.4, 2026-10-18 —
+  device verification pending).** Every Play press since the rewrite ended at
+  "engine core only", because the session host — presenting a Wine window,
+  routing input, starting the guest process — was the unported part of the
+  engine, and the UI said so. This build ports it as new Windoz code
+  (`app-windoz/Sources/UI/GameSessionView.swift` plus the session path in
+  `WindozEngine`), with techniques and constants taken from Madeira's own
+  front-end where they match (per-file credit headers, like the Steam port):
+  a window-level `CAMetalLayer` registered once per process with the engine's
+  display shim before the guest's first swapchain, raw UIKit touch mapped 1:1
+  (aspect-fit) through the engine's `winios_post_touch_*` events, a hardware
+  keyboard (UIKey → virtual key, US layout) plus a small on-screen key row
+  (arrows, Esc, Tab, Enter, Space), and the guest process started on the
+  engine queue (wineserver → FEX → `wine_exit_status_reset` →
+  `wine_process_start`) with the program, arguments, working folder and
+  screen size written to the same launch environment the engine reads. The
+  session ends on the guest process's own exit and the engine's exit report
+  decides the message; "close the game" is Alt+F4, and leaving the session
+  screen detaches and says plainly that a still-running guest ends with the
+  app. Honest limits, stated in-app too: one session per app run (Wine's
+  service state — the UI asks for an app restart), single-touch only, no
+  gamepad or software keyboard yet, and the settings that need the engine's
+  in-process API (frame cap, sync mode, MetalFX, backend choice) are stored
+  but not applied — the launch log says so per session.
+- **Epic's library refused the device session on the phone (HTTP 403) — the
+  launcher-scoped sign-in answers it (0.3.4, 2026-10-18).** The owner's device
+  run showed Epic signed in and the owned-library call refused — the same
+  client scoping seen in development: the library service belongs to Epic's
+  launcher client, and the device-flow session belongs to a different one.
+  Fix: a second, launcher-scoped authorization — a web sign-in in a
+  non-persistent web view that returns an authorization code, exchanged for a
+  launcher refresh token kept in the Keychain (`epic.launcher.session`). The
+  library prefers it and falls back to the device session, and a refusal now
+  says the service is scoped to the launcher client instead of looking like
+  an expired login. Sign-out clears both sessions. Epic's chunked downloads
+  remain the next piece, and the UI still says so.
+- **The game page grew achievements and friends; the stores UI got its round
+  (0.3.4, 2026-10-18).** The owner asked to see a game's achievements and
+  which friends own or play it, and for the Stores tab to look right. The
+  game page is now Overview / Achievements / Friends: achievements come from
+  Steam's Web API with the stored token (player achievements, schema, and
+  the keyless global unlock percentages), falling back to the public
+  community XML when the Web API refuses the account; friends playing now
+  come from the friend list + player summaries matched to the game's app ID,
+  and "owns this game" from a bounded scan (≤ 20 friends, public profiles
+  only, cached six hours) that reports "not visible" — never "no" — when a
+  profile hides games. Each failure is shown verbatim with a retry; nothing
+  is guessed. Stores: in-code monogram tiles replace the generic SF symbols,
+  each connected store gets a filled capsule library button, sign-out moved
+  one level down (per-store ellipsis menus and Settings → Accounts), and the
+  Library tab carries a count badge.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

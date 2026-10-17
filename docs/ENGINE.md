@@ -50,14 +50,37 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 | JIT readiness probe | **working** | `windoz_jit_probe` (own code): sticky `CS_DEBUGGED` **and** a live debugger (`P_TRACED`) — maps and executes nothing |
 | Increased-memory entitlement report | **working** | `task_info(TASK_VM_INFO)` + `jit_available_memory` |
 | Windows runtime detection / official download | **working** | `RuntimeInstaller` (files + `DownloadManager`) |
-| Game **session host** (JIT pool + Metal presentation + input) | **not ported** | `WindozEngine.launch` throws `.sessionHostingNotImplemented` |
-| Native store clients (Steam/Epic libraries, depots) | **not implemented** | providers throw `StoreError.notImplemented` |
+| Game **session host** (Metal presentation + input + the guest process) | **ported in 0.3.4 — device verification pending** | `WindozEngine.launch` → `wine_process_start`; the presenting layer and overlay live in `Sources/UI/GameSessionView.swift` |
+| Native store clients | **Steam: sign-in, owned library, depot downloads (device verification pending); Epic: device-code + launcher sign-in, owned library; downloads not yet** | `SteamStore`, `EpicStore` |
 
 `WindozEngine.launch` performs a **real** preflight — JIT re-checked, prefix
-created, executable stat'd, guest environment prepared — and then, because the
-session host is the remaining port, throws
-`EngineError.sessionHostingNotImplemented` with a plain-language message. It
-never pretends to play a game.
+created, executable stat'd, the guest environment written — then hands the game
+to the session screen, which registers the presenting `CAMetalLayer` with the
+engine's display shim (`madeira_display_set_layer`, once per process, before
+the guest's first swapchain), and starts the guest process on the engine queue
+(wineserver if needed → `fex_initialize` → `wine_exit_status_reset` →
+`wine_process_start`). The session ends when the guest process does; the
+engine's own exit report (`wine_crash_exit_status`) decides the message, and a
+session that never starts is closed with an honest note after 90 seconds.
+
+The honest limits of this first session host:
+
+- **One session per app run.** Wine's service process (a thread in this app)
+  keeps the first session's registry state, so after a session ends the UI asks
+  for an app restart instead of pretending a second session works.
+- **Input** is a single primary touch mapped 1:1 onto the guest's virtual
+  monitor (aspect-fit), a hardware keyboard when one is attached (UIKey →
+  virtual-key, US layout), and a small on-screen key row (arrows, Esc, Tab,
+  Enter, Space) — enough to play a platformer with touch as the mouse. No
+  gamepad and no software keyboard yet.
+- **Leaving a session** asks the game to close with Alt+F4; "leave the session
+  screen" detaches and says plainly that a still-running guest ends with the
+  app. Nothing here ever calls `wineserver_stop()` while a guest thread exists
+  — that thread owns the call, and joining the service thread twice is not
+  safe.
+- The `GameSettings` fields that need the engine's in-process API (frame cap,
+  sync mode, MetalFX, backend choice) are **stored but not applied yet**; the
+  launch log says exactly that per session.
 
 ## 3. Launch environment
 
@@ -79,13 +102,14 @@ Settings that have **no** environment variable are deliberately *not* faked:
 
 | `GameSettings` field | How the engine applies it | Why no env var |
 |---|---|---|
-| `fpsCap` | the app's frame-pacing call (`madeira_set_vsync_locked`) | it is an in-process API, not an env switch |
-| `syncMode` | presentation/queue policy in the session host | same |
-| `graphicsBackend` (D3D11/D3D12) | which `d3d12.dll` implementation the loader resolves | there is no per-game switch in the forks (see §4) |
-| `metalFXUpscaling` | MetalFX spatial scaler created by the session host | same |
+| `fpsCap` | the app's frame-pacing call (`madeira_set_vsync_locked`) | it is an in-process API, not an env switch — **not called yet**; stored, not applied |
+| `syncMode` | presentation/queue policy in the app's session host | same — stored, not applied yet |
+| `graphicsBackend` (D3D11/D3D12) | which `d3d12.dll` implementation the loader resolves | there is no per-game switch in the forks (see §4); `auto` is what actually runs |
+| `metalFXUpscaling` | MetalFX spatial scaler created by the session host | no env switch; not created yet — stored, not applied |
 
-The log records these decisions for a session ("applied by the session host,
-not env") so the UI can explain them without inventing a switch.
+The log records these decisions for a session ("stored, not applied yet — no
+engine call for them in this build") so the UI can explain them without
+inventing a switch.
 
 ### Path mapping
 
@@ -123,12 +147,12 @@ What this means for Windoz:
 
 - `GraphicsBackend.auto` is the honest default: let the game load its own
   `d3d12.dll`. `GraphicsBackend.d3d11` / `.d3d12` are stored and reported, but
-  **the choice is applied by the session host**, which is not ported yet, and
-  Windoz does **not** invent a `MADEIRA_D3D12` environment variable (the forks
-  do not read one). The documented D3D12 *env* switches that do exist are
-  diagnostics only — `MADEIRA_D3D12_DXIL_CACHE`, `MADEIRA_D3D12_DXIL_CACHE_MB`,
-  `MADEIRA_D3D12_ONEPASS` — and pass through `GameSettings.environment` if the
-  user sets them.
+  **this build's session host does not apply the choice** — `auto` is what
+  actually runs — and Windoz does **not** invent a `MADEIRA_D3D12` environment
+  variable (the forks do not read one). The documented D3D12 *env* switches
+  that do exist are diagnostics only — `MADEIRA_D3D12_DXIL_CACHE`,
+  `MADEIRA_D3D12_DXIL_CACHE_MB`, `MADEIRA_D3D12_ONEPASS` — and pass through
+  `GameSettings.environment` if the user sets them.
 - Native D3D12 coverage is **experimental** (M1–M5 milestone results are
   recorded in `madeira/madeira-d3d12/README.md`). Reporting it as "working for
   every game" would not be honest, so the game page presents it as an option

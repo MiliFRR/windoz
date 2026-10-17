@@ -169,6 +169,7 @@ struct EpicSignInSheet: View {
 struct EpicSheet: View {
     @ObservedObject var store: EpicStore
     @Environment(\.dismiss) private var dismiss
+    @State private var showLauncherSignIn = false
 
     var body: some View {
         NavigationStack {
@@ -178,6 +179,7 @@ struct EpicSheet: View {
                     VStack(alignment: .leading, spacing: 16) {
                         accountCard
                         if store.authState.isSignedIn {
+                            launcherCard
                             if let message = store.libraryMessage {
                                 messageCard(message)
                             }
@@ -204,6 +206,7 @@ struct EpicSheet: View {
                 }
             }
             .sheet(isPresented: $store.showingSignIn) { EpicSignInSheet(store: store) }
+            .sheet(isPresented: $showLauncherSignIn) { EpicLauncherSignInSheet() }
         }
     }
 
@@ -213,7 +216,7 @@ struct EpicSheet: View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Image(systemName: "e.square").foregroundStyle(Theme.accent)
+                    StoreIcon(id: .epic, size: 30)
                     Text("Epic Games").font(.headline).foregroundStyle(.white)
                     Spacer()
                     switch store.authState {
@@ -242,19 +245,67 @@ struct EpicSheet: View {
                             Text("Updated \(Self.relative.localizedString(for: updated, relativeTo: Date()))")
                                 .font(.caption2).foregroundStyle(.white.opacity(0.4))
                         }
+                        Spacer()
+                        Menu {
+                            Button("Sign out of Epic", role: .destructive) { store.signOut() }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityLabel("Epic account actions")
                     }
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.accent)
-                    Button("Sign out") { store.signOut() }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Theme.warn)
                 } else {
                     Button("Sign in to Epic") { store.showingSignIn = true }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.accent)
                 }
-                Text("Sign-in uses Epic's device code: you approve it on epicgames.com/activate and Windoz never sees your password. This build lists your owned library; chunked downloads are the next piece.")
+                Text("Sign-in uses Epic's device code: you approve it on epicgames.com/activate and Windoz never sees your password. Chunked downloads are the next piece.")
                     .font(.caption2).foregroundStyle(.white.opacity(0.4))
+            }
+        }
+    }
+
+    /// The launcher-scoped session: Epic's library service answers only to
+    /// the launcher client, so the library uses this sign-in when it exists.
+    private var launcherCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "safari")
+                        .foregroundStyle(Theme.accent)
+                    Text("Launcher library session").font(.headline).foregroundStyle(.white)
+                    Spacer()
+                    if store.launcherSignedIn {
+                        Badge(text: EpicLauncherSignIn.accountName ?? "Connected",
+                              systemImage: "person.crop.circle", tint: Theme.ok)
+                    } else {
+                        Badge(text: "Not connected", tint: .gray)
+                    }
+                }
+                Text("Epic scopes its library service to the launcher client. This sign-in opens Epic's own page — the password never touches Windoz, the web view keeps no cookies, and only the session Epic issues is kept in this device's Keychain.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.55))
+                HStack(spacing: 14) {
+                    if store.launcherSignedIn {
+                        Button("Refresh library") { Task { await refresh() } }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                        Menu {
+                            Button("Sign out of the launcher session", role: .destructive) {
+                                EpicLauncherSignIn.signOut()
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityLabel("Launcher session actions")
+                    } else {
+                        Button("Sign in with the launcher") { showLauncherSignIn = true }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
             }
         }
     }

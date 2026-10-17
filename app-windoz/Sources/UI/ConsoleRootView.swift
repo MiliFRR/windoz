@@ -3,12 +3,21 @@ import SwiftUI
 /// The console shell. Four destinations, dark by default, controller-friendly.
 struct ConsoleRootView: View {
     @EnvironmentObject private var engine: WindozEngine
+    @EnvironmentObject private var library: GameLibrary
 
     private enum Tab: Hashable { case home, library, downloads, settings }
 
     @State private var tab: Tab = .home
     @State private var showSetup = false
     @AppStorage("windoz.didSetup") private var didSetup = false
+
+    /// The session screen follows the engine: it appears when the engine hands
+    /// a game to it and disappears when the session ends.
+    private var sessionBinding: Binding<InstalledGame?> {
+        Binding(
+            get: { engine.sessionGame },
+            set: { if $0 == nil { engine.detachSession(reason: "The session screen was dismissed.") } })
+    }
 
     var body: some View {
         let _ = BootTrace.once("console body")
@@ -21,6 +30,7 @@ struct ConsoleRootView: View {
             let _ = BootTrace.once("tab: building library")
             NavigationStack { LibraryView() }
                 .tabItem { Label("Library", systemImage: "square.grid.2x2.fill") }
+                .badge(library.games.count)
                 .tag(Tab.library)
 
             let _ = BootTrace.once("tab: building downloads")
@@ -62,6 +72,11 @@ struct ConsoleRootView: View {
                     }
             }
             .environmentObject(engine)
+        }
+        .fullScreenCover(item: sessionBinding) { game in
+            GameSessionView(game: game)
+                .environmentObject(engine)
+                .interactiveDismissDisabled(true)
         }
     }
 

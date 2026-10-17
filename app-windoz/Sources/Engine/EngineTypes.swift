@@ -240,7 +240,10 @@ enum EngineError: LocalizedError {
     case fexInitFailed
     case sessionAlreadyRunning
     case executableMissing(String)
-    case sessionHostingNotImplemented
+    case sessionSurfaceTimeout
+    case sessionAlreadyRanThisRun
+    case wineProcessStartFailed
+    case sessionCancelled
 
     var errorDescription: String? {
         switch self {
@@ -252,8 +255,27 @@ enum EngineError: LocalizedError {
         case .fexInitFailed: return "The CPU translator (FEX) failed to initialize."
         case .sessionAlreadyRunning: return "A game session is already running."
         case .executableMissing(let path): return "The game program was not found: \(path)"
-        case .sessionHostingNotImplemented:
-            return "The engine core works, but hosting a full game session (rendering + input) is still being ported into Windoz. This build verifies the engine on your device instead of claiming to play the game."
+        case .sessionSurfaceTimeout:
+            return "The game screen never came up: the presentation layer was not ready within 30 seconds. The engine log names what happened."
+        case .sessionAlreadyRanThisRun:
+            return "Wine can start only one game per app run here — its service process keeps the first session's state. Close Windoz from the app switcher (swipe it away) and open it again to play another game."
+        case .wineProcessStartFailed:
+            return "The engine could not start the game's process thread. The log has the exact failing step."
+        case .sessionCancelled:
+            return "The launch was cancelled."
         }
     }
+}
+
+// MARK: - Session outcome
+
+/// What happened to the last session, in plain words, shown on the game page.
+/// `crashed` is the engine's own report for the process Windoz started; the
+/// status is NTSTATUS-shaped when it is an error (0xC...).
+struct SessionOutcome: Equatable {
+    var gameTitle: String
+    var crashed: Bool
+    var status: UInt32
+    var seconds: Double
+    var message: String
 }

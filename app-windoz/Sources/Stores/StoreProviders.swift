@@ -193,12 +193,12 @@ final class LauncherInWineStore: ObservableObject, StoreProvider {
             updateAndVerify: true,
             cloudSaves: true,
             runtimeLauncherNeeded: true,
-            summary: "\(launcherName) has no usable public API, so Windoz is meant to run the official launcher inside Wine. You sign in there; the native UI just starts your games through it. That needs the game-session host, which is not ported yet.")
+            summary: "\(launcherName) has no usable public API, so Windoz is meant to run the official launcher inside Wine. You sign in there; the native UI just starts your games through it. The launcher pipeline (install the official launcher into its own environment, then start it in a session) is not in this build yet.")
     }
 
     func signIn() async {
         authState = .signingIn("Starting \(launcherName)…")
-        authState = .error("Launching \(launcherName) needs the game-session host, which is the remaining engine port. The launcher's installer is staged once Wi-Fi downloads are enabled.")
+        authState = .error("Launching \(launcherName) needs the launcher pipeline (install the official launcher into its own environment, then start it in a session). The session host exists in this build; the launcher pipeline is the next piece.")
     }
 
     func signOut() {
@@ -218,7 +218,7 @@ final class LauncherInWineStore: ObservableObject, StoreProvider {
                                            url: installerURL,
                                            destination: URL(fileURLWithPath: prefixPath).appendingPathComponent("launcher-setup.exe"),
                                            storeID: id.rawValue)
-        throw StoreError.notImplemented("\(launcherName) setup was queued. Running the installer needs the game-session host, which is the remaining engine port.")
+        throw StoreError.notImplemented("\(launcherName) setup was queued. Running the installer needs the launcher pipeline, which is the next piece.")
     }
 
     func update(_ game: StoreGame) async throws {
