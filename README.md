@@ -23,6 +23,16 @@ game session (rendering + input) is the remaining engine port; Play reports
 that honestly. The run-by-run ledger, including what the first restored-repo
 runs and the new typecheck gate caught, is in **Known issues** below.
 
+**On-device status (LiveContainer, 2026-10-17):** the launch-crash fix was
+confirmed by the owner — the app opens. **Steam is now a real client, not a
+stub:** sign-in (password + Steam Guard, or a QR code), the account's owned
+library, and headless depot downloads into the prefix in Valve's own
+`steamapps` layout, with journaled resume and per-chunk SHA-1 verification
+(`Sources/Steam/`, wired in `Sources/Stores/SteamStore.swift`). Device
+verification of the download path is pending the owner's first run; starting
+Steam games still needs the session host. Epic and the other stores remain
+honest stubs.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -40,8 +50,9 @@ is reused from the pinned `madeira` submodule behind one boundary,
   iPhone (Sideloadly / SideStore / LiveContainer), JIT via StikDebug, and the
   free-Apple-ID realities.
 - [`docs/DOZDOCK.md`](docs/DOZDOCK.md) — what Doz Dock is, what exists today
-  (the download engine; the store clients are honest stubs), and the rules it
-  will keep (no DRM circumvention, no fake clients).
+  (the download engine; Steam as a real native client; Epic and the launcher
+  stores as honest stubs), and the rules it will keep (no DRM circumvention,
+  no fake clients).
 
 The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection and
 downloads are real and testable today. **Hosting a full game session (rendering +
@@ -118,11 +129,16 @@ are public as of 2026-10-14). The pipeline:
   override (`overrides/app/Madeira/MadeiraApp.swift`) so no Xcode project
   surgery is needed; display name is `windoz`. Next: real library data in
   the carousel, app icon, ambient blur from selected art.
-- [ ] **Phase 3 — Steam.** Login (password + Steam Guard, QR optional), owned
-  library with cover art.
-- [ ] **Phase 4 — Downloads.** Pausable/resumable downloads, integrity
-  verification, BGContinuedProcessingTask + Live Activity (title, percent,
-  speed, ETA).
+- [ ] **Phase 3 — Steam (code complete; device verification pending).** Login
+  (password + Steam Guard, QR), owned library with cover art, and headless
+  depot downloads — the SwiftSteam port in `app-windoz/Sources/Steam/`, wired
+  by `SteamStore.swift`. Awaiting the owner's first on-device run before this
+  is called done; see the ledger.
+- [ ] **Phase 4 — Downloads (Steam side mostly done; generic pipeline still
+  open).** Depot downloads are resumable (journals) and verify every chunk
+  against its SHA-1; the generic engine keeps its queue/verify rules for
+  runtime files. BGContinuedProcessingTask + Live Activity for depot
+  downloads and pause-from-UI are still open.
 - [ ] **Phase 5 — Doz Dock.** Madeira Dock ported/renamed/improved; official
   Steam-DRM games launch through Valve's own client running in Wine
   (design and honest state: [`docs/DOZDOCK.md`](docs/DOZDOCK.md)).
@@ -460,7 +476,7 @@ the fix that is still in the tree.*
   (`07d8364`) was cancelled on purpose rather than left to burn a runner.
 - **First on-device launch report (LiveContainer, 2026-10-17): the app quit
   immediately; the audit found the one launch-path operation that can kill the
-  process by itself, and it is fixed — device confirmation pending.** The
+  process by itself, and it is fixed — confirmed on device.** The
   build that was run contained a `windoz_jit_probe()` that mapped one RWX page
   and executed a tiny function from it to "prove" JIT by execution. On iOS 26
   that is exactly what the platform rejects — the engine's own `JITAllocator`
@@ -474,8 +490,30 @@ the fix that is still in the tree.*
   executed, and the check cannot kill the process. Settings now also
   distinguishes "JIT was enabled but the debugger left" (the state StikDebug's
   app-list mode leaves behind) instead of treating the sticky flag as ready.
-  The next IPA carries the fix; a crash log from the device is what confirms
-  the diagnosis.
+  The next IPA carried the fix, and the owner confirmed it on device: the app
+  opens in LiveContainer.
+- **The store clients were honest stubs; Steam is now real (2026-10-17).**
+  The owner asked for native store sign-in and owned-game downloads. Root
+  cause was scope, recorded plainly: the store layer shipped as truthful stubs
+  while the engine port came first, and the UI said so. Fix: Madeira's pinned
+  SwiftSteam client (commit `279fd0f8`; GPL-3.0-or-later + Converter
+  Exception, per-file headers kept) is ported into
+  `app-windoz/Sources/Steam/` — password + Steam Guard (code or in-app
+  approval) and QR sign-in with the token in the Keychain
+  (`windoz.steam.tokens`), the CM connection, PICS app info, the license
+  list, and the depot downloader (key/manifest auth, VZip/VZstd/PKZip chunk
+  decryption with the ported LZMA/zstd helpers, Steam's own
+  `appmanifest_<appid>.acf` install record) — and wired as a real
+  `SteamStore`: owned library with real art, per-game Install with live
+  progress and a one-at-a-time queue, resume from journals, Update (manifest
+  diff — only changed chunks), Verify (every existing chunk re-read against
+  its SHA-1 before it is skipped), Uninstall; finished games register in
+  Windoz's library in `C:\Program Files (x86)\Steam\steamapps` inside the
+  prefix. The first typecheck of the port caught exactly one error (a
+  `Task<()?, Never>` vs `Task<Void, Never>` in the queue), fixed in `5a6e47d`
+  and re-dispatched clean. Device confirmation of the download path is
+  pending. Epic remains a stub: no reusable client exists in the engine, so
+  it is a from-scratch Legendary-style build, next in line.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

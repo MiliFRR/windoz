@@ -5,13 +5,17 @@ the part of the app that owns getting a game from a store to the device without
 a desktop machine in the middle. This document says exactly what exists today,
 what the pieces are, and the rules the implementation must keep.
 
-> **State, plainly:** the stores are **not implemented yet**. The Steam and
-> Epic screens in the app say so themselves (`StoreProviders.swift` throws
-> `StoreError.notImplemented` with that sentence), and nothing in the UI
-> pretends otherwise. What already works is the download engine the stores
-> will be built on: queue, pause/resume, SHA-256 verification, free-space
-> checks, Wi-Fi-only rules, and persistence across relaunch
-> (`Sources/Downloads/`). It is in daily use for the Windows runtime files.
+> **State, plainly (2026-10-17):** the **Steam client is real** — native
+> sign-in (password + Steam Guard, or a QR code), the owned library, and
+> headless depot downloads into the prefix (`Sources/Steam/`, wired by
+> `Sources/Stores/SteamStore.swift`). Device verification of the download
+> path is pending the owner's first run, and starting Steam games still needs
+> the session host. **Epic is not implemented yet** — its screen and the
+> launcher stores say so themselves (`StoreProviders.swift` throws
+> `StoreError.notImplemented` with that sentence). The generic download
+> engine (queue, pause/resume, SHA-256 verification, free-space checks,
+> Wi-Fi-only rules, persistence across relaunch; `Sources/Downloads/`) stays
+> in daily use for the Windows runtime files.
 
 ## The two layers
 
@@ -24,9 +28,13 @@ game's own files with no store client running. The approach is the proven one
 from SteamKit2 / DepotDownloader (and Legendary for Epic) reimplemented in
 Swift inside the app:
 
-- **Steam:** password + Steam Guard sign-in (QR later), owned-library fetch,
-  then depot manifests and chunked downloads.
-- **Epic:** OAuth sign-in, then manifests and chunked downloads.
+- **Steam — implemented** (ported from Madeira's pinned SwiftSteam client):
+  password + Steam Guard sign-in (code or in-app approval) or a QR code,
+  owned-library fetch, then depot key/manifest auth and chunked downloads,
+  with Steam's own `appmanifest_<appid>.acf` layout. First device
+  verification pending.
+- **Epic:** OAuth sign-in, then manifests and chunked downloads. Not written
+  yet — next in line.
 
 Credentials live in the **Keychain**; tokens are never written to the
 sandbox files, never logged, and never leave the device except to the store's
@@ -66,9 +74,9 @@ say "needs the session host" instead of offering a button that cannot work.
 | Piece | File | State |
 |---|---|---|
 | Download engine (queue/resume/verify) | `Sources/Downloads/DownloadManager.swift` | working, in daily use |
-| Steam provider (sign-in, library, depots) | `Sources/Stores/StoreProviders.swift` | honest stub |
+| Steam provider (sign-in, library, depots) | `Sources/Stores/SteamStore.swift` + `Sources/Steam/` | real: sign-in, owned library, depot downloads (device verification pending) |
 | Epic provider | `Sources/Stores/StoreProviders.swift` | honest stub |
-| Store screens | `Sources/UI/` + Library → Stores | show the stub state |
+| Store screens | `Sources/UI/` + Library → Stores | Steam opens a real library sheet; the rest show the stub state |
 | Launcher pipelines | — (needs the session host) | not implemented |
 | Library, prefixes, paths | `Sources/Engine/`, `AppContainer.swift` | working |
 
@@ -76,12 +84,16 @@ say "needs the session host" instead of offering a button that cannot work.
 
 Tracked in `docs/ROADMAP.md` (Phase 5 in `README.md`'s phase list); in order:
 
-1. **Steam sign-in** — password + Steam Guard, QR; tokens in the Keychain.
-2. **Owned library** — names, App IDs, header art, in the console UI.
-3. **Depots** — manifests, chunked parallel download, verify, resume, and the
-   Live Activity / background continuation (where the host allows it).
+1. **Steam sign-in** — done: password + Steam Guard (code or approval) and
+   QR; tokens in the Keychain. *(First device run pending.)*
+2. **Owned library** — done: names, App IDs, art, in the Steam library sheet.
+   *(First device run pending.)*
+3. **Depots** — done: manifests, parallel chunked download, journaled
+   resume, per-chunk SHA-1 verify, appmanifest record. Live Activity /
+   background continuation still open.
 4. **Launch hook** — hand the installed title to `WindozEngine.launch`, with
-   `MADEIRA_STEAM_APPID` set for the titles that need it.
+   `MADEIRA_STEAM_APPID` set for the titles that need it. Needs the session
+   host.
 5. **Epic** — the same ladder against Epic's API.
 6. **Launcher pipelines** — EA and Rockstar wrappers once the session host can
    run them.
