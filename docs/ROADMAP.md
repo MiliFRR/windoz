@@ -34,7 +34,7 @@ See `docs/ENGINE.md` for the boundary and the D3D12 detail.
 | Local games ("Add local game") | ✅ | import from Files; anti-cheat scan; runs into the library |
 | GOG | 🟡 | DRM-free: import the installed files; no Galaxy client needed |
 | Steam | 🟡 | native sign-in (Guard code / in-app approval / QR), owned library, depot downloads with journaled resume + per-chunk SHA-1 verify — implemented and typecheck-green; first device verification pending. Launching the games needs the session host |
-| Epic | ⛔ | native sign-in / chunked downloads not written yet — next in line |
+| Epic | 🟡 | device-code sign-in (approved on Epic's own site) + owned library with real art — implemented; first device verification pending. Chunked downloads are the next piece |
 | Rockstar, EA | ⛔ | official launcher in Wine; needs the session host |
 
 Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
@@ -83,8 +83,9 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 3. **Verify the Steam client on device** — sign-in, the owned library and
    depot downloads are implemented (see the README ledger); the next device
    run is what confirms them. Then keep hardening it.
-4. **Epic native sign-in** and chunked downloads; launcher-in-Wine for the
-   stores without a usable API.
+4. **Epic chunked downloads** (sign-in and the owned library are implemented;
+   the next device run confirms them); launcher-in-Wine for the stores
+   without a usable API.
 5. **Online / networking** work inside Wine (DNS, TLS, store auth) — tested on a
    real device before any claim is made.
 

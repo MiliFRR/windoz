@@ -30,8 +30,12 @@ library, and headless depot downloads into the prefix in Valve's own
 `steamapps` layout, with journaled resume and per-chunk SHA-1 verification
 (`Sources/Steam/`, wired in `Sources/Stores/SteamStore.swift`). Device
 verification of the download path is pending the owner's first run; starting
-Steam games still needs the session host. Epic and the other stores remain
-honest stubs.
+Steam games still needs the session host. **Epic is real too, up to the
+library:** sign-in is a device code approved on Epic's own website — no
+password is ever typed into the app — and the owned library lists with real
+art (`Sources/Epic/`, wired in `Sources/Stores/EpicStore.swift`); Epic's
+chunked downloads are the next piece and the UI says so. The remaining stores
+stay honest stubs.
 
 ## app-windoz — the current app
 
@@ -512,8 +516,25 @@ the fix that is still in the tree.*
   prefix. The first typecheck of the port caught exactly one error (a
   `Task<()?, Never>` vs `Task<Void, Never>` in the queue), fixed in `5a6e47d`
   and re-dispatched clean. Device confirmation of the download path is
-  pending. Epic remains a stub: no reusable client exists in the engine, so
-  it is a from-scratch Legendary-style build, next in line.
+  pending. Epic was the next piece: no reusable client exists in the engine,
+  so it is a from-scratch build — see the entry below.
+- **Epic: device-code sign-in and the owned library are real (2026-10-17).**
+  Steam shipped first; Epic follows it under the same rule — nothing is
+  claimed that was not exercised. The flow was verified against the live API
+  before any UI was written: Windoz fetches a client token, asks Epic for a
+  device code, the owner approves it on `epicgames.com/activate`, and Epic
+  issues the session to the owner's own account. Only the refresh token is
+  stored, in the Keychain (`epic.session`); the owner's password is never
+  typed into the app and never seen by it. The owned library is the account's
+  own library-service records; titles, developers and art come from the
+  public catalog service, which accepts plain client credentials (probed
+  live — no account context needed for that call). The UI lists owned titles
+  with art and says plainly that chunked downloads are the next piece:
+  Epic's launcher/CDN endpoints answered 403 to a device-flow session during
+  development (they are scoped to Epic's launcher client), so the downloads
+  round starts by settling that second, launcher-scoped authorization (the
+  approach Legendary uses). Device verification of sign-in and the library is
+  pending the owner's next run.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

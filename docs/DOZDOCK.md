@@ -10,12 +10,14 @@ what the pieces are, and the rules the implementation must keep.
 > headless depot downloads into the prefix (`Sources/Steam/`, wired by
 > `Sources/Stores/SteamStore.swift`). Device verification of the download
 > path is pending the owner's first run, and starting Steam games still needs
-> the session host. **Epic is not implemented yet** — its screen and the
-> launcher stores say so themselves (`StoreProviders.swift` throws
-> `StoreError.notImplemented` with that sentence). The generic download
-> engine (queue, pause/resume, SHA-256 verification, free-space checks,
-> Wi-Fi-only rules, persistence across relaunch; `Sources/Downloads/`) stays
-> in daily use for the Windows runtime files.
+> the session host. **Epic now signs in too** — a device code approved on
+> Epic's own website (no password ever typed into the app), then the owned
+> library with real art (`Sources/Epic/`, `Sources/Stores/EpicStore.swift`);
+> its chunked downloads are the next piece and the UI says so. The launcher
+> stores (EA, Rockstar) still report plainly what they can and cannot do. The
+> generic download engine (queue, pause/resume, SHA-256 verification,
+> free-space checks, Wi-Fi-only rules, persistence across relaunch;
+> `Sources/Downloads/`) stays in daily use for the Windows runtime files.
 
 ## The two layers
 
@@ -33,8 +35,12 @@ Swift inside the app:
   owned-library fetch, then depot key/manifest auth and chunked downloads,
   with Steam's own `appmanifest_<appid>.acf` layout. First device
   verification pending.
-- **Epic:** OAuth sign-in, then manifests and chunked downloads. Not written
-  yet — next in line.
+- **Epic — sign-in and library done** (device-code OAuth approved on Epic's
+  own site; the owned library with titles and art). Depot manifests and
+  chunked downloads are the next piece: the launcher/CDN endpoints are scoped
+  to Epic's launcher client and refused the device-flow session during
+  development, so that round starts by settling the second, launcher-scoped
+  authorization.
 
 Credentials live in the **Keychain**; tokens are never written to the
 sandbox files, never logged, and never leave the device except to the store's
@@ -75,8 +81,8 @@ say "needs the session host" instead of offering a button that cannot work.
 |---|---|---|
 | Download engine (queue/resume/verify) | `Sources/Downloads/DownloadManager.swift` | working, in daily use |
 | Steam provider (sign-in, library, depots) | `Sources/Stores/SteamStore.swift` + `Sources/Steam/` | real: sign-in, owned library, depot downloads (device verification pending) |
-| Epic provider | `Sources/Stores/StoreProviders.swift` | honest stub |
-| Store screens | `Sources/UI/` + Library → Stores | Steam opens a real library sheet; the rest show the stub state |
+| Epic provider | `Sources/Stores/EpicStore.swift` + `Sources/Epic/` | real: device-code sign-in, owned library (device verification pending); downloads next |
+| Store screens | `Sources/UI/` + Library → Stores | Steam and Epic open real library sheets; the rest show the stub state |
 | Launcher pipelines | — (needs the session host) | not implemented |
 | Library, prefixes, paths | `Sources/Engine/`, `AppContainer.swift` | working |
 
@@ -94,6 +100,11 @@ Tracked in `docs/ROADMAP.md` (Phase 5 in `README.md`'s phase list); in order:
 4. **Launch hook** — hand the installed title to `WindozEngine.launch`, with
    `MADEIRA_STEAM_APPID` set for the titles that need it. Needs the session
    host.
-5. **Epic** — the same ladder against Epic's API.
+5. **Epic** — sign-in and the owned library are done (device-code approval on
+   Epic's own site; tokens in the Keychain; titles and art from the catalog).
+   *(First device run pending.)* Depot downloads are next; the launcher/CDN
+   endpoints are scoped to the launcher client and refused the device-flow
+   session in development, so the downloads round starts by settling that
+   authorization.
 6. **Launcher pipelines** — EA and Rockstar wrappers once the session host can
    run them.
