@@ -16,7 +16,9 @@ struct StoreSummary: Identifiable, Equatable {
 ///
 /// The concrete providers are held directly (not only as existentials) so the
 /// registry can observe each one's `objectWillChange` with a concrete type and
-/// republish a flat value snapshot for the UI.
+/// republish a flat value snapshot for the UI. Main-actor isolated to match
+/// `StoreProvider`.
+@MainActor
 final class StoreRegistry: ObservableObject {
     static let shared = StoreRegistry()
 
@@ -42,7 +44,9 @@ final class StoreRegistry: ObservableObject {
                           rockstar.objectWillChange.eraseToAnyPublisher(),
                           ea.objectWillChange.eraseToAnyPublisher()] {
             publisher
-                .sink { [weak self] _ in DispatchQueue.main.async { self?.rebuild() } }
+                .sink { [weak self] _ in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.rebuild() } }
+                }
                 .store(in: &cancellables)
         }
         rebuild()

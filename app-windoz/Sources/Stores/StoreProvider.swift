@@ -117,9 +117,15 @@ enum StoreError: LocalizedError {
 /// Everything a store must expose. The UI and the download manager only ever
 /// see this protocol, so a new store is one file and no UI change.
 ///
+/// Main-actor isolated: providers hold session objects and publish UI state.
+/// A provider whose methods are not isolated (the local folder, the Wine
+/// launcher stubs) still satisfies the requirements — a nonisolated method is
+/// callable from the main actor.
+///
 /// Honesty rule: a provider must never report `installed`/`signedIn` unless it
 /// really is. Where Windoz cannot yet do the work itself, the provider declares
 /// a `.launcher` channel or throws `StoreError.notImplemented` with the reason.
+@MainActor
 protocol StoreProvider: AnyObject, ObservableObject, Identifiable {
     var id: StoreID { get }
     var capability: StoreCapability { get }

@@ -15,4 +15,11 @@
 #import "../../../madeira/app/Madeira/PadOutput.h"
 #import "JITProbe.h"
 
+// The Steam depot downloader's C helpers (chunked-zip framing, an LZMA
+// decoder shim and an educational zstd decoder), ported with the SwiftSteam
+// client from Madeira (GPL-3.0-or-later + Madeira Converter Exception).
+#import "../Steam/chunk_zip.h"
+#import "../Steam/lzma_shim.h"
+#import "../Steam/zstd_edu.h"
+
 #endif

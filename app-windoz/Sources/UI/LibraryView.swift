@@ -9,6 +9,7 @@ struct LibraryView: View {
     @State private var selection: InstalledGame?
 
     @ObservedObject private var registry = StoreRegistry.shared
+    @ObservedObject private var steamStore = StoreRegistry.shared.steam
 
     private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
 
@@ -43,6 +44,9 @@ struct LibraryView: View {
         } message: {
             Text(importMessage ?? "")
         }
+        .sheet(isPresented: $steamStore.showingSignIn) { SteamSignInView() }
+        .sheet(isPresented: $steamStore.showingLibrary) { SteamLibrarySheet(store: steamStore) }
+        .task { steamStore.start() }
     }
 
     // MARK: - Games
@@ -91,9 +95,12 @@ struct LibraryView: View {
     @ViewBuilder private var storesSection: some View {
         SectionHeader(title: "Stores")
         ForEach(registry.summaries) { summary in
-            StoreRow(summary: summary, registry: registry)
+            StoreRow(summary: summary, registry: registry,
+                     extraAction: summary.id == .steam && summary.authState.isSignedIn
+                         ? (title: "Steam library", handler: { steamStore.showingLibrary = true })
+                         : nil)
         }
-        Text("Windoz uses your own accounts with each store and follows their terms. Where a store has no usable API, Windoz is meant to run the vendor's official launcher inside Wine — started only when you launch a game and closed afterwards. That needs the game-session host, which is still being ported, so today the launcher stores report themselves as not implemented.")
+        Text("Windoz uses your own accounts with each store and follows their terms. Steam signs in and downloads natively today, into the Windows prefix. The remaining stores are meant to run the vendor's official launcher inside Wine once the game-session host is ported; until then they report themselves as not implemented.")
             .font(.caption2).foregroundStyle(.white.opacity(0.4))
     }
 
@@ -175,6 +182,8 @@ struct LibraryView: View {
 struct StoreRow: View {
     let summary: StoreSummary
     let registry: StoreRegistry
+    /// A store-specific action (e.g. "Steam library") shown next to sign-in.
+    var extraAction: (title: String, handler: () -> Void)? = nil
 
     var body: some View {
         GlassCard {
@@ -198,13 +207,20 @@ struct StoreRow: View {
                         Badge(text: "Launcher in Wine", systemImage: "shippingbox", tint: Theme.warn)
                     }
                 }
-                if summary.capability.signIn != .none {
-                    Button(summary.authState.isSignedIn ? "Sign out" : "Sign in") {
-                        if summary.authState.isSignedIn { registry.signOut(summary.id) }
-                        else { registry.signIn(summary.id) }
+                HStack(spacing: 16) {
+                    if summary.capability.signIn != .none {
+                        Button(summary.authState.isSignedIn ? "Sign out" : "Sign in") {
+                            if summary.authState.isSignedIn { registry.signOut(summary.id) }
+                            else { registry.signIn(summary.id) }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
                     }
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
+                    if let extraAction {
+                        Button(extraAction.title, action: extraAction.handler)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
                 }
             }
         }
