@@ -103,8 +103,8 @@ targets:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "0.5.0"
+        CFBundleVersion: "5"
         CFBundleInfoDictionaryVersion: "6.0"
         LSRequiresIPhoneOS: true
         MinimumOSVersion: "26.0"
@@ -154,8 +154,8 @@ targets:
         # scripts/generate-entitlements.sh --check, which CI runs.
         CODE_SIGN_ENTITLEMENTS: Config/Windoz.entitlements
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "4"
-        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "0.5.0"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
@@ -245,8 +245,8 @@ targets:
         PRODUCT_NAME: WindozJITHelper
         PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER).jit-helper
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "4"
-        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "0.5.0"
         # The app's bridging header (engine C glue) must not leak into the
         # helper, which links only StikJIT.
         SWIFT_OBJC_BRIDGING_HEADER: ""

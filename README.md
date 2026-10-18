@@ -89,6 +89,17 @@ about to do is what confirms it; its IPA is `build-ipa.yml` run #15
 Info.plist `0.4.0` build 4, and the app binary carries the dock handoff
 (`windoz-dock`/`launch.auth`), the Epic assets host and `ChunksV5`/`ChunksV4`).
 
+**On-device status (LiveContainer, 2026-10-18 — build 0.4.0):** the owner ran
+0.4.0 and sent back the list that shapes 0.5.0: the phone **warms up at idle**
+with the app open; a **game can be tapped twice** during the push animation
+and stacks a second page (a stray controller Select can re-point navigation);
+**a launch gives no visible story** of its steps; JIT still means StikDebug
+next door; games on a fresh prefix **need their runtimes installed by hand**;
+and the sharpest one — **Epic downloads fail instantly** although sign-in
+works. Build 0.5.0 answers every item — the six phases are summarised in its
+own ledger entry in **Known issues** below, with the phase-by-phase detail in
+`docs/CHANGES.md`.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -240,7 +251,7 @@ order from a clean recursive clone — or simply `make ipa` (see the
 | Workflow | What it does |
 |---|---|
 | [`build-ipa.yml`](.github/workflows/build-ipa.yml) | The full chain on a cloud macOS runner: LLVM, llvm-mingw, the VC++ runtime, Wine/FEX/DXMT/D3D12, the app, the `windoz.ipa` artifact. |
-| [`typecheck.yml`](.github/workflows/typecheck.yml) | Fast `swiftc -typecheck` + XcodeGen validation on `ci-*` branches — minutes instead of hours. |
+| [`typecheck.yml`](.github/workflows/typecheck.yml) | Fast `swiftc -typecheck` + the off-device Epic-protocol tests (mocked HTTP, `tests/host/`, since 0.5.0) + XcodeGen validation on `ci-*` branches — minutes instead of hours. |
 | [`issue-watcher.yml`](.github/workflows/issue-watcher.yml) | The self-healing loop. A failed `main` build, or a new owner-authored (or `autofix`-labelled) issue, is read by an AI agent; it writes the fix on an `autofix/…` branch; the full macOS build is dispatched on that branch; and **only a build-verified change is squash-merged to `main`** and reported back on the issue. If the attempts do not pass, it says so in the issue (or opens one). |
 
 Controls live in **Settings → Secrets and variables → Actions**:
@@ -917,26 +928,106 @@ the fix that is still in the tree.*
   the game), the components status row and its install button. The launch
   screen states the mode it used, and Direct mode says plainly when a title
   will need Doz Dock instead.
+- **0.5.0 — the six-phase owner round (2026-10-18).** Built on 0.4.0 as one
+  commit per phase on `ci-050` (1/6 … 6/6), each phase gated by
+  `typecheck.yml` (phase gates #22–#29 — three runs caught real mistakes
+  before their fixes; 6/6's runs are the first that also build and run the
+  host tests). Full detail per phase in
+  `docs/CHANGES.md`. What was asked, what the root causes were, and what is
+  still unverified:
+  - **1/6 idle heat** — several small always-running things, all bounded now:
+    cover art decodes off the main thread behind a cache, the engine log
+    publishes at ≤10 Hz, Home's dates are static text, the Steam CM socket
+    closes the moment a refresh finishes with no download, and the launch
+    watchdog stops after its one warning. A DEBUG-only idle monitor logs
+    CPU/threads/thermal every 30 s so "it's warm" has numbers.
+  - **2/6 the tap bug** — a second tap during the push animation stacked a
+    second game page, and a stray controller Select could re-point
+    navigation at a different game. The shelf now ignores input while a game
+    page is up; Back leaves the page.
+  - **3/6 launch pipeline** — nine named steps (JIT, prefix, program, storage,
+    launch mode, screen, service + translator, process, first frame) with live
+    detail, elapsed time and Cancel on the start screen; a failure keeps its
+    steps, the real error, a suggested fix, the log tail and Retry on the
+    game page. One on-disk log (`windoz-logs/windoz.log`) gains the engine's
+    `madeira-log.txt` tail at session end; UI publishes stay coalesced at
+    10 Hz.
+  - **4/6 built-in JIT** — `WindozJITHelper.appex` (bundle id
+    `com.milifrr.windoz.jit-helper`, built on vendored StikJIT — MPL-2.0,
+    notices added) attaches to the engine by PID; pairing data lives in the
+    Keychain; setup detects and names exactly what is missing (pairing file,
+    LocalDevVPN, DeveloperDiskImage); StikDebug stays as the fallback. The
+    helper **cannot** run under LiveContainer — the app detects that, says
+    so, and falls back instead of pretending. Madeira's JIT shortcut over the
+    network was not ported. Unverified on device until the owner runs the
+    standalone sideload.
+  - **5/6 runtime auto-install** — Wine Mono (pinned 11.0.0 from WineHQ,
+    SHA-256 strict), VC++ 2005–2022, .NET, DX June 2010 and the game's own
+    `_CommonRedist`, offered when a session needs them — never at idle app
+    start. Vendor URLs only, no Microsoft binary in this repo; per-prefix
+    ledger (`<prefix>/windoz-runtimes.json`); unpinned vendor-servicing links
+    freeze their first download's SHA-256 and a later change is **refused**
+    until the explicit "Accept the vendor's new file" in Settings. Downloads
+    retry with backoff, cancel and resume, and cached files are reused.
+    Installers run as real Windows sessions through the launch pipeline, one
+    per app run; whether one actually stuck is verified by probe files the
+    next time a game page opens — attempt, not assumption. Named refusals
+    where something cannot work: 32-bit installers (no i386 support), .NET
+    Desktop 4.8 and DX June 2010 (unavailable in this build, with the
+    reason), Steam client components (existing Doz Dock flow).
+  - **6/6 Epic downloads, root-caused against Legendary.** (a) Chunk URLs
+    were built from the manifest URL *with its signed query string* —
+    `URL.deletingLastPathComponent()` keeps the query — so every chunk
+    address was a request for the CDN *directory*, answered 404 within a
+    second: the owner's "downloads fail instantly". (b) The manifest and
+    chunk fetches sent `Authorization: bearer …`, but Legendary fetches both
+    unauthenticated — the signed query string is the authorization
+    (`core.py get_cdn_manifest`). Also: the assets response parses leniently
+    now (a strict decode could silently empty the list, and the UI then said
+    "no live Windows build", which was not true); the launcher service's
+    manifest SHA-1 is verified over the raw bytes; the loop pauses between
+    chunks, resumes where it stopped, cancels on request, removes the
+    in-progress file on any failure, and skips finished files whose manifest
+    hash matches, so cancel + restart does not re-download. Every stage logs
+    through `[epic-dl]` with query values redacted and no tokens anywhere.
+    The protocol is `EpicProtocol.swift` (Foundation + CryptoKit + zlib only)
+    and CI builds and runs `tests/host/epic-protocol-tests.swift` with a
+    mocked transport — the query-string and lenient-parse bugs are locked in
+    as regressions. Encrypted manifests/chunks are still refused by design,
+    with the reason named. Unverified on device until the owner retests.
+  - **Owner device checklist** (the only proof that counts): leave the app
+    open 10 minutes (should stay hand-temperature); tap a game twice fast
+    (exactly one page); start the test game (watch the nine steps; pull
+    `windoz-logs/windoz.log` if it stalls); on a standalone sideload open
+    Settings > JIT and follow the pairing steps, then confirm the JIT step
+    goes green at launch; open a game with a missing runtime (the card lists
+    it — install Wine Mono first); Epic > Download (watch `[epic-dl]` — a
+    failure now names its stage and HTTP status instead of dying in one
+    second).
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
 
-What this build actually offers, in order of what works:
+What this build (0.5.0) actually offers, in order of what works:
 
-- **StikDebug** (a separate app) is the route that exists today. Windoz builds a
-  `stikdebug://enable-jit?bundle-id=…&pid=…&script-data=…` URL whose script is the
-  engine's `madeira-jit.js` (bundled as a resource), and re-probes JIT on every
-  launch. This is the only route inside **LiveContainer** (`LC_HOME_PATH` is set
-  there and a guest app cannot start a nested extension).
-- **A bundled helper extension** (`JITHelper.appex`) is *not* part of this build:
-  `app-windoz/project.yml` has no extension target. `JITManager.builtInHelperUsable`
-  therefore reads the bundle and reports false, and the UI offers StikDebug only.
-  When the helper target is added the choice appears by itself.
-- **LocalDevVPN** (App Store) would be required for the helper's loopback, and is
-  not needed while the helper is absent.
+- **The bundled helper extension** — added in 0.5.0. `WindozJITHelper.appex`
+  (bundle id `com.milifrr.windoz.jit-helper`) runs inside the app and attaches
+  to the engine process by PID, built on the vendored StikJIT (MPL-2.0 —
+  notice in `THIRD-PARTY-NOTICES.md`). It needs the device's **pairing file**
+  (imported into the Keychain once), **LocalDevVPN** (App Store — Windoz opens
+  `localdevvpn://enable?scheme=windoz` and LocalDevVPN returns through
+  `windoz://…`), and a DeveloperDiskImage. Settings and the first-run screen
+  check each of those and say exactly which one is missing.
+- **StikDebug** (a separate app) stays as the fallback, and it is the only
+  route inside **LiveContainer** — a guest app cannot start a nested
+  extension. The app detects `LC_HOME_PATH`, says so, and uses StikDebug
+  instead of pretending the helper can work.
+- A launch first **attempts the chosen method automatically** (JIT method
+  persisted under `windozJITMethod`); the launch pipeline's JIT step reports
+  which route was used and what happened.
 - Sideload with SideStore/AltStore/Sideloadly; the bundle id is
-  `com.milifrr.windoz`. Any per-app extension would have to survive re-signing —
-  another reason JIT currently goes through StikDebug.
+  `com.milifrr.windoz`. The helper's ids derive from
+  `WINDOZ_BUNDLE_IDENTIFIER`, so a re-signed bundle keeps working.
 - If `macos-26` is not yet a valid GitHub runner label, switch to
   `macos-15` + newest Xcode 26.
 

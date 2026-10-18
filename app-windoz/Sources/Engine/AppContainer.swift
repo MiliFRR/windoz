@@ -20,7 +20,7 @@ enum AppContainer {
 
     /// Shown in Settings → About *and* printed in the first log line, so a
     /// device session can always be matched to a build.
-    static let displayVersion = "0.4.0"
+    static let displayVersion = "0.5.0"
 
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
