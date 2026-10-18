@@ -163,9 +163,10 @@ struct EpicSignInSheet: View {
     }
 }
 
-/// The Epic store sheet: the account and the owned library. Downloads are the
-/// next piece, and every row says so instead of offering a button that cannot
-/// work yet.
+/// The Epic store sheet: the account, the owned library, and the chunked
+/// download that fetches a title's live Windows build from Epic's own CDN.
+/// Every row shows what is actually happening — a phase and byte count while
+/// downloading, "Installed" when done — never a button that cannot work.
 struct EpicSheet: View {
     @ObservedObject var store: EpicStore
     @Environment(\.dismiss) private var dismiss
@@ -261,7 +262,7 @@ struct EpicSheet: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.accent)
                 }
-                Text("Sign-in uses Epic's device code: you approve it on epicgames.com/activate and Windoz never sees your password. Chunked downloads are the next piece.")
+                Text("Sign-in uses Epic's device code: you approve it on epicgames.com/activate and Windoz never sees your password. Downloads come from Epic's own CDN and every chunk is hash-verified before it is written.")
                     .font(.caption2).foregroundStyle(.white.opacity(0.4))
             }
         }
@@ -358,9 +359,43 @@ struct EpicSheet: View {
                             .font(.caption).foregroundStyle(.white.opacity(0.5))
                             .lineLimit(1)
                     }
-                    Badge(text: "Downloads with a later update", systemImage: "clock", tint: Theme.warn)
+                    if let download = store.download, download.gameID == game.id {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView(value: download.fraction)
+                                .tint(Theme.accent)
+                            Text("\(download.phase.capitalized) — \(download.detail)")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(2)
+                        }
+                    } else if game.installed {
+                        Badge(text: "Installed", systemImage: "checkmark.circle.fill", tint: Theme.ok)
+                    } else {
+                        HStack(spacing: 10) {
+                            Button {
+                                install(game)
+                            } label: {
+                                Label("Download", systemImage: "arrow.down.circle.fill")
+                                    .font(.footnote.weight(.semibold))
+                            }
+                            .foregroundStyle(Theme.accent)
+                            .disabled(store.download != nil)
+                            if let size = game.sizeDescription {
+                                Text(size).font(.caption2).foregroundStyle(.white.opacity(0.4))
+                            }
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func install(_ game: StoreGame) {
+        Task {
+            do {
+                try await store.install(game)
+            } catch {
+                store.libraryMessage = EpicStore.reason(error)
             }
         }
     }

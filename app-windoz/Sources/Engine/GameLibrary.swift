@@ -81,6 +81,17 @@ final class GameLibrary: ObservableObject {
         persist()
     }
 
+    /// Fill in cover art for an entry that has none — the retro-fetch for
+    /// installs made while this device's storage refused writes (0.3.x), so
+    /// the shelf shows real covers after the storage repair.
+    func updateArtwork(id: UUID, coverPath: String?, heroPath: String?) {
+        guard let index = games.firstIndex(where: { $0.id == id }) else { return }
+        var changed = false
+        if let coverPath, games[index].coverArtPath != coverPath { games[index].coverArtPath = coverPath; changed = true }
+        if let heroPath, games[index].heroArtPath != heroPath { games[index].heroArtPath = heroPath; changed = true }
+        if changed { persist() }
+    }
+
     // MARK: - Persistence
 
     /// The Keychain mirror — the one store this device has proven writable

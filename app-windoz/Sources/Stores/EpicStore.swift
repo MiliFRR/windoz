@@ -12,10 +12,16 @@
 //    prefer that session (Sources/Epic/EpicLauncherAuth.swift);
 //  - the owned library: the account's own library-service records, with
 //    titles, developers and art from the public catalog
-//    (Sources/Epic/EpicAPI.swift).
+//    (Sources/Epic/EpicAPI.swift);
+//  - chunked downloads (0.4.0): the live Windows build's binary manifest and
+//    its chunks come from Epic's own CDN; every chunk is verified against the
+//    SHA-1 the manifest carries before it is written, files are assembled at
+//    their own offsets, and the install registers in the library with art
+//    (Sources/Epic/EpicDownloader.swift, ported from Legendary — GPL-3.0).
 //
-// What is not here yet, and is never claimed: chunked downloads. The CDN and
-// manifest endpoints are the next piece; the UI says so instead of pretending.
+// What is not here yet, and is never claimed: updates, repair and resume.
+// Encrypted manifests/chunks are refused with a named reason — that is Epic's
+// content protection, and Windoz does not touch it.
 
 import Foundation
 import Combine
@@ -27,12 +33,12 @@ final class EpicStore: ObservableObject, StoreProvider {
 
     let capability = StoreCapability(
         signIn: .native,
-        downloads: .none,
+        downloads: .native,
         library: true,
         updateAndVerify: false,
         cloudSaves: false,
         runtimeLauncherNeeded: true,
-        summary: "Sign in with Epic's device code — approve it on epicgames.com/activate; Windoz never sees your password. The owned library needs the launcher-scoped sign-in (the button in this sheet): Epic scopes its library service to the launcher client. Chunked downloads are not in this build; titles that refuse to start without the official client will run the Epic Games Launcher in Wine.")
+        summary: "Sign in with Epic's device code — approve it on epicgames.com/activate; Windoz never sees your password. The owned library needs the launcher-scoped sign-in (the button in this sheet): Epic scopes its library service to the launcher client. Downloads fetch the live Windows build from Epic's own CDN, chunk by chunk, verifying every chunk's hash; updates and repairs come later.")
 
     @Published private(set) var authState: StoreAuthState = .signedOut
     @Published private(set) var games: [StoreGame] = []
@@ -40,6 +46,23 @@ final class EpicStore: ObservableObject, StoreProvider {
     @Published private(set) var libraryUpdated: Date?
     /// The last library error, shown in the store sheet.
     @Published var libraryMessage: String?
+
+    /// The running download, when one is. The sheet and the store card show
+    /// its phase, bytes and detail — never a silent spinner.
+    @Published private(set) var download: DownloadState?
+
+    struct DownloadState: Equatable {
+        var gameID: String
+        var phase: String
+        var doneBytes: UInt64
+        var totalBytes: UInt64
+        var detail: String
+
+        var fraction: Double {
+            guard totalBytes > 0 else { return 0 }
+            return min(1, Double(doneBytes) / Double(totalBytes))
+        }
+    }
 
     /// Driving the sign-in sheet and the library sheet from the UI.
     @Published var showingSignIn = false
@@ -53,6 +76,11 @@ final class EpicStore: ObservableObject, StoreProvider {
     private var cachedAccount: String?
 
     private static var cacheURL: URL {
+        AppContainer.storageRoot.appendingPathComponent("windoz-epic-library.json")
+    }
+
+    /// The 0.3.x location, read as a fallback so an upgrade keeps the cache.
+    private static var legacyCacheURL: URL {
         AppContainer.documents.appendingPathComponent("windoz-epic-library.json")
     }
 
@@ -251,7 +279,11 @@ final class EpicStore: ObservableObject, StoreProvider {
     private func loadCache() {
         let account = Self.accountKey(EpicSignIn.storedSession()?.accountId)
         cachedAccount = account
-        guard let data = try? Data(contentsOf: Self.cacheURL), data.count <= 64 << 20,
+        var data = try? Data(contentsOf: Self.cacheURL)
+        if data == nil, Self.legacyCacheURL != Self.cacheURL {
+            data = try? Data(contentsOf: Self.legacyCacheURL)
+        }
+        guard let data, data.count <= 64 << 20,
               let cache = try? JSONDecoder().decode(Cache.self, from: data),
               cache.version == 1, cache.account == account else { return }
         games = cache.games
@@ -271,22 +303,161 @@ final class EpicStore: ObservableObject, StoreProvider {
         accountId.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
     }
 
-    // MARK: - Downloads (not in this build — said plainly)
+    // MARK: - Downloads
 
+    /// Epic's chunked install. The live Windows build's manifest is fetched
+    /// with the launcher-scoped session, every chunk is verified against the
+    /// SHA-1 the manifest carries, and the files land in
+    /// <storage root>/EpicGames/<title>. Every step is logged; every refusal
+    /// is a sentence.
     func install(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Epic chunked downloads are not in this build yet — sign-in and the owned library are. Downloads are the next piece.")
+        guard authState.isSignedIn else { throw StoreError.notSignedIn }
+        guard download == nil else {
+            throw StoreError.notImplemented("An Epic download is already running — let it finish first.")
+        }
+        let identifiers = game.id.split(separator: ":", maxSplits: 1).map(String.init)
+        guard identifiers.count == 2, !identifiers[0].isEmpty, !identifiers[1].isEmpty else {
+            throw StoreError.notImplemented("This entry is missing its Epic identifiers; refresh the library and try again.")
+        }
+        let namespace = identifiers[0], catalogItemId = identifiers[1]
+
+        download = DownloadState(gameID: game.id, phase: "Preparing", doneBytes: 0, totalBytes: 0,
+                                 detail: "Asking Epic for the live build")
+        defer { download = nil }
+
+        do {
+            let token = try await downloadToken()
+            let appName = await resolveAppName(namespace: namespace, catalogItemId: catalogItemId, token: token)
+            guard let manifestURL = try await EpicAPI.assetManifestURL(namespace: namespace,
+                                                                       catalogItemId: catalogItemId,
+                                                                       appName: appName, userToken: token) else {
+                throw StoreError.notImplemented("Epic has no live Windows build for this title. It may not be released for Windows yet.")
+            }
+            EpicLog.event("[epic-download] start app=\(appName ?? catalogItemId)")
+
+            let result = try await EpicDownloader.install(
+                manifestURL: manifestURL, bearerToken: token,
+                folderName: EpicDownloader.folderName(for: game.title)) { progress in
+                await self.publish(progress, for: game.id)
+            }
+            EpicLog.event("[epic-download] done files=\(result.fileCount) bytes=\(result.bytes) "
+                          + "exe=\(result.executablePath == nil ? 0 : 1) skipped-symlinks=\(result.skippedSymlinks)")
+
+            // Art and registration are best-effort after a completed
+            // download: a title that arrived must land in the library even if
+            // the art CDN fails.
+            let art = await fetchArt(for: game)
+            registerInstalled(game: game, result: result, art: art)
+        } catch {
+            EpicLog.event("[epic-download] failed app=\(game.title) reason=\(Self.reason(error))")
+            throw error
+        }
+    }
+
+    private func publish(_ progress: EpicDownloader.Progress, for gameID: String) {
+        var state = download ?? DownloadState(gameID: gameID, phase: progress.phase.rawValue,
+                                              doneBytes: 0, totalBytes: 0, detail: "")
+        state.gameID = gameID
+        state.phase = progress.phase.rawValue
+        state.doneBytes = progress.doneBytes
+        state.totalBytes = progress.totalBytes
+        state.detail = progress.detail
+        download = state
+    }
+
+    /// The launcher session first (the assets service is launcher-scoped),
+    /// then the device session, then the client credentials.
+    private func downloadToken() async throws -> String {
+        if EpicLauncherSignIn.isSignedIn,
+           let token = try? await EpicLauncherAuthClient.shared.userToken(), !token.isEmpty {
+            return token
+        }
+        if let token = try? await EpicAuthClient.shared.userToken(), !token.isEmpty {
+            return token
+        }
+        return try await EpicAuthClient.shared.clientCredentials()
+    }
+
+    /// The app name Epic's assets service wants, from the owner's own library
+    /// items. Nil is fine — the v1 list fallback matches by catalog item.
+    private func resolveAppName(namespace: String, catalogItemId: String, token: String) async -> String? {
+        guard let items = try? await EpicAPI.libraryItems(userToken: token) else { return nil }
+        return items.first { $0.namespace == namespace && $0.catalogItemId == catalogItemId }?.appName
+    }
+
+    private func registerInstalled(game: StoreGame, result: EpicDownloader.Result,
+                                   art: (cover: String?, hero: String?)) {
+        var installed = InstalledGame(
+            title: game.title,
+            executablePath: result.executablePath ?? "",
+            workingDirectory: result.folder.path,
+            coverArtPath: art.cover,
+            heroArtPath: art.hero,
+            storeID: StoreID.epic.rawValue,
+            storeItemID: game.id)
+        let antiCheat = AntiCheatDetector.detect(inFolder: result.folder.path)
+        installed.antiCheat = antiCheat
+        installed.compatibility = antiCheat?.onlineRisk == .unsupported ? .unsupported : .playable
+        GameLibrary.shared.add(installed)
+
+        if let index = games.firstIndex(where: { $0.id == game.id }) {
+            games[index].installed = true
+            if result.bytes > 0 { games[index].sizeBytes = Int64(clamping: result.bytes) }
+        }
+        writeCache()
+        if result.skippedSymlinks > 0 {
+            libraryMessage = "Installed, but \(result.skippedSymlinks) manifest entries that are links were skipped — the game may miss some files."
+        } else if result.executablePath == nil {
+            libraryMessage = "Installed, but the game's program could not be identified from Epic's manifest. Open the game's page to point Windoz at its .exe."
+        }
+    }
+
+    private func fetchArt(for game: StoreGame) async -> (cover: String?, hero: String?) {
+        async let cover = fetchArtFile(game.coverURL, name: artName(game, "cover"))
+        async let hero = fetchArtFile(game.heroURL, name: artName(game, "hero"))
+        return await (cover, hero)
+    }
+
+    private func artName(_ game: StoreGame, _ kind: String) -> String {
+        let digest = SHA256.hash(data: Data(game.id.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "epic-\(digest.prefix(12))-\(kind).jpg"
+    }
+
+    private func fetchArtFile(_ url: URL?, name: String) async -> String? {
+        guard let url else { return nil }
+        let destination = AppContainer.artDirectory.appendingPathComponent(name)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path),
+           let existing = try? Data(contentsOf: destination), !existing.isEmpty {
+            return destination.path
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 25
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
+            EpicLog.event("[epic-art] fetch failed \(name)")
+            return nil
+        }
+        do {
+            try data.write(to: destination, options: .atomic)
+            return destination.path
+        } catch {
+            if ContainerFS.writeFile(destination.path, data).ok { return destination.path }
+            EpicLog.event("[epic-art] could not save \(name): \(error.localizedDescription)")
+            return nil
+        }
     }
 
     func update(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Epic updates arrive with the chunk downloader; it is not in this build yet.")
+        throw StoreError.notImplemented("Epic updates will re-check an installed build against Epic's live manifest; not in this build yet. Downloading the game again updates it.")
     }
 
     func verify(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Epic verification arrives with the chunk downloader; it is not in this build yet.")
+        throw StoreError.notImplemented("Epic verification — comparing installed files against the live manifest — is not in this build yet.")
     }
 
     func uninstall(_ game: StoreGame) async throws {
-        throw StoreError.notImplemented("Nothing is installed through Epic here yet, so there is nothing to remove.")
+        throw StoreError.notImplemented("Removing an Epic install from Windoz is not in this build yet; the game's files live in Windoz's storage under EpicGames/.")
     }
 
     // MARK: - Launch configuration (StoreProvider)

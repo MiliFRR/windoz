@@ -60,6 +60,30 @@ labeled as such. 0.3.5 is **device-verification pending**; its IPA is
 `windoz-ipa-keep/windoz-14.ipa` (75,129,142 bytes, SHA-256
 `C17EBEB8EEC561F2B7C0B0CD3F164C7027D1C39DBAB31FA7972C538995B9C961`).
 
+**On-device status (LiveContainer, 2026-10-18 — build 0.3.5):** the owner ran
+0.3.5. Two answers came back: **Epic's launcher sign-in finishes** (reading
+the code from the redirect page's body works), and **pressing Play on a game
+was still refused with the storage message** — the launch gate found the
+prefix unwritable and said so, exactly what the container has done to
+`Documents` since 0.3.2, and the honest refusal was the whole of it: every
+build up to 0.3.5 hard-coded the Wine prefix at `Documents/windoz-prefix`, so
+on this device no game could ever start. **Build 0.4.0 replaces the complaint
+with negotiation and is the round the owner asked for:** the whole Wine
+environment relocates to the first location that *proves* it accepts writes
+(a real create-and-replace probe per candidate — `Documents` only wins when
+it passes), the old prefix migrates as one unit, and refusals now carry the
+raw errno and free space. Steam games gain per-game **Doz Dock** — Madeira's
+dock contract ported exactly (the bundled `dockhost.exe`, the
+`windoz-dock/launch.auth` handoff, the `[steam-host]` report read back and
+translated, Valve's **own** offline mode) — selectable against Steam desktop
+(the full client) and Direct; the Steam client's Windows components install
+from Valve's pinned CDN in the game's settings; **Epic downloads** arrive
+(Legendary-ported binary manifest + hash-verified chunks, landing in
+`EpicGames/<title>`); installs and pre-0.3.5 entries backfill **cover art**
+from Steam's CDN; and the game page carries an **achievements card under
+Play**. 0.4.0 is **device-verification pending** — the run the owner is
+about to do is what confirms it.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -77,16 +101,19 @@ is reused from the pinned `madeira` submodule behind one boundary,
   iPhone (Sideloadly / SideStore / LiveContainer), JIT via StikDebug, and the
   free-Apple-ID realities.
 - [`docs/DOZDOCK.md`](docs/DOZDOCK.md) — what Doz Dock is, what exists today
-  (the download engine; Steam as a real native client; Epic real up to the
-  library with its launcher-scoped sign-in; the launcher stores as honest
-  stubs), and the rules it will keep (no DRM circumvention, no fake clients).
+  (the download engine; Steam as a real native client with the dock itself
+  ported in 0.4.0; Epic real through its launcher-scoped library and now
+  chunked downloads), and the rules it will keep (no DRM circumvention, no
+  fake clients).
 
-The engine core (wineserver + FEX), prefixes, JIT probing, runtime detection,
-downloads, the game session that runs a game (**ported in 0.3.4** —
-presentation, input and the guest process behind `WindozEngine.launch`), and
-the Steam/Epic clients are real and testable today. Device verification of the
-newest layers is pending; the ledger says exactly which claim rests on which
-run.
+The engine core (wineserver + FEX), prefixes, JIT probing, runtime
+detection, downloads, the game session that runs a game (**ported in
+0.3.4** — presentation, input and the guest process behind
+`WindozEngine.launch`), the per-game launch modes (**Doz Dock ported in
+0.4.0** — the dock host bridge, handoff, report and offline mode), and the
+Steam/Epic clients (Steam depot downloads; Epic chunked downloads in 0.4.0)
+are real and testable today. Device verification of the newest layers is
+pending; the ledger says exactly which claim rests on which run.
 
 ## Decisions (recorded 2026-10-15)
 
@@ -94,7 +121,7 @@ run.
 |---|---|
 | Device | iPhone 17 (A19, 8 GB RAM); deployment target iOS 26, arm64 — every newer iPhone works too |
 | Build | GitHub Actions on `MiliFRR/windoz` (macOS runners); no Mac needed |
-| Steam DRM games | In scope — Madeira's Dock approach ported and improved as **Doz Dock** (Phase 5) |
+| Steam DRM games | In scope — Madeira's Dock approach ported and improved as **Doz Dock** (ported in 0.4.0) |
 | Test game (Phase 1) | BROTHER!!! Save him! – Hardcore Platformer (Steam AppID 1286560; 64-bit, 300 MB, gamepad support). DRM caveat: if its `steam_api` requires the Steam client, it launches via Doz Dock, not directly |
 | Apple ID | Free (7-day re-sign via SideStore/AltStore) |
 
@@ -167,16 +194,22 @@ are public as of 2026-10-14). The pipeline:
   by `SteamStore.swift` — are code-complete but have not had a first device
   install: the container's write refusal on this LiveContainer install (see
   the ledger) still gates it. 0.3.4 adds the game page's achievements and
-  friends (Steam Web API with a community-XML fallback).
-- [ ] **Phase 4 — Downloads (Steam side mostly done; generic pipeline still
-  open).** Depot downloads are resumable (journals) and verify every chunk
-  against its SHA-1; the generic engine keeps its queue/verify rules for
+  friends (Steam Web API with a community-XML fallback); 0.4.0 adds the
+  per-game launch modes and backfills cover art for entries installed before
+  0.3.5.
+- [ ] **Phase 4 — Downloads (Steam side mostly done; Epic's chunked path in
+  0.4.0).** Depot downloads are resumable (journals) and verify every chunk
+  against its SHA-1; Epic's downloads (ported from Legendary: binary build
+  manifest, hash-verified chunks, files assembled at the manifest's own
+  offsets) land in 0.4.0; the generic engine keeps its queue/verify rules for
   runtime files. BGContinuedProcessingTask + Live Activity for depot
   downloads and pause-from-UI are still open.
-- [ ] **Phase 5 — Doz Dock.** Madeira Dock ported/renamed/improved; official
-  Steam-DRM games launch through Valve's own client running in Wine. The
-  session host a launcher needs landed in 0.3.4; the pipeline that installs
-  and wraps a launcher is the next piece (design and honest state:
+- [ ] **Phase 5 — Doz Dock (ported in 0.4.0; device verification pending).**
+  Madeira Dock ported/renamed/improved — the dock host bridge, the handoff
+  file, the report mapping and Valve's own offline mode are real per game in
+  0.4.0; official Steam-DRM games launch through Valve's own client running
+  in Wine. The launcher-in-Wine pipeline for EA/Rockstar/GOG is the next
+  piece (design and honest state:
   [`docs/DOZDOCK.md`](docs/DOZDOCK.md)).
 - [ ] **Phase 6 — Settings & polish.** Graphics options, storage management,
   log export, Steam account management.
@@ -794,6 +827,91 @@ the fix that is still in the tree.*
   The present/queue mode, MetalFX and the backend choice remain **stored
   only** and are labeled amber in the sheet — this build has no engine switch
   for them.
+- **The owner's 0.3.5 run: Epic sign-in confirmed, Play refused at the
+  storage gate — 0.4.0 moves the whole environment instead of asking
+  `Documents` (2026-10-18, device verification pending).** The refusal itself
+  was the honest half: the launch gate found the prefix unwritable and named
+  it (this container has refused `Documents` writes at policy level since
+  0.3.2 — see that entry). The dishonest half was the design: every build up
+  to 0.3.5 hard-coded the Wine prefix at `Documents/windoz-prefix`, so on a
+  container that refuses `Documents` no game could start no matter what the
+  message said. Fix, in `AppContainer`: the storage root is now
+  **negotiated** at first need — each candidate is probed with a real
+  create + replace + delete through both Foundation and the C library
+  (Documents, the app's Imported folder, Library, the system and shared
+  locations the app can genuinely write), the first pass wins, and the
+  choice is remembered in a mode-0600 `windoz-storage.json`; the prefix
+  follows it (`<storage root>/windoz-prefix`), an existing
+  `Documents/windoz-prefix` is migrated as one unit when the root moved, and
+  every later write — downloads, art, mirrors, the Steam library — goes
+  through the same negotiated root. The refusal message now carries the raw
+  errno and the free-space figure of the failing path. Device confirmation
+  pending.
+- **Doz Dock — the actual dock — is ported (0.4.0, device verification
+  pending).** The owner asked for Madeira's Dock inside Windoz and for a full
+  Steam launcher launch. The contract is ported exactly from the pinned tree
+  (`work/madeira-pinned/app/Madeira/MadeiraDock.swift`): the dock host
+  (`dockhost.exe`, bundled by the engine since 0.3.5) is bridged into the
+  prefix's `system32`; a per-launch handoff file (`windoz-dock/launch.auth`,
+  `0600`, `O_CREAT|O_EXCL|O_NOFOLLOW`, App Support first with the negotiated
+  storage root as fallback) carries the envelope (`MDOCK001` + Steam ID +
+  App ID + name + refresh token); the environment the host reads
+  (`MADEIRA_DOCK_SESSION=1`, `MADEIRA_DOCK_AUTH_FILE=\\?\unix…`, the
+  `MADEIRA_STEAM_HOST_*` set) is applied per launch and cleared after; and
+  the host's own report (`[steam-host]` rounds at
+  `<prefix>/drive_c/madeira-dock.txt`) is parsed against an allow-list and
+  turned into plain English — results 30/34/35/50/51/52, 37/49 with the CEG
+  result, 45/48 with the client error, refusals 5–35. Offline is **Valve's
+  own offline mode**, requested with `MADEIRA_DOCK_OFFLINE=1` when the
+  per-game toggle is on or the path monitor reports no network — never
+  faked. The per-game setting (Direct / Doz Dock / Steam desktop) validates
+  before it launches: bundled dock host, a Steam sign-in Windoz can read,
+  the Steam client components present, and the game's own
+  `appmanifest_<appid>.acf` inside the **active** prefix — otherwise a named
+  refusal, not a hang. The handoff file is deleted after every session, and
+  Steam desktop runs the full client in a virtual desktop for manual
+  sign-in and library use — no game auto-started.
+- **Steam client components install from Valve's own CDN, pinned (0.4.0).**
+  Doz Dock and Steam desktop need the Steam client's own Windows files
+  inside the prefix, and until 0.4.0 the app assumed they would appear. The
+  game's settings sheet now offers the download: three packages from
+  `client-update.akamai.steamstatic.com`, SHA-256-pinned in
+  `SteamClientRuntime.swift` with sizes checked on arrival, unpacked into
+  `Program Files (x86)/Steam` in the active prefix with Steam's registry
+  keys and redirects written, staged through the negotiated storage root
+  (this container refuses even `tmp`). "Prepared" means `steam.exe` and
+  `steamclient64.dll` both exist — checked, not assumed.
+- **Epic gains chunked downloads (0.4.0, device verification pending).** The
+  owner asked for Epic downloads; the endpoints were the blocker — they are
+  scoped to Epic's launcher client, which 0.3.4's launcher-scoped sign-in
+  answers. The path is ported from **Legendary** (GPL-3.0; the binary
+  build-manifest layout, the chunk container format, the CDN path scheme
+  `{ChunksVx}/{group}/{hash}_{guid}.chunk`) and runs the owner's own
+  session: the live Windows build's manifest URL comes from
+  launcher-public-service (v2 by app name, falling back to the v1 list), the
+  manifest is decompressed and SHA-1-checked, every chunk is fetched from
+  Epic's CDN and accepted **only** when its decompressed bytes match the
+  SHA-1 the manifest carries, files are assembled at their own part offsets
+  and whole-file hashes verified where present, and the game lands under
+  `<storage root>/EpicGames/<title>` with its program taken from the
+  manifest's own launch executable, registered in the library with art.
+  Named refusals, not guesses: encrypted manifests and encrypted chunks are
+  refused (that is Epic's content protection — Windoz does not touch it),
+  legacy JSON manifests are refused by name, paths that would escape the
+  install folder are refused, and case-only filename collisions are refused
+  with the reason. Updates, repair and resume are the next round.
+- **The 0.4.0 fit-and-finish the owner asked for.** Cover art: the Steam
+  install path fetched art since 0.3.5, but entries installed **before** that
+  stayed blank — the game page now backfills an entry's cover/header from
+  Steam's CDN the first time it is opened without them, once per session,
+  logged. The achievements summary card moved **directly below the Play
+  button** (earned/total plus the nearest few unlocks; the full list stays in
+  the Achievements tab). Settings gained the **Steam launch** card: the
+  per-game mode picker (Direct / Doz Dock / Steam desktop), the **offline
+  mode** toggle (applied as Valve's own offline request when Doz Dock runs
+  the game), the components status row and its install button. The launch
+  screen states the mode it used, and Direct mode says plainly when a title
+  will need Doz Dock instead.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

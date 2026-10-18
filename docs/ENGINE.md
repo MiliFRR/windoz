@@ -51,15 +51,20 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 | Increased-memory entitlement report | **working** | `task_info(TASK_VM_INFO)` + `jit_available_memory` |
 | Windows runtime detection / official download | **working** | `RuntimeInstaller` (files + `DownloadManager`) |
 | Game **session host** (Metal presentation + input + the guest process) | **ported in 0.3.4 — device verification pending** | `WindozEngine.launch` → `wine_process_start`; the presenting layer and overlay live in `Sources/UI/GameSessionView.swift` |
-| Native store clients | **Steam: sign-in, owned library, depot downloads (device verification pending); Epic: device-code + launcher sign-in, owned library; downloads not yet** | `SteamStore`, `EpicStore` |
+| Per-game **launch modes** (Direct / Doz Dock / Steam desktop) | **ported in 0.4.0 — device verification pending** | `WindozEngine.prepareLaunchMode` + `Sources/Steam/Content/DozDock.swift` |
+| **Storage negotiation** (the root that accepts writes) | **working (0.4.0)** | `AppContainer.probeWrites` / `storageRoot`; the prefix follows it (`PrefixManager`) |
+| Native store clients | **Steam: sign-in + owned library device-verified, depot downloads device-verification pending; Epic: both sign-ins device-verified, chunked downloads in 0.4.0 (device verification pending)** | `SteamStore`, `EpicStore`, `EpicDownloader` |
 
-`WindozEngine.launch` performs a **real** preflight — JIT re-checked, prefix
-created, executable stat'd, the guest environment written — then hands the game
-to the session screen, which registers the presenting `CAMetalLayer` with the
-engine's display shim (`madeira_display_set_layer`, once per process, before
-the guest's first swapchain), and starts the guest process on the engine queue
-(wineserver if needed → `fex_initialize` → `wine_exit_status_reset` →
-`wine_process_start`). The session ends when the guest process does; the
+`WindozEngine.launch` performs a **real** preflight — JIT re-checked, the
+prefix created at the negotiated storage root, the storage gate proving that
+root itself accepts writes, the executable stat'd, the launch mode prepared
+(`prepareLaunchMode`: Direct needs only the program; Doz Dock validates and
+writes the handoff; Steam desktop checks the client components) — then hands
+the game to the session screen, which registers the presenting `CAMetalLayer`
+with the engine's display shim (`madeira_display_set_layer`, once per process,
+before the guest's first swapchain), and starts the guest process on the
+engine queue (wineserver if needed → `fex_initialize` → `wine_exit_status_reset`
+→ `wine_process_start`). The session ends when the guest process does; the
 engine's own exit report (`wine_crash_exit_status`) decides the message, and a
 session that never starts is closed with an honest note after 90 seconds.
 
@@ -98,12 +103,48 @@ pinned forks actually read. Sources are the fork/app files named below.
 | `MADEIRA_SCREEN_SRC` | where that default came from (log line only) | always | `sysparams_ios.c` |
 | `MADEIRA_WORKDIR` | the working folder, **only** a `C:\` folder | when configured | `WineProcessBridge.m` (guarded chdir) |
 | `MADEIRA_DESKTOP` | run the Wine desktop (`explorer.exe`) | reserved | `Library.swift configureLaunch` |
-| `MADEIRA_STEAM_APPID` / `MADEIRA_STEAM_APPPATH` | a Steam game's own App ID / install folder | reserved for Dock | `WineProcessBridge.m` |
+| `MADEIRA_STEAM_APPID` / `MADEIRA_STEAM_APPPATH` | a Steam game's own App ID / install folder | Direct mode, when the title has an identity Windoz can prove (digits ≤ 10; a `C:\` folder with no `..`); **unset otherwise**, so the engine's built-in fallback cannot leak another game's identity | `WineProcessBridge.m` |
+| `MADEIRA_DOCK_SESSION`, `MADEIRA_DOCK_AUTH_FILE`, `MADEIRA_DOCK_OFFLINE`, `MADEIRA_STEAM_HOST_APPID`/`_LAUNCH_OPTION`/`_CLIENT_DIR`/`_EXPECTED_INSTALL`/`_LOG`/`_CEG` | Doz Dock / Steam desktop — see "Launch modes" below; written only for those modes and unset after every session | per launch, mode-dependent | `DozDock.swift` (mirrors the pinned `MadeiraDock.swift`) |
 | `MADEIRA_FASTSYNC` | Wine's sync engine — `auto`, `1`, `cells`, `0` | when the game's Sync engine choice is not "Engine default" | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
 | `FEX_X87REDUCEDPRECISION`, `MADEIRA_FEX_AVX`, `MADEIRA_CPU_COUNT`, `MADEIRA_DINPUT_PAD`, `DXMT_D9_ANISO_LIMIT`, `MADEIRA_GAME_WINDOWS`, `MADEIRA_WAIT_CHILDREN`, `MADEIRA_VIRTUAL_MODE_SET` | the per-game engine switches in the settings sheet — each is set *or* unset on every launch, so a previous game's choice never leaks into the next | when the game sets them | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
 | `FEX_X87REDUCEDPRECISION`, `MADEIRA_CPU_COUNT`, `DXMT_D9_ANISO_LIMIT`, … | the user's own fork switches (applied last, so an expert entry can override the sheet) | from `GameSettings.environment` | `Library.swift applyEnvironment` |
 
-### Frame pacing
+### Launch modes (0.4.0)
+
+`GameSettings.launchMode` picks how a title starts; `prepareLaunchMode`
+validates it before anything is written, and the launch log names the mode:
+
+- **`direct`** — the game's own program (everything before 0.4.0). For a
+  Steam title, the engine's own identity variables are published per the
+  table above — and *unset* when the title has none.
+- **`dock`** — **Doz Dock**: Valve's own client, through the dock host ported
+  from Madeira. `DozDock.writeHandoff` writes the launch file (envelope
+  `MDOCK001` + Steam ID + App ID + name + token, `0600`,
+  `O_CREAT|O_EXCL|O_NOFOLLOW`, App Support first with the storage root as
+  fallback); `DozDock.configure` sets `MADEIRA_STEAM_HOST_APPID`,
+  `_LAUNCH_OPTION=0`, `_CLIENT_DIR=C:\Program Files (x86)\Steam`,
+  `_EXPECTED_INSTALL=<the game's Windows install path>`,
+  `_LOG=C:\madeira-dock.txt` and `_CEG=1` for CEG titles; the session writes
+  `MADEIRA_DOCK_SESSION=1` and points `MADEIRA_DOCK_AUTH_FILE` at the
+  handoff. After the session, the host's report
+  (`<prefix>/drive_c/madeira-dock.txt`) is parsed against an allow-list,
+  translated to plain words, and deleted along with the handoff and every
+  dock variable.
+- **`steamDesktop`** — the same client components, no game auto-started: the
+  full Steam client in a virtual desktop for manual sign-in and library use.
+
+**Offline** is Valve's own offline mode: `MADEIRA_DOCK_OFFLINE=1` is set only
+when the per-game toggle is on or `NWPathMonitor` reports no network — never
+faked, never emulated. Both dock modes refuse with a sentence
+(`EngineError.dockNotReady` / `.steamDesktopNotReady`) when something is
+missing: the bundled `dockhost.exe`, a readable Steam sign-in, the client
+components, or the game's own `appmanifest_<appid>.acf` inside the **active**
+prefix's `steamapps`. The components themselves install from Valve's pinned
+CDN packages (`SteamClientRuntime`: sizes + SHA-256 checked, Steam's registry
+keys and redirects written); "prepared" means `steam.exe` and
+`steamclient64.dll` exist — checked, not assumed.
+
+
 
 `GameSettings.fpsLimit` is applied through the engine's own in-process call
 `madeira_set_vsync_locked`, at session start and again when the guest's first
@@ -129,8 +170,13 @@ inventing a switch.
 
 `InstalledGame.executablePath` is a host path inside the app container.
 `PrefixManager.windowsPath(forHostPath:)` turns a path under
-`Documents/windoz-prefix/drive_c` into its `C:\…` guest path. A game installed
-outside the prefix is exposed through Wine's default `Z:` root mapping
+`<storage root>/windoz-prefix/drive_c` into its `C:\…` guest path. The
+storage root itself is negotiated since 0.4.0 (`AppContainer.probeWrites`: a
+real create + replace + delete per candidate, through Foundation *and* the C
+library; the first pass wins and is remembered in `windoz-storage.json`) —
+on the owner's device `Documents` refuses every write at policy level, so the
+environment relocates instead of failing. A game installed outside the
+prefix is exposed through Wine's default `Z:` root mapping
 (`Z:\private\var\…`). `MADEIRA_WORKDIR` is only written for a `C:\` folder,
 because the engine chdir's into it and rejects anything else.
 

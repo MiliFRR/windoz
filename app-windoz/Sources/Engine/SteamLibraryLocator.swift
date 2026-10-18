@@ -36,8 +36,22 @@ enum SteamLibraryLocator {
     static var ruleURL: URL { AppContainer.storageRoot.appendingPathComponent(ruleFileName) }
     static var legacyRuleURL: URL { AppContainer.documents.appendingPathComponent(ruleFileName) }
 
-    /// Steam's own client layout (`C:\Program Files (x86)\Steam\steamapps`).
-    static var preferredRelative: String { "Documents/drive_c/\(SteamInstallPaths.libraryRelative)" }
+    /// Steam's own client layout (`C:\Program Files (x86)\Steam\steamapps`) —
+    /// inside the *active* prefix's drive_c, so installs land where Valve's
+    /// own client and Doz Dock see them as `C:`. The prefix moves with the
+    /// storage negotiation, so this is prefix-relative: rendered home-relative
+    /// when it is under home (the historic form the rule file stores),
+    /// absolute otherwise.
+    static var preferredRelative: String {
+        let target = AppContainer.prefixRoot
+            .appendingPathComponent("drive_c/\(SteamInstallPaths.libraryRelative)", isDirectory: true)
+            .standardizedFileURL.path
+        let homePath = AppContainer.home.standardizedFileURL.path
+        if target.hasPrefix(homePath + "/") {
+            return String(target.dropFirst(homePath.count + 1))
+        }
+        return target
+    }
 
     /// Tried in order after the preferred path refuses: two more places Wine
     /// sees as `C:\`, one outside the prefix under Documents, and — because a
@@ -55,8 +69,10 @@ enum SteamLibraryLocator {
     static var allRelatives: [String] { [preferredRelative] + fallbackRelatives }
 
     /// Relative paths are home-relative, so a candidate can leave Documents.
+    /// Absolute paths are themselves.
     static func url(forRelative relative: String) -> URL {
-        AppContainer.home.appendingPathComponent(relative, isDirectory: true)
+        if relative.hasPrefix("/") { return URL(fileURLWithPath: relative, isDirectory: true) }
+        return AppContainer.home.appendingPathComponent(relative, isDirectory: true)
     }
 
     /// Every candidate: the name the rule file stores and its URL. The static
@@ -144,10 +160,15 @@ enum SteamLibraryLocator {
         let before = rememberedCandidate?.name ?? preferredRelative
         var lines: [String] = []
         var order: [(name: String, url: URL)] = allCandidates
+        // The Windows drive leads: Valve's own client and Doz Dock can only
+        // start games installed inside it. The remembered location comes
+        // second — it already holds this device's existing installs, and it
+        // still wins whenever the drive refuses writes (the state this device
+        // was in through 0.3.5, when Documents refused every write).
         if let rememberedCandidate,
            let index = order.firstIndex(where: { $0.name == rememberedCandidate.name }) {
             order.remove(at: index)
-            order.insert(rememberedCandidate, at: 0)
+            order.insert(rememberedCandidate, at: min(1, order.count))
         }
         var backup: (name: String, foundationOK: Bool, rawOK: Bool)?
         for entry in order {
@@ -196,7 +217,7 @@ enum SteamLibraryLocator {
         var foundationOK = false
         do {
             try FileManager.default.createDirectory(at: common, withIntermediateDirectories: true)
-            let probe = common.appendingPathComponent(".windoz-locator-probe")
+            let probe = common.appendingPathComponent(AppContainer.probeName("locator"))
             do {
                 try Data([0x57]).write(to: probe)
                 do {
@@ -217,7 +238,7 @@ enum SteamLibraryLocator {
         var rawOK = false
         let dirs = ContainerFS.mkdirs(common.path)
         if dirs.ok {
-            let probe = common.appendingPathComponent(".windoz-locator-probe-raw")
+            let probe = common.appendingPathComponent(AppContainer.probeName("locator-raw"))
             let created = ContainerFS.writeFile(probe.path, Data([0x57]))
             if created.ok {
                 let removed = ContainerFS.unlink(probe.path)

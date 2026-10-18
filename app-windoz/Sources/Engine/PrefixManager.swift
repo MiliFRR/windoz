@@ -2,14 +2,25 @@ import Foundation
 
 /// Owns the Wine prefix (the simulated `C:` drive) inside the app container.
 /// Only the engine touches this; the UI asks `WindozEngine` for state.
+///
+/// Location comes from `AppContainer.prefixRoot`, which is decided by real
+/// write probes, never assumed: `Documents/windoz-prefix` while Documents
+/// accepts writes (every build before 0.4.0), otherwise the first location
+/// that passes — Library, tmp, or an audited root. When the location moves,
+/// an existing environment is carried over as one unit (copy under a
+/// temporary name, renamed into place only when complete); the old copy is
+/// deliberately left untouched.
 struct PrefixManager {
 
-    /// The prefix lives in Documents/windoz-prefix so the DLL farm, registry
-    /// hives and installed games all sit next to the app's own data.
     let url: URL
 
-    init(base: URL = AppContainer.documents) {
-        self.url = base.appendingPathComponent("windoz-prefix", isDirectory: true)
+    init(url: URL = AppContainer.prefixRoot) {
+        self.url = url
+    }
+
+    /// Where every build before 0.4.0 kept the prefix.
+    static var legacyURL: URL {
+        AppContainer.documents.appendingPathComponent("windoz-prefix", isDirectory: true)
     }
 
     var exists: Bool {
@@ -18,13 +29,70 @@ struct PrefixManager {
 
     var windowsPath: URL { url.appendingPathComponent("drive_c/windows") }
 
+    /// The Steam client's own library folder inside this prefix, when the
+    /// prefix sits in the active location (used by Doz Dock).
+    var steamAppsURL: URL {
+        url.appendingPathComponent("drive_c/\(SteamInstallPaths.libraryRelative)", isDirectory: true)
+    }
+
     /// Create the prefix if it is new. Idempotent: the engine extracts its
-    /// bundled template only the first time.
+    /// bundled template only the first time. Refusals carry the raw error and
+    /// the C-library route's answer — no silent failure.
     func createIfNeeded() throws {
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        if url.standardizedFileURL != Self.legacyURL.standardizedFileURL, !exists {
+            migrateLegacyPrefixIfPresent()
+        }
+        var failure: String? = nil
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: url.path) {
+            do { try fm.createDirectory(at: url, withIntermediateDirectories: true) }
+            catch { failure = "Foundation: \(error.localizedDescription)" }
+        }
+        if !fm.fileExists(atPath: url.path) {
+            let made = ContainerFS.mkdirs(url.path)
+            if made.ok { failure = nil }
+            else {
+                failure = (failure.map { $0 + "; " } ?? "") + "C library: " + made.lines.joined(separator: "; ")
+            }
+        }
+        if let failure {
+            throw EngineError.prefixCreateFailed("the folder refused creation at \(url.path) (\(failure))")
+        }
         madeira_seed_prefix_if_needed(url.path)
         guard exists else {
-            throw EngineError.prefixCreateFailed("the bundled Windows environment template could not be extracted")
+            throw EngineError.prefixCreateFailed(
+                "the bundled Windows environment template could not be extracted into \(url.path); the log's storage lines name what the device refused")
+        }
+    }
+
+    /// Carry an existing environment from the legacy Documents location to the
+    /// writable one the storage negotiation chose. One-time. The copy is made
+    /// under a temporary name and renamed into place only when every file
+    /// landed, so a half-copied prefix can never masquerade as a complete one.
+    /// The old copy is left where it was: this device's Documents refused
+    /// deletes and replaces, and a removal that half-succeeds would be worse
+    /// than the bytes it would free.
+    private func migrateLegacyPrefixIfPresent() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: Self.legacyURL.appendingPathComponent("drive_c").path) else { return }
+        let parent = url.deletingLastPathComponent()
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staging = parent.appendingPathComponent(url.lastPathComponent + ".migrating", isDirectory: true)
+        let started = Date()
+        EngineLogStream.shared.append(
+            "[host] prefix: moving the Windows environment out of Documents (its folder refuses writes) to \(url.path) — one time")
+        do {
+            try? fm.removeItem(at: staging)
+            try fm.copyItem(at: Self.legacyURL, to: staging)
+            try? fm.removeItem(at: url)
+            try fm.moveItem(at: staging, to: url)
+            EngineLogStream.shared.append(
+                "[host] prefix: moved in \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
+        } catch {
+            try? fm.removeItem(at: staging)
+            EngineLogStream.shared.append(
+                "[host] prefix: the old environment could not be moved (\(error.localizedDescription)) — a fresh one is created; the old files were kept where they are",
+                level: .warning)
         }
     }
 

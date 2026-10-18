@@ -64,14 +64,18 @@ enum PrefixHealth {
         }
     }
 
+    /// The active prefix root — negotiated by the storage probes since 0.4.0
+    /// (`AppContainer.prefixRoot`), so this repair executor inspects and
+    /// rebuilds the prefix the engine actually uses, wherever it lives.
     static func prefixRoot() -> URL {
-        AppContainer.documents.appendingPathComponent("windoz-prefix", isDirectory: true)
+        AppContainer.prefixRoot
     }
 
-    /// Documents → windoz-prefix → … → steamapps → common, outermost first.
+    /// home → … → the prefix → … → steamapps → common, outermost first, so a
+    /// refusal at any level names its own directory (and its raw errno).
     static func levels(steamApps: URL) -> [Level] {
         var urls: [URL] = [steamApps.appendingPathComponent("common", isDirectory: true)]
-        let stop = AppContainer.documents.standardizedFileURL
+        let stop = AppContainer.home.standardizedFileURL
         var current = steamApps.standardizedFileURL
         while true {
             urls.insert(current, at: 0)
@@ -94,15 +98,15 @@ enum PrefixHealth {
         var before = levels(steamApps: steamApps)
         for level in before { lines.append(level.description) }
         // 1b. A set BSD flag (immutable and friends) blocks creates and
-        //     deletes no matter the mode bits. Anything at or below our
-        //     Documents folder is ours to clear; refusals are reported —
-        //     clearing SF_IMMUTABLE would need root. The probe pass below
-        //     then reports the truth after the repair.
-        let docPath = AppContainer.documents.standardizedFileURL.path
+        //     deletes no matter the mode bits. Anything at or below Windoz's
+        //     own home is ours to clear; refusals are reported — clearing
+        //     SF_IMMUTABLE would need root. The probe pass below then reports
+        //     the truth after the repair.
+        let ownPath = AppContainer.home.standardizedFileURL.path
         for (index, level) in before.enumerated() where level.exists && level.flags != 0 {
             let url = level.url.standardizedFileURL
-            guard url.path == docPath || url.path.hasPrefix(docPath + "/") else {
-                lines.append("\(url.path) carries flags=0x\(String(level.flags, radix: 16)) — left alone (outside the app's Documents folder)")
+            guard url.path == ownPath || url.path.hasPrefix(ownPath + "/") else {
+                lines.append("\(url.path) carries flags=0x\(String(level.flags, radix: 16)) — left alone (outside Windoz's own storage)")
                 continue
             }
             let cleared = ContainerFS.clearFlags(url.path)
@@ -186,7 +190,7 @@ enum PrefixHealth {
         //    container itself (Documents) is the thing refusing writes.
         var rebuilt = false
         if !writable {
-            let rootProbe = AppContainer.documents.appendingPathComponent(".windoz-root-probe")
+            let rootProbe = floor.deletingLastPathComponent().appendingPathComponent(".windoz-root-probe")
             let containerOK = ContainerFS.writeFile(rootProbe.path, Data([0x57])).ok
             _ = ContainerFS.unlink(rootProbe.path)
             let insidePrefix = failing.contains { $0.url.path == floor.path || $0.url.path.hasPrefix(floor.path + "/") }
@@ -243,7 +247,9 @@ enum PrefixHealth {
                 + (rebuilt ? " The prefix was rebuilt." : "")
         } else if let first = failing.first {
             var text = "Windows-prefix write path: FAILED — \(first.url.path): \(first.detail) The full per-level report is in the log."
-            if first.url.standardizedFileURL.path == AppContainer.documents.standardizedFileURL.path {
+            let firstPath = first.url.standardizedFileURL.path
+            if firstPath == AppContainer.documents.standardizedFileURL.path
+                || firstPath == AppContainer.storageRoot.standardizedFileURL.path {
                 text += " The refusal is in the app's own data folder itself — nothing inside the app can store files until its container is repaired (reinstalling LiveContainer and re-adding Windoz normally rebuilds it)."
             }
             summary = text

@@ -6,11 +6,21 @@ import Security
 /// script). Inside LiveContainer the guest's `NSHomeDirectory()` is *usually*
 /// remapped, but not every LiveContainer build does it the same way, so every
 /// path goes through here instead of `URL.documentsDirectory`.
+///
+/// Device history (2026-10-17 → 0.3.5): on the owner's device *Documents*
+/// refused every write (Foundation 513, C-library EPERM) while reads and the
+/// network kept working — and the Wine prefix was hardcoded inside Documents,
+/// so every session died at "storage refused" no matter what the game was.
+/// The rule this file now lives by: **nothing is assumed writable**. Every
+/// storage decision is made by a real create + write + replace + delete test,
+/// once per process, and the Wine environment travels to a location that
+/// passes. When literally nothing passes, the refusal message carries the
+/// errno and the free space of every candidate instead of a vague "denied".
 enum AppContainer {
 
     /// Shown in Settings → About *and* printed in the first log line, so a
     /// device session can always be matched to a build.
-    static let displayVersion = "0.3.5"
+    static let displayVersion = "0.4.0"
 
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
@@ -64,53 +74,235 @@ enum AppContainer {
         documents.appendingPathComponent("windoz-downloads.json")
     }
 
-    /// Where Windoz keeps files it must be able to write *and keep* (the
-    /// library index, cover art, store records). Device history: some
-    /// containers refuse writes inside `Documents` itself while the sibling
-    /// `Library` folder still accepts them — so the root is decided by a real
-    /// create + write + delete test once per process, never assumed.
-    /// `documents` first (the layout every build before 0.3.5 used), then
-    /// `Library`, then `tmp`; the choice is logged so the launch log always
-    /// names it.
-    static let storageRoot: URL = resolveStorageRoot()
+    // MARK: - Storage negotiation (probing, never assuming)
 
-    private static func resolveStorageRoot() -> URL {
-        for candidate in [("Documents", documents), ("Library", libraryRoot), ("tmp", temporary)] {
-            if acceptsWrites(candidate.1) {
-                if candidate.0 != "Documents" {
-                    EngineLogStream.shared.append(
-                        "[host] storage root: Documents refused writes — using \(candidate.0) (\(candidate.1.path))",
-                        level: .warning)
-                } else {
-                    EngineLogStream.shared.append("[host] storage root: \(candidate.1.path)")
-                }
-                return candidate.1
-            }
+    /// One location's write verdict, from a real create + write + replace +
+    /// delete through Foundation and, when Foundation refuses, the C library.
+    /// Probe names are unique every run: this device's container has
+    /// "existing items resist replace" episodes, and a leftover probe file
+    /// from a previous run must never poison the next test (a fixed probe
+    /// name did exactly that before 0.4.0).
+    struct WriteVerdict {
+        let label: String
+        let url: URL
+        /// A new file could be created (after creating the folder if needed).
+        let createdFile: Bool
+        /// An existing file could be replaced — Wine rewrites its registry
+        /// hives on every boot, so a container that only accepts *new* files
+        /// still cannot run a session.
+        let replacedFile: Bool
+        let deletedFile: Bool
+        /// A one-shot repair (clear BSD flags, open the mode bits) made the
+        /// difference.
+        let repaired: Bool
+        /// The first refusal, verbatim — Foundation error text and/or the C
+        /// library's errno.
+        let failure: String?
+
+        var usable: Bool { createdFile && replacedFile }
+
+        var summary: String {
+            var parts = ["create=\(createdFile ? "yes" : "no")",
+                         "replace=\(replacedFile ? "yes" : "no")",
+                         "delete=\(deletedFile ? "yes" : "no")"]
+            if repaired { parts.append("after-repair") }
+            if let failure { parts.append(failure) }
+            return parts.joined(separator: " ")
         }
-        EngineLogStream.shared.append(
-            "[host] storage root: nothing accepted a write (Documents, Library, tmp) — Windoz keeps using the Documents path and every save will report its own refusal",
-            level: .error)
-        return documents
     }
 
-    /// One create + write + delete through Foundation, then through the C
-    /// library — the same two-route pattern as the rest of the app.
-    static func acceptsWrites(_ directory: URL) -> Bool {
+    /// A fresh probe name every call.
+    static func probeName(_ tag: String) -> String {
+        ".windoz-\(tag)-\(getpid())-\(UInt32(Date().timeIntervalSince1970))-\(UInt32.random(in: 0..<0xffff))"
+    }
+
+    /// Probe one directory with the exact operations an install and a Wine
+    /// boot run: create a file, replace it, read it back, delete it — through
+    /// Foundation first, then the C library. On refusal, one repair pass
+    /// (clear BSD flags + open the mode bits) is attempted when the folder is
+    /// inside the app's own home, then the test runs once more.
+    static func probeWrites(_ directory: URL, label: String) -> WriteVerdict {
         let fm = FileManager.default
-        let probe = directory.appendingPathComponent(".windoz-root-probe-\(getpid())")
-        do {
-            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-            try Data([0x57]).write(to: probe)
-            try? fm.removeItem(at: probe)
-            return true
-        } catch {
-            let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
-            if raw.ok {
-                _ = ContainerFS.unlink(probe.path)
-                return true
+        var directoryReady = fm.fileExists(atPath: directory.path)
+        var failure: String? = nil
+
+        if !directoryReady {
+            if (try? fm.createDirectory(at: directory, withIntermediateDirectories: true)) != nil {
+                directoryReady = true
+            } else {
+                let made = ContainerFS.mkdirs(directory.path)
+                if made.ok { directoryReady = true }
+                else { failure = "mkdir refused (" + made.lines.joined(separator: "; ") + ")" }
             }
-            return false
         }
+        guard directoryReady else {
+            return WriteVerdict(label: label, url: directory, createdFile: false, replacedFile: false,
+                                deletedFile: false, repaired: false, failure: failure)
+        }
+
+        func round() -> (created: Bool, replaced: Bool, deleted: Bool, failure: String?) {
+            let probe = directory.appendingPathComponent(probeName("probe"))
+            var created = false, replaced = false, deleted = false
+            var firstFailure: String? = nil
+            do { try Data([0x57]).write(to: probe); created = true }
+            catch {
+                let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
+                if raw.ok { created = true }
+                else { firstFailure = "create refused (Foundation \(describe(error)); C \(raw.detail))" }
+            }
+            if created {
+                do { try Data([0x72]).write(to: probe); replaced = true }
+                catch {
+                    let raw = ContainerFS.writeFile(probe.path, Data([0x72]))
+                    if raw.ok { replaced = true }
+                    else if firstFailure == nil { firstFailure = "replace refused (Foundation \(describe(error)); C \(raw.detail))" }
+                }
+            }
+            do {
+                try fm.removeItem(at: probe)
+                deleted = !fm.fileExists(atPath: probe.path)
+            } catch {
+                let raw = ContainerFS.unlink(probe.path)
+                deleted = raw.ok || !fm.fileExists(atPath: probe.path)
+            }
+            return (created, replaced, deleted, firstFailure)
+        }
+
+        var result = round()
+        var repaired = false
+        let ours = directory.standardizedFileURL.path.hasPrefix(home.standardizedFileURL.path)
+        if ours, !(result.created && result.replaced) {
+            let flags = ContainerFS.flags(directory.path) ?? 0
+            let mode = ContainerFS.openOwnerAccess(directory.path)
+            if flags != 0 || mode.changed {
+                let retry = round()
+                if retry.created && retry.replaced {
+                    repaired = true
+                    result = retry
+                } else if retry.failure == nil {
+                    result = retry
+                }
+            }
+        }
+        return WriteVerdict(label: label, url: directory, createdFile: result.created,
+                            replacedFile: result.replaced, deletedFile: result.deleted,
+                            repaired: repaired, failure: repaired ? nil : result.failure)
+    }
+
+    /// Every location the app considers, probed exactly once per process. The
+    /// boot audit, the storage root and the Wine prefix all read this one
+    /// table, so they can never disagree about what the device allows.
+    static let writeMatrix: [WriteVerdict] = {
+        var verdicts: [WriteVerdict] = []
+        var seen = Set<String>()
+        func add(_ label: String, _ url: URL) {
+            let key = url.standardizedFileURL.path
+            guard seen.insert(key).inserted else { return }
+            verdicts.append(probeWrites(url, label: label))
+        }
+        add("Documents", documents)
+        add("Library", libraryRoot)
+        add("tmp", temporary)
+        add("home root", home)
+        if let groups = ownEntitlement("com.apple.security.application-groups") as? [String], !groups.isEmpty {
+            for id in groups {
+                if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) {
+                    add("app group \(id)", url)
+                }
+            }
+        }
+        add("system temp", URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true))
+        add("shared temp", URL(fileURLWithPath: "/private/var/mobile/tmp", isDirectory: true))
+        return verdicts
+    }()
+
+    /// Where Windoz keeps files it must be able to write *and keep* (the
+    /// library index, cover art, store records). Documents first (the layout
+    /// every build before 0.3.5 used), then Library, then tmp — each decided
+    /// by the probe table, never assumed. The choice is logged so the launch
+    /// log always names it.
+    static let storageRoot: URL = {
+        if let first = writeMatrix.first(where: { $0.usable && ["Documents", "Library", "tmp"].contains($0.label) }) {
+            if first.label != "Documents" {
+                EngineLogStream.shared.append(
+                    "[host] storage root: Documents refused writes — using \(first.label) (\(first.url.path))",
+                    level: .warning)
+            } else {
+                EngineLogStream.shared.append("[host] storage root: \(first.url.path)")
+            }
+            return first.url
+        }
+        if let any = writeMatrix.first(where: { $0.usable }) {
+            EngineLogStream.shared.append(
+                "[host] storage root: Documents, Library and tmp all refused — using \(any.label) (\(any.url.path))",
+                level: .warning)
+            return any.url
+        }
+        EngineLogStream.shared.append(
+            "[host] storage root: no location accepted a write (\(writeMatrix.map { "\($0.label): \($0.summary)" }.joined(separator: " | "))) — Windoz keeps the Documents path and every save reports its own refusal",
+            level: .error)
+        return documents
+    }()
+
+    /// The directory the Wine prefix lives in. `Documents/windoz-prefix` is
+    /// what every build before 0.4.0 used, and it stays the choice whenever
+    /// that path accepts writes (most containers do). When it does not — this
+    /// device's Documents refuses every write — the prefix travels, as one
+    /// unit, to the first location that passes the same create + replace
+    /// test: Library, tmp, or an audited root. Wine cannot boot on a folder
+    /// it cannot write, so a writable folder is the difference between a
+    /// session and a black screen.
+    static let prefixBase: URL = {
+        let legacyPrefix = documents.appendingPathComponent("windoz-prefix", isDirectory: true)
+        let legacyExists = FileManager.default.fileExists(atPath: legacyPrefix.appendingPathComponent("drive_c").path)
+        if legacyExists {
+            let verdict = probeWrites(legacyPrefix, label: "Documents/windoz-prefix")
+            if verdict.usable {
+                EngineLogStream.shared.append("[host] prefix home: Documents/windoz-prefix (existing, writable)")
+                return documents
+            }
+            EngineLogStream.shared.append(
+                "[host] prefix home: the existing prefix refuses writes (\(verdict.summary)) — looking for a writable home",
+                level: .warning)
+        } else if let d = writeMatrix.first(where: { $0.label == "Documents" }), d.usable {
+            EngineLogStream.shared.append("[host] prefix home: Documents/windoz-prefix")
+            return documents
+        }
+        if let first = writeMatrix.first(where: { $0.usable }) {
+            EngineLogStream.shared.append(
+                "[host] prefix home: the Windows environment lives at \(first.url.path)/windoz-prefix (\(first.label) accepted writes)",
+                level: .warning)
+            return first.url
+        }
+        EngineLogStream.shared.append(
+            "[host] prefix home: nothing on this device accepted a write — the prefix stays in Documents and sessions will refuse to start",
+            level: .error)
+        return documents
+    }()
+
+    static var prefixRoot: URL {
+        prefixBase.appendingPathComponent("windoz-prefix", isDirectory: true)
+    }
+
+    /// Free space on the volume a location lives on, for the storage refusal
+    /// text — "out of space" and "permission refused" are different repairs.
+    static func freeSpaceDescription(at url: URL = storageRoot) -> String {
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if let bytes = values?.volumeAvailableCapacityForImportantUsage {
+            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        return "unknown"
+    }
+
+    /// One create + write + replace test through Foundation, then through the
+    /// C library — the same two-route pattern as the rest of the app. Kept
+    /// for callers that predate the probe table; reads the table when the
+    /// location was already probed, so answers never disagree.
+    static func acceptsWrites(_ directory: URL) -> Bool {
+        if let hit = writeMatrix.first(where: { $0.url.standardizedFileURL.path == directory.standardizedFileURL.path }) {
+            return hit.usable
+        }
+        return probeWrites(directory, label: directory.lastPathComponent).usable
     }
 
     /// Cover art and other small files that must survive a relaunch. Kept at
@@ -136,6 +328,8 @@ enum AppContainer {
         }
         stageJITScript()
         EngineLogStream.shared.append("[host] windoz \(displayVersion) \(AppEnvironment.installKind); home=\(home.path); storage=\(storageRoot.path)")
+        EngineLogStream.shared.append("[host] free space at storage: \(freeSpaceDescription())")
+        _ = prefixBase // triggers the (logged) prefix-home decision once, up front
         if AppEnvironment.isLiveContainer {
             EngineLogStream.shared.append(
                 "[host] LiveContainer: guest bundle \(AppEnvironment.bundleIdentifier), pid \(getpid()), JIT script \(stagedJITScript.path)")
@@ -153,35 +347,9 @@ enum AppContainer {
     /// refused writes with raw errno 1 (EPERM) through both routes — while
     /// reads and network stayed fine — so no in-folder fallback could ever
     /// work. This audit answers the only question left: is *any* location on
-    /// this device writable for Windoz? Each probe is logged, and the
-    /// writable ones are offered to installer staging and to the
-    /// Steam-library fallbacks. "None writable" is itself the answer the
-    /// next log needs to carry.
+    /// this device writable for Windoz? It reads the same probe table every
+    /// storage decision uses, so the log and the decisions always agree.
     static func auditWritableLocations() {
-        var roots: [URL] = []
-
-        func probe(_ label: String, _ directory: URL) {
-            let probe = directory.appendingPathComponent(".windoz-audit-\(getpid())")
-            do {
-                try Data([0x57]).write(to: probe)
-                try? FileManager.default.removeItem(at: probe)
-                roots.append(directory)
-                EngineLogStream.shared.append("[host] write-audit: \(label) \(directory.path) → writable")
-                return
-            } catch {
-                let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
-                if raw.ok {
-                    _ = ContainerFS.unlink(probe.path)
-                    roots.append(directory)
-                    EngineLogStream.shared.append("[host] write-audit: \(label) \(directory.path) → writable (C-library route)")
-                } else {
-                    EngineLogStream.shared.append(
-                        "[host] write-audit: \(label) \(directory.path) → refused (\(describe(error)); C library \(raw.detail))",
-                        level: .warning)
-                }
-            }
-        }
-
         EngineLogStream.shared.append(
             "[host] write-audit: TMPDIR=\(ProcessInfo.processInfo.environment["TMPDIR"] ?? "(unset)") NSTemporaryDirectory=\(NSTemporaryDirectory())")
         let env = ProcessInfo.processInfo.environment.filter { key, _ in
@@ -193,29 +361,28 @@ enum AppContainer {
             EngineLogStream.shared.append(
                 "[host] write-audit env: " + env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
         }
-        probe("home root", home)
-        if let groups = ownEntitlement("com.apple.security.application-groups") as? [String], !groups.isEmpty {
-            for id in groups {
-                if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) {
-                    probe("app group \(id)", url)
-                } else {
-                    EngineLogStream.shared.append(
-                        "[host] write-audit: app group \(id) has no container on this device", level: .warning)
+        var roots: [URL] = []
+        for verdict in writeMatrix {
+            if verdict.usable {
+                EngineLogStream.shared.append(
+                    "[host] write-audit: \(verdict.label) \(verdict.url.path) → writable\(verdict.repaired ? " (after repair)" : "")")
+                if !["Documents", "Library", "tmp"].contains(verdict.label) {
+                    roots.append(verdict.url)
                 }
+            } else {
+                EngineLogStream.shared.append(
+                    "[host] write-audit: \(verdict.label) \(verdict.url.path) → refused (\(verdict.summary))",
+                    level: .warning)
             }
-        } else {
-            EngineLogStream.shared.append("[host] write-audit: no application-groups entitlement")
         }
-        probe("system temp", URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true))
-        probe("shared temp", URL(fileURLWithPath: "/private/var/mobile/tmp", isDirectory: true))
-
         discoveredRoots = roots
-        if roots.isEmpty {
+        if writeMatrix.contains(where: { $0.usable }) {
             EngineLogStream.shared.append(
-                "[host] write-audit: no writable location on this device — Windoz cannot store anything until the container is repaired",
-                level: .error)
+                "[host] write-audit: writable roots: \(writeMatrix.filter { $0.usable }.map(\.url.path).joined(separator: ", "))")
         } else {
-            EngineLogStream.shared.append("[host] write-audit: writable roots: \(roots.map(\.path).joined(separator: ", "))")
+            EngineLogStream.shared.append(
+                "[host] write-audit: no writable location on this device — Windoz cannot store anything until the container is repaired (free space: \(freeSpaceDescription()))",
+                level: .error)
         }
     }
 
@@ -245,12 +412,11 @@ enum AppContainer {
     /// our own write permission.
     private static func logWriteHealth() {
         var problems: [String] = []
-        let docPath = documents.standardizedFileURL.path
         for (name, url) in [("Documents", documents), ("Imported", importedGames),
                             ("Runtimes", runtimes), ("LiveContainer", liveContainerSupport),
                             ("Library", libraryRoot), ("tmp", temporary)] {
-            let probe = url.appendingPathComponent(".windoz-write-probe")
             if let flags = ContainerFS.flags(url.path), flags != 0 {
+                let docPath = documents.standardizedFileURL.path
                 let path = url.standardizedFileURL.path
                 if (path == docPath || path.hasPrefix(docPath + "/")),
                    ContainerFS.clearFlags(url.path).ok,
@@ -261,27 +427,18 @@ enum AppContainer {
                     problems.append("\(name) carries BSD flags=0x\(String(flags, radix: 16)) (the immutable bit blocks creates and deletes)")
                 }
             }
-            // Foundation: write, delete, and replace a real file.
-            do {
-                try Data([0x57]).write(to: probe)
-            } catch {
-                problems.append("\(name) Foundation write refused: \(describe(error))")
+            let verdict = probeWrites(url, label: name)
+            if !verdict.createdFile {
+                problems.append("\(name) cannot create a file: \(verdict.failure ?? "refused")")
+            } else if !verdict.replacedFile {
+                problems.append("\(name) refuses to replace an existing file: \(verdict.failure ?? "refused")")
             }
-            do { try FileManager.default.removeItem(at: probe) } catch {
-                if FileManager.default.fileExists(atPath: probe.path) {
-                    problems.append("\(name) Foundation delete refused: \(describe(error))")
-                }
-            }
-            // The C library: create, write, delete.
-            let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
-            if !raw.ok {
-                problems.append("\(name) C-library write refused: \(raw.detail)")
-            } else if !ContainerFS.unlink(probe.path).ok {
-                problems.append("\(name) C-library delete refused")
+            if !verdict.deletedFile {
+                problems.append("\(name) refuses to delete a probe file (\(probeName("probe")))")
             }
         }
         if problems.isEmpty {
-            EngineLogStream.shared.append("[host] container write check: all six folders writable")
+            EngineLogStream.shared.append("[host] container write check: all six folders writable (create, replace, delete)")
         } else {
             for line in problems {
                 EngineLogStream.shared.append("[host] container write check: \(line)", level: .warning)
@@ -290,13 +447,11 @@ enum AppContainer {
     }
 
     /// First directory named `name` that accepts a real create + write +
-    /// delete, tried under each base in order (callers pass Documents first,
-    /// then Library, then tmp), then under every writable location the boot
-    /// audit found. Foundation is tried per base first, then the C library —
-    /// the same dual-route pattern as everywhere else. Every refusal is
-    /// logged, so the log names why a fallback was needed.
+    /// replace + delete, tried under each base in order (callers pass
+    /// Documents first, then Library, then tmp), then under every writable
+    /// location the boot audit found. Every refusal is logged, so the log
+    /// names why a fallback was needed.
     static func writableDirectory(named name: String, among bases: [URL]) -> URL? {
-        let fm = FileManager.default
         let preferred = documents.standardizedFileURL
         var allBases = bases
         for root in discoveredRoots where !allBases.contains(where: { $0.standardizedFileURL.path == root.standardizedFileURL.path }) {
@@ -304,43 +459,15 @@ enum AppContainer {
         }
         for base in allBases {
             let dir = base.appendingPathComponent(name, isDirectory: true)
-            let probe = dir.appendingPathComponent(".windoz-probe-\(getpid())")
-            var works = false
-            do {
-                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-                do {
-                    try Data([0x57]).write(to: probe)
-                    try? fm.removeItem(at: probe)
-                    works = true
-                } catch {
-                    EngineLogStream.shared.append(
-                        "[host] \(name): Foundation write refused in \(base.lastPathComponent): \(describe(error))", level: .warning)
-                }
-            } catch {
-                EngineLogStream.shared.append(
-                    "[host] \(name): Foundation mkdir refused in \(base.lastPathComponent): \(describe(error))", level: .warning)
-            }
-            if !works {
-                let dirs = ContainerFS.mkdirs(dir.path)
-                if dirs.ok {
-                    let raw = ContainerFS.writeFile(probe.path, Data([0x57]))
-                    if raw.ok {
-                        _ = ContainerFS.unlink(probe.path)
-                        works = true
-                    } else {
-                        EngineLogStream.shared.append(
-                            "[host] \(name): C-library write refused in \(base.lastPathComponent): \(raw.detail)", level: .warning)
-                    }
-                } else {
-                    EngineLogStream.shared.append("[host] \(name): \(dirs.lines.joined(separator: "; "))", level: .warning)
-                }
-            }
-            if works {
+            let verdict = probeWrites(dir, label: name)
+            if verdict.usable {
                 if base.standardizedFileURL != preferred {
-                    EngineLogStream.shared.append("[host] \(name): Documents refused — using \(dir.path)", level: .warning)
+                    EngineLogStream.shared.append("[host] \(name): Documents refused — using \(dir.path)")
                 }
                 return dir
             }
+            EngineLogStream.shared.append(
+                "[host] \(name): not usable under \(base.lastPathComponent): \(verdict.summary)", level: .warning)
         }
         return nil
     }

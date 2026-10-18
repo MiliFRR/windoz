@@ -191,6 +191,34 @@ enum TriState: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How a launch starts the game.
+///
+/// - `direct` runs the game's own program (everything before 0.4.0). For a
+///   Steam game inside the prefix the engine publishes that game's own Steam
+///   identity (`MADEIRA_STEAM_APPID`/`MADEIRA_STEAM_APPPATH`), which many
+///   steam_api DLLs want even without the client running.
+/// - `dock` runs **Doz Dock**: Valve's own Steam client starts inside the
+///   session and the game is started through it (`MADEIRA_DOCK_SESSION=1` +
+///   the bundled `dockhost.exe`, ported from Madeira's Dock). Steam's own
+///   sign-in is handed to the guest once per launch; offline sign-in is
+///   Valve's own (offline mode), requested with `MADEIRA_DOCK_OFFLINE`.
+/// - `steamDesktop` runs the full Steam client in a virtual desktop for
+///   manual sign-in and library use — no game is auto-started.
+enum LaunchMode: String, Codable, CaseIterable, Identifiable {
+    case direct
+    case dock
+    case steamDesktop
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .direct: return "Direct"
+        case .dock: return "Doz Dock (Steam)"
+        case .steamDesktop: return "Steam desktop"
+        }
+    }
+}
+
 /// Per-game options. These map onto the engine forks' documented switches
 /// (see `docs/ENGINE.md`); a key the pinned forks do not read is never written.
 ///
@@ -239,6 +267,12 @@ struct GameSettings: Codable, Equatable, Hashable {
     /// `MADEIRA_VIRTUAL_MODE_SET` — Off exports `0`, which accepts a listed
     /// mode without programming the monitor.
     var virtualModeSet: TriState = .engineDefault
+    /// How a launch starts the game (see `LaunchMode`).
+    var launchMode: LaunchMode = .direct
+    /// Doz Dock only: ask Valve's client for its own offline sign-in
+    /// (`MADEIRA_DOCK_OFFLINE=1`) instead of attempting a network logon.
+    /// Valve's client decides what it can do offline; this only asks.
+    var steamOffline: Bool = false
 
     static let `default` = GameSettings()
 }
@@ -249,6 +283,7 @@ extension GameSettings {
         case graphicsBackend, environment, launchArguments, workingDirectory
         case fexAVX, reducedX87, cpuCount, dinputPad, anisotropyLimit
         case gameWindows, waitChildren, virtualModeSet
+        case launchMode, steamOffline
     }
 
     init(from decoder: Decoder) throws {
@@ -271,6 +306,8 @@ extension GameSettings {
         gameWindows = try c.decodeIfPresent(TriState.self, forKey: .gameWindows) ?? d.gameWindows
         waitChildren = try c.decodeIfPresent(Bool.self, forKey: .waitChildren) ?? d.waitChildren
         virtualModeSet = try c.decodeIfPresent(TriState.self, forKey: .virtualModeSet) ?? d.virtualModeSet
+        launchMode = try c.decodeIfPresent(LaunchMode.self, forKey: .launchMode) ?? d.launchMode
+        steamOffline = try c.decodeIfPresent(Bool.self, forKey: .steamOffline) ?? d.steamOffline
     }
 
     func encode(to encoder: Encoder) throws {
@@ -292,6 +329,8 @@ extension GameSettings {
         try c.encode(gameWindows, forKey: .gameWindows)
         try c.encode(waitChildren, forKey: .waitChildren)
         try c.encode(virtualModeSet, forKey: .virtualModeSet)
+        try c.encode(launchMode, forKey: .launchMode)
+        try c.encode(steamOffline, forKey: .steamOffline)
     }
 }
 
@@ -462,6 +501,8 @@ enum EngineError: LocalizedError {
     case sessionCancelled
     case storageRefused(String)
     case sessionStalled(String)
+    case dockNotReady(String)
+    case steamDesktopNotReady(String)
 
     var errorDescription: String? {
         switch self {
@@ -482,9 +523,13 @@ enum EngineError: LocalizedError {
         case .sessionCancelled:
             return "The launch was cancelled."
         case .storageRefused(let detail):
-            return "This device refuses writes inside Windoz's own storage (\(detail)), so Wine cannot run a game — it needs to create files while it boots. The launch log's write-audit lines name every location that was probed. Reinstalling the app inside LiveContainer (fresh container) is the known repair."
+            return "This device refuses the writes a session needs (\(detail)). Free space: \(AppContainer.freeSpaceDescription()). The launch log's write-audit lines name every location that was probed and the exact error. If every location refused, reinstalling the app inside LiveContainer (fresh container) is the known repair."
         case .sessionStalled(let stage):
             return "The session stalled at “\(stage)” and was stopped. The engine log has the last steps the engine reported."
+        case .dockNotReady(let why):
+            return "Doz Dock cannot start this launch yet: \(why)"
+        case .steamDesktopNotReady(let why):
+            return "The Steam desktop session cannot start yet: \(why)"
         }
     }
 }

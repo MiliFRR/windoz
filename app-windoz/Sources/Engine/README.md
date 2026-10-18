@@ -11,7 +11,9 @@ types in `EngineTypes.swift` — never a Wine, FEX or DXMT symbol.
 |---|---|
 | `WindozEngine.swift` | the boundary: health, prefix, engine core, session launch/poll/end, stop |
 | `EngineTypes.swift` | `EngineStatus`, `EngineHealth`, `SessionPhase`, `SessionOutcome`, `GameSettings`, `InstalledGame`, `EngineError` |
-| `PrefixManager.swift` | the Wine prefix (`Documents/windoz-prefix`) and host ↔ guest path mapping |
+| `PrefixManager.swift` | the Wine prefix at the negotiated storage root (`AppContainer.prefixRoot` — `Documents/windoz-prefix` whenever Documents accepts writes, migrated as one unit otherwise), plus host ↔ guest path mapping |
+| `AppContainer.swift` | every storage decision: the write-probe table, the storage root, the prefix home, art and library paths |
+| `ContainerFS.swift` | the C-library route (`creat`/`write`/`unlink`, BSD flags, mode bits) every write decision checks against Foundation |
 | `GameLibrary.swift` | the installed games, their settings and playtime |
 | `JITManager.swift` | JIT probing, the StikDebug deep link, memory and signing facts |
 | `RuntimeDependencies.swift` | which Microsoft runtimes a game may need, and honest staging |

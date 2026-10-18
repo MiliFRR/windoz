@@ -78,7 +78,7 @@ final class WindozEngine: ObservableObject {
     /// owner decides.
     private var noFrameWarned = false
 
-    init(prefix: PrefixManager = PrefixManager(base: AppContainer.documents)) {
+    init(prefix: PrefixManager = PrefixManager()) {
         self.prefix = prefix
         installCallbacks()
     }
@@ -240,18 +240,27 @@ final class WindozEngine: ObservableObject {
         // 2. Prefix.
         try prefix.createIfNeeded()
 
-        // 3. Executable.
-        guard FileManager.default.fileExists(atPath: game.executablePath) else {
-            throw EngineError.executableMissing(game.executablePath)
+        // 3. Executable. Only a direct launch runs the game's own program —
+        //    the Steam modes run Valve's client, which finds the game itself.
+        if game.settings.launchMode == .direct {
+            guard FileManager.default.fileExists(atPath: game.executablePath) else {
+                throw EngineError.executableMissing(game.executablePath)
+            }
         }
 
         // 4. Storage. Wine writes while it boots (registry, sockets, temp
         //    files); a container that refuses writes would otherwise show up
         //    as a black screen that never ends. This turns that case into a
-        //    named refusal *before* the session screen opens.
+        //    named refusal *before* the session screen opens. The write test
+        //    is the same probe the storage negotiation ran, so the prefix's
+        //    own location is judged exactly as it was chosen.
         try verifySessionStorage()
 
-        // 5. Guest environment for the engine's launcher.
+        // 5. Launch mode + guest environment for the engine's launcher.
+        //    Doz Dock's contract (host, client files, Steam's own install
+        //    record, the one-use sign-in transfer) is validated here — a
+        //    missing piece must be a named refusal, never a black screen.
+        try prepareLaunchMode(for: game)
         applyLaunchEnvironment(for: game)
         log.append("[launch] preflight passed for \(game.title)")
 
@@ -384,24 +393,72 @@ final class WindozEngine: ObservableObject {
                    level: .success)
     }
 
-    /// Wine writes while it boots. If the container refuses every write, the
-    /// launch refuses too, with the reason — instead of a black screen that
-    /// never ends (device report 2026-10-18).
+    /// True while the running session was started through Doz Dock; the
+    /// launch report is only read afterwards, and only then.
+    private var dockSessionActive = false
+
+    /// The launch mode's preflight, run before the session screen opens.
+    /// Every refusal here is a named `EngineError` — nothing is left to a
+    /// black screen to reveal.
+    private func prepareLaunchMode(for game: InstalledGame) throws {
+        switch game.settings.launchMode {
+        case .direct:
+            dockSessionActive = false
+            DozDock.cleanup()
+        case .dock:
+            guard let dockGame = DozDock.game(for: game, prefix: prefix) else {
+                throw EngineError.dockNotReady("this game's Steam install record was not found in Steam's library inside Windows. Install the game from Windoz's Steam library (new installs land in Steam's own folder), or switch this game to Direct in its settings.")
+            }
+            try DozDock.validate(dockGame, prefix: prefix)
+            let stored = SteamTokenStore().loadTokens()
+            guard let account = stored?.accountName, !account.isEmpty,
+                  let token = stored?.refreshToken, !token.isEmpty else {
+                throw EngineError.dockNotReady("Windoz has no Steam sign-in to hand to Valve's client. Sign in to Steam in Windoz first (Steam library → sign-in), then start the game.")
+            }
+            let handoff = try DozDock.writeHandoff(account: account, token: token, appID: dockGame.id, prefix: prefix)
+            dockSessionActive = true
+            log.append("[dock] preflight passed for app \(dockGame.id) — sign-in transfer ready (\(handoff)), host bundled")
+        case .steamDesktop:
+            dockSessionActive = false
+            DozDock.cleanup()
+            let root = prefix.url.appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)")
+            guard FileManager.default.fileExists(atPath: root.appendingPathComponent("steam.exe").path),
+                  FileManager.default.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path) else {
+                throw EngineError.steamDesktopNotReady("Valve's Steam client files are not in the Windows drive yet. In this game's settings, under “Steam launch”, download Steam's components first (about 72 MB from Valve's own CDN).")
+            }
+            log.append("[launch] Steam desktop session — the full Windows Steam client runs in the session; sign in inside it. No game is auto-started.")
+        }
+    }
+
+    /// Wine writes while it boots. Each location a session depends on is
+    /// probed with the same create + write + replace test the storage
+    /// negotiation used. The gate passes when the prefix and its `drive_c`
+    /// accept writes — those are the folders a session lives in. A refusal
+    /// carries every location's exact answer; the error text adds the free
+    /// space, because "out of space" and "permission refused" need different
+    /// repairs.
     private func verifySessionStorage() throws {
         let targets: [(name: String, url: URL)] = [
             ("prefix", prefix.url),
             ("drive_c", prefix.url.appendingPathComponent("drive_c")),
-            ("tmp", AppContainer.temporary),
+            ("storage root", AppContainer.storageRoot),
         ]
-        var refused: [String] = []
-        var writable = 0
+        var lines: [String] = []
+        var prefixOK = false, driveOK = false
         for (name, dir) in targets {
-            if AppContainer.acceptsWrites(dir) { writable += 1 } else { refused.append(name) }
+            let verdict = AppContainer.probeWrites(dir, label: name)
+            lines.append("\(name): \(verdict.summary)")
+            if verdict.usable {
+                if name == "prefix" { prefixOK = true }
+                if name == "drive_c" { driveOK = true }
+            } else if name != "prefix" && name != "drive_c" {
+                log.append("[launch] storage: \(name) refused (\(verdict.summary))", level: .warning)
+            }
         }
-        log.append("[launch] storage check: \(writable)/\(targets.count) locations accepted a write"
-                   + (refused.isEmpty ? "" : " — refused: \(refused.joined(separator: ", "))"))
-        if writable == 0 {
-            throw EngineError.storageRefused(refused.joined(separator: ", "))
+        log.append("[launch] storage check: \(prefixOK && driveOK ? "passed" : "refused") — "
+                   + lines.joined(separator: "; "))
+        guard prefixOK && driveOK else {
+            throw EngineError.storageRefused(lines.joined(separator: "; "))
         }
     }
 
@@ -486,34 +543,94 @@ final class WindozEngine: ObservableObject {
     /// backend choice — is stored and *said to be stored*. Nothing is invented.
     private func applyLaunchEnvironment(for game: InstalledGame) {
         let settings = game.settings
+        let monitor = Self.guestMonitor(scale: settings.resolutionScale)
 
-        // MADEIRA_EXE: the program to run. The forks resolve both the PE path
-        // and the working folder from it, so it must be a Windows path: a
-        // guarded `C:\` path inside the prefix, or a `Z:\` path (Wine's default
-        // root mapping) when the executable was installed outside drive_c.
-        let guestExe = prefix.windowsPath(forHostPath: game.executablePath)
-            ?? Self.rootMappedWindowsPath(forHostPath: game.executablePath)
-        setenv("MADEIRA_EXE", guestExe, 1)
-
-        // MADEIRA_ARGS: space-separated extra arguments appended to argv.
-        if settings.launchArguments.isEmpty {
-            unsetenv("MADEIRA_ARGS")
-        } else {
-            setenv("MADEIRA_ARGS", settings.launchArguments, 1)
-        }
+        // Every launch starts from a clean slate: the dock variables are
+        // always set *or* unset by the branch below, so a dock session and a
+        // direct session can never leak into each other.
+        DozDock.clearEnvironment()
+        unsetenv("MADEIRA_DESKTOP")
+        unsetenv("MADEIRA_WORKDIR")
 
         // The virtual monitor: the engine reads MADEIRA_SCREEN_W/H once per
         // session and MADEIRA_SCREEN_SRC only for its log line.
-        let monitor = Self.guestMonitor(scale: settings.resolutionScale)
         setenv("MADEIRA_SCREEN_W", String(monitor.width), 1)
         setenv("MADEIRA_SCREEN_H", String(monitor.height), 1)
         setenv("MADEIRA_SCREEN_SRC", monitor.source, 1)
 
-        // MADEIRA_WORKDIR: the working folder. The forks chdir into it and only
-        // honour a `C:\` folder, so anything else is not exported.
-        unsetenv("MADEIRA_WORKDIR")
-        if let guest = guestWorkingDirectory(for: game) {
-            setenv("MADEIRA_WORKDIR", guest, 1)
+        // MADEIRA_EXE / MADEIRA_ARGS / MADEIRA_WORKDIR, per launch mode.
+        switch settings.launchMode {
+        case .dock:
+            // Doz Dock: Valve's client's host — an explorer virtual desktop
+            // running C:\windows\system32\dockhost.exe — starts the game
+            // through Steam itself. The sign-in transfer and the host's
+            // environment were validated and prepared in `prepareLaunchMode`.
+            setenv("MADEIRA_EXE", "explorer.exe", 1)
+            setenv("MADEIRA_ARGS", DozDock.launchArguments(width: monitor.width, height: monitor.height), 1)
+            setenv("MADEIRA_DESKTOP", "1", 1)
+            setenv("MADEIRA_DOCK_SESSION", "1", 1)
+            setenv("MADEIRA_GDI_SHARED_SECTION", "1", 1)
+            setenv("MADEIRA_JIT_IMAGE_RETIRE", "1", 1)
+            setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)
+            if let dockGame = DozDock.game(for: game, prefix: prefix) {
+                DozDock.configure(dockGame)
+            }
+            let offline = DozDock.Offline.apply(requested: settings.steamOffline)
+            log.append("[launch] Doz Dock session: MADEIRA_DOCK_SESSION=1, Valve's client starts app "
+                       + "\(game.storeItemID ?? "?") itself. "
+                       + (offline ? "Offline sign-in requested (MADEIRA_DOCK_OFFLINE=1) — Valve's client decides what it can do offline."
+                                  : "Online sign-in (MADEIRA_DOCK_OFFLINE unset)."))
+        case .steamDesktop:
+            // The full Windows Steam client in a virtual desktop, for manual
+            // sign-in and library use. No game is auto-started.
+            setenv("MADEIRA_EXE", SteamClientRuntime.windowsRoot + "\\steam.exe", 1)
+            setenv("MADEIRA_WORKDIR", SteamClientRuntime.windowsRoot, 1)
+            setenv("MADEIRA_DESKTOP", "1", 1)
+            unsetenv("MADEIRA_ARGS")
+            log.append("[launch] Steam desktop session: MADEIRA_EXE=\(SteamClientRuntime.windowsRoot)\\steam.exe on a virtual desktop. Sign in inside the session — the password never passes through Windoz.")
+        case .direct:
+            // MADEIRA_EXE: the program to run. The forks resolve both the PE
+            // path and the working folder from it, so it must be a Windows
+            // path: a guarded `C:\` path inside the prefix, or a `Z:\` path
+            // (Wine's default root mapping) when the executable was installed
+            // outside drive_c.
+            let guestExe = prefix.windowsPath(forHostPath: game.executablePath)
+                ?? Self.rootMappedWindowsPath(forHostPath: game.executablePath)
+            setenv("MADEIRA_EXE", guestExe, 1)
+
+            // MADEIRA_ARGS: space-separated extra arguments appended to argv.
+            if settings.launchArguments.isEmpty {
+                unsetenv("MADEIRA_ARGS")
+            } else {
+                setenv("MADEIRA_ARGS", settings.launchArguments, 1)
+            }
+
+            // MADEIRA_WORKDIR: the working folder. The forks chdir into it and
+            // only honour a `C:\` folder, so anything else is not exported.
+            if let guest = guestWorkingDirectory(for: game) {
+                setenv("MADEIRA_WORKDIR", guest, 1)
+            }
+
+            // Steam identity for a direct start: when the game's program sits
+            // inside the prefix, the engine publishes SteamAppPath /
+            // SteamGameId / SteamAppId for *this* game (its guard wants an
+            // appid of digits and a `C:\` folder path). Without it the
+            // engine's own fixed fallback identity would be published.
+            var identity = "none"
+            if game.storeID == "steam", let raw = game.storeItemID, let appID = Int(raw),
+               DozDock.validAppID(appID),
+               let exePath = prefix.windowsPath(forHostPath: game.executablePath) {
+                let folder = (exePath as NSString).deletingLastPathComponent
+                if folder.uppercased().hasPrefix("C:\\") && !folder.contains("..") && folder.count < 1024 {
+                    setenv("MADEIRA_STEAM_APPID", String(appID), 1)
+                    setenv("MADEIRA_STEAM_APPPATH", folder, 1)
+                    identity = "\(appID) (SteamAppPath=\(folder))"
+                }
+            }
+            if identity == "none" {
+                unsetenv("MADEIRA_STEAM_APPID"); unsetenv("MADEIRA_STEAM_APPPATH")
+            }
+            log.append("[launch] direct start: exe=\(guestExe), Steam identity \(identity)")
         }
 
         // Per-game engine switches. All of them are variables the pinned forks
@@ -549,7 +666,7 @@ final class WindozEngine: ObservableObject {
                    + "aniso \(settings.anisotropyLimit == 0 ? "default" : String(settings.anisotropyLimit)) → environment")
         log.append("[launch] present mode \(settings.syncMode.title), MetalFX \(settings.metalFXUpscaling ? "on" : "off"), "
                    + "backend \(settings.graphicsBackend.title) — stored, not applied (no engine switch for them in this build)")
-        log.append("[launch] guest env prepared (exe=\(guestExe))")
+        log.append("[launch] guest env prepared (mode=\(settings.launchMode.title))")
     }
 
     /// A guest Windows path for a folder inside the prefix, or nil. The
@@ -637,6 +754,18 @@ final class WindozEngine: ObservableObject {
     }
 
     /// The single end-of-session path: playtime is recorded once, the engine's
+    /// Reads Doz Dock's report (once) when the session that just ended was a
+    /// dock session: logs every field the host wrote, returns the honest
+    /// failure reason when Valve's client reported one, and removes the
+    /// one-use sign-in transfer along with the dock environment.
+    private func takeDockReportNote() -> String? {
+        guard dockSessionActive else { return nil }
+        let fields = DozDock.readReport(prefix: prefix)
+        dockSessionActive = false
+        DozDock.cleanup()
+        return DozDock.humanFailure(fields)
+    }
+
     /// exit report is read, the session screen is dismissed and the story is
     /// kept for the game page.
     private func finishSession(early: Bool = false) {
@@ -650,6 +779,11 @@ final class WindozEngine: ObservableObject {
             GameLibrary.shared.addPlaytime(id: id, seconds: seconds)
         }
 
+        // A Doz Dock session writes its numeric report into the prefix; read
+        // it once, here, so the outcome the game page shows carries the
+        // honest reason when Valve's client refused something.
+        let dockNote = takeDockReportNote()
+
         let body: String
         if crashed {
             body = "\(title) ended with an error (status 0x\(String(status, radix: 16, uppercase: true))). The engine log has the details."
@@ -658,7 +792,8 @@ final class WindozEngine: ObservableObject {
         } else {
             body = "\(title) has exited."
         }
-        let message = body + " Wine can start only one game per app run — close Windoz from the app switcher and open it again to play another game."
+        let message = body + (dockNote.map { " " + $0 } ?? "")
+            + " Wine can start only one game per app run — close Windoz from the app switcher and open it again to play another game."
         lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: crashed,
                                             status: status, seconds: seconds, message: message)
         log.append("[session] \(message)")
@@ -698,7 +833,9 @@ final class WindozEngine: ObservableObject {
         if let id = currentGameID {
             GameLibrary.shared.addPlaytime(id: id, seconds: seconds)
         }
+        let dockNote = takeDockReportNote()
         let message = (reason.map { $0 + " " } ?? "")
+            + (dockNote.map { $0 + " " } ?? "")
             + "Windoz left the session screen. If \(title) is still running it ends when Windoz does — Wine can host one session per app run here."
         lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: false,
                                             status: 0, seconds: seconds, message: message)

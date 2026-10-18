@@ -106,6 +106,19 @@ enum ContainerFS {
         return Result(ok: false, errnoValue: errno)
     }
 
+    /// Open the owner's access bits on `path` (0755 for folders, 0644 for
+    /// files) — the one repair the app can attempt itself when a write is
+    /// refused while the modes were closed. `changed` is true only when the
+    /// mode actually moved; an already-open mode is reported as fine.
+    static func openOwnerAccess(_ path: String) -> (ok: Bool, changed: Bool, errnoValue: Int32) {
+        var st = stat()
+        guard path.withCString({ lstat($0, &st) }) == 0 else { return (false, false, errno) }
+        let wanted: mode_t = (st.st_mode & S_IFMT) == S_IFDIR ? 0o755 : 0o644
+        guard (st.st_mode & 0o777) != wanted else { return (true, false, 0) }
+        if Darwin.chmod(path, wanted) == 0 { return (true, true, 0) }
+        return (false, false, errno)
+    }
+
     /// The entries directly inside `path`, through `readdir` (the C-library
     /// route). Bounded; each name carries its type and BSD flags.
     static func children(_ path: String, limit: Int = 40) -> (ok: Bool, errnoValue: Int32, entries: [(name: String, type: String, flags: UInt32)]) {

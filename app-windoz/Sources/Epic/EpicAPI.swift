@@ -19,6 +19,7 @@ import Foundation
 enum EpicAPI {
     static let libraryHost = "library-service.live.use1a.on.epicgames.com"
     static let catalogHost = "catalog-public-service-prod06.ol.epicgames.com"
+    static let launcherHost = "launcher-public-service-prod06.ol.epicgames.com"
 
     struct LibraryItem: Codable, Hashable {
         let namespace: String
@@ -118,6 +119,111 @@ enum EpicAPI {
             }
         }
         return nil
+    }
+
+    // MARK: - Asset manifests (the download path)
+
+    /// One `elements` entry of launcher-public-service's assets response
+    /// (legendary's api/egs.py: get_game_manifest / get_game_assets).
+    struct AssetElement: Decodable {
+        struct ManifestRef: Decodable {
+            struct QueryParam: Decodable { let name: String; let value: String }
+            let uri: String
+            let queryParams: [QueryParam]?
+        }
+        let appName: String?
+        let labelName: String?
+        let buildVersion: String?
+        let namespace: String?
+        let catalogItemId: String?
+        let manifests: [ManifestRef]?
+    }
+
+    private struct AssetsResponse: Decodable { let elements: [AssetElement]? }
+
+    /// The live Windows build manifest URL for one owned item.
+    ///
+    /// Tries the v2 endpoint by namespace + catalog item + app name (the
+    /// launcher's own request shape), then without the app name, then the v1
+    /// per-platform list filtered to this item. The bearer must be a
+    /// launcher-scoped session; anything else is refused with Epic's status.
+    static func assetManifestURL(namespace: String, catalogItemId: String,
+                                 appName: String?, userToken: String) async throws -> URL? {
+        var attempts: [URL] = []
+        if let appName, !appName.isEmpty,
+           let url = assetsURL(namespace: namespace, catalogItemId: catalogItemId, appName: appName) {
+            attempts.append(url)
+        }
+        if let url = assetsURL(namespace: namespace, catalogItemId: catalogItemId, appName: nil) {
+            attempts.append(url)
+        }
+        if let v1 = v1AssetsURL() { attempts.append(v1) }
+
+        var lastError: Error?
+        for url in attempts {
+            do {
+                let elements = try await assetElements(url: url, userToken: userToken)
+                guard !elements.isEmpty else { continue }
+                let match = elements.first { element in
+                    element.catalogItemId?.caseInsensitiveCompare(catalogItemId) == .orderedSame
+                        || (appName.map { element.appName?.caseInsensitiveCompare($0) == .orderedSame } ?? false)
+                } ?? elements.first
+                guard let match, let ref = manifestRef(match), let manifest = manifestURL(ref) else { continue }
+                return manifest
+            } catch {
+                lastError = error
+            }
+        }
+        if let lastError { throw lastError }
+        return nil
+    }
+
+    private static func assetElements(url: URL, userToken: String) async throws -> [AssetElement] {
+        var request = URLRequest(url: url)
+        request.setValue("bearer \(userToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit",
+                         forHTTPHeaderField: "User-Agent")
+        let data = try await send(request, authScoped: false)
+        if let wrapped = try? JSONDecoder().decode(AssetsResponse.self, from: data),
+           let elements = wrapped.elements {
+            return elements
+        }
+        return (try? JSONDecoder().decode([AssetElement].self, from: data)) ?? []
+    }
+
+    private static func assetsURL(namespace: String, catalogItemId: String, appName: String?) -> URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = launcherHost
+        var path = "/launcher/api/public/assets/v2/platform/Windows/namespace/\(pathSegment(namespace))"
+            + "/catalogItem/\(pathSegment(catalogItemId))"
+        if let appName, !appName.isEmpty { path += "/app/\(pathSegment(appName))" }
+        path += "/label/Live"
+        components.path = path
+        return components.url
+    }
+
+    private static func v1AssetsURL() -> URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = launcherHost
+        components.path = "/launcher/api/public/assets/Windows"
+        components.queryItems = [URLQueryItem(name: "label", value: "Live")]
+        return components.url
+    }
+
+    private static func manifestRef(_ element: AssetElement) -> AssetElement.ManifestRef? {
+        guard let manifests = element.manifests, !manifests.isEmpty else { return nil }
+        return manifests.first { $0.uri.lowercased().hasSuffix(".manifest") } ?? manifests.first
+    }
+
+    private static func manifestURL(_ ref: AssetElement.ManifestRef) -> URL? {
+        guard var components = URLComponents(string: ref.uri) else { return nil }
+        if let params = ref.queryParams, !params.isEmpty,
+           components.queryItems?.isEmpty ?? true {
+            components.queryItems = params.map { URLQueryItem(name: $0.name, value: $0.value) }
+        }
+        return components.url
     }
 
     private static func pathSegment(_ value: String) -> String {

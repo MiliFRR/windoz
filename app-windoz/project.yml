@@ -87,8 +87,8 @@ targets:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "0.3.5"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.4.0"
+        CFBundleVersion: "4"
         CFBundleInfoDictionaryVersion: "6.0"
         LSRequiresIPhoneOS: true
         MinimumOSVersion: "26.0"
@@ -127,8 +127,8 @@ targets:
         # scripts/generate-entitlements.sh --check, which CI runs.
         CODE_SIGN_ENTITLEMENTS: Config/Windoz.entitlements
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "1"
-        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.4.0"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"

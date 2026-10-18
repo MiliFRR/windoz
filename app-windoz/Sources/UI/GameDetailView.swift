@@ -42,6 +42,8 @@ struct GameDetailView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         hero(game)
                         playButton(game)
+                        launchModeRow(game)
+                        achievementsSummary(game)
                         sessionNotes(game)
                         if let message {
                             Text(message).font(.footnote).foregroundStyle(Theme.bad.opacity(0.95))
@@ -77,7 +79,10 @@ struct GameDetailView: View {
         .sheet(isPresented: $showSettings) {
             GameSettingsSheet(gameID: gameID, gameTitle: game?.title ?? "Game")
         }
-        .onAppear { engine.refreshStatus() }
+        .onAppear {
+            engine.refreshStatus()
+            backfillArtworkIfNeeded()
+        }
         .task(id: tab) {
             guard let appID = steamAppID else { return }
             switch tab {
@@ -179,6 +184,141 @@ struct GameDetailView: View {
                 }
                 Badge(text: "Playtime \(game.playtimeSeconds.playtimeDescription)", systemImage: "clock", tint: .white.opacity(0.8))
             }
+        }
+    }
+
+    // MARK: - Launch mode + achievements summary
+
+    private var launchModeBinding: Binding<LaunchMode> {
+        Binding(get: { library.game(withID: gameID)?.settings.launchMode ?? .direct },
+                set: { mode in
+                    guard var game = library.game(withID: gameID) else { return }
+                    game.settings.launchMode = mode
+                    library.setSettings(game.settings, for: gameID)
+                })
+    }
+
+    private var offlineBinding: Binding<Bool> {
+        Binding(get: { library.game(withID: gameID)?.settings.steamOffline ?? false },
+                set: { value in
+                    guard var game = library.game(withID: gameID) else { return }
+                    game.settings.steamOffline = value
+                    library.setSettings(game.settings, for: gameID)
+                })
+    }
+
+    /// How this game starts, right under Play — Direct, Doz Dock (Valve's own
+    /// client inside the session, ported from Madeira Dock) or the full Steam
+    /// desktop. Saved with the game; every line says what the mode really does.
+    @ViewBuilder private func launchModeRow(_ game: InstalledGame) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Launch", selection: launchModeBinding) {
+                ForEach(LaunchMode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            switch game.settings.launchMode {
+            case .direct:
+                Text(directModeNote(game))
+                    .font(.caption2).foregroundStyle(.white.opacity(0.5))
+            case .dock:
+                Toggle("Steam offline sign-in (Valve's own offline mode)", isOn: offlineBinding)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                Text("Doz Dock runs Valve's own Steam client inside the session and asks it to start this game — Steam-DRM games run through Valve's client, exactly as on a PC. Nothing is faked: if Steam refuses, the reason is shown."
+                     + (game.settings.steamOffline
+                        ? " Offline sign-in is requested (MADEIRA_DOCK_OFFLINE=1); Steam decides whether it can sign in offline."
+                        : " It needs Steam's components once (game settings → Steam launch) and a Steam sign-in in Windoz."))
+                    .font(.caption2).foregroundStyle(.white.opacity(0.5))
+            case .steamDesktop:
+                Text("The full Windows Steam client runs in the session on a virtual desktop — sign in inside it and use your library there (nothing is auto-started). Close the session like any game.")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+
+    private func directModeNote(_ game: InstalledGame) -> String {
+        if steamAppID != nil, let exePath = engine.prefix.windowsPath(forHostPath: game.executablePath) {
+            return "Direct runs the game's own program with its own Steam identity published (SteamAppPath \(exePath)); the Steam client does not run. Games that insist on the client should use Doz Dock."
+        }
+        return "Direct runs the game's own program. Steam games that insist on the running client can refuse — switch Launch to Doz Dock for those."
+    }
+
+    /// Achievements, right below Play (the owner's ask): one honest summary
+    /// line plus the first rows, from the same Steam data the Achievements
+    /// tab shows. Hidden for games with no Steam app.
+    @ViewBuilder private func achievementsSummary(_ game: InstalledGame) -> some View {
+        if steamAppID != nil {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Achievements", systemImage: "trophy")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        Spacer()
+                        switch steamInfo.achievementsState {
+                        case .idle, .loading:
+                            ProgressView().controlSize(.small)
+                        case .failed:
+                            Button("Retry") {
+                                guard let appID = steamAppID else { return }
+                                Task { await steamInfo.loadAchievements(appID: appID) }
+                            }
+                            .font(.caption)
+                        case .loaded:
+                            Text(steamInfo.achievementSummary)
+                                .font(.caption).foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+                    switch steamInfo.achievementsState {
+                    case .idle, .loading:
+                        Text("Reading achievements from Steam…")
+                            .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                    case .failed(let why):
+                        Text(why).font(.caption2).foregroundStyle(Theme.bad.opacity(0.9))
+                    case .loaded:
+                        if steamInfo.achievementRows.isEmpty {
+                            Text("This game has no achievements.")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                        } else {
+                            ForEach(steamInfo.achievementRows.prefix(3)) { row in
+                                HStack(spacing: 8) {
+                                    Image(systemName: row.unlocked ? "trophy.fill" : "trophy")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(row.unlocked ? Theme.accent : .white.opacity(0.35))
+                                    Text(row.name)
+                                        .font(.caption).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
+                                    Spacer()
+                                    if let date = row.unlockDate {
+                                        Text(date.formatted(date: .abbreviated, time: .omitted))
+                                            .font(.caption2).foregroundStyle(.white.opacity(0.45))
+                                    }
+                                }
+                            }
+                            Button {
+                                tab = .achievements
+                            } label: {
+                                Text("See all").font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                if case .idle = steamInfo.achievementsState, let appID = steamAppID {
+                    Task { await steamInfo.loadAchievements(appID: appID) }
+                }
+            }
+        }
+    }
+
+    /// Cover art for entries that came back without it (installs made while
+    /// this device refused writes). Fetched from Steam's own CDN into the
+    /// resolved art directory; the log names every refusal.
+    private func backfillArtworkIfNeeded() {
+        guard let game, game.coverArtPath == nil, let appID = steamAppID else { return }
+        Task {
+            let art = await SteamStore.fetchArtwork(appID: UInt32(appID))
+            guard art.cover != nil || art.hero != nil else { return }
+            library.updateArtwork(id: gameID, coverPath: art.cover?.path, heroPath: art.hero?.path)
         }
     }
 
@@ -478,12 +618,17 @@ struct GameSettingsSheet: View {
     let gameTitle: String
 
     @EnvironmentObject private var library: GameLibrary
+    @EnvironmentObject private var engine: WindozEngine
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = GameSettings.default
     @State private var loaded = false
     @State private var environmentText = ""
     @State private var saveTask: Task<Void, Never>?
+    @State private var steamReady = false
+    @State private var installingSteam = false
+    @State private var steamStage: String?
+    @State private var steamError: String?
 
     var body: some View {
         NavigationStack {
@@ -491,6 +636,7 @@ struct GameSettingsSheet: View {
                 ConsoleBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        steamLaunchCard
                         GlassCard {
                             VStack(alignment: .leading, spacing: 12) {
                                 SectionHeader(title: "Display")
@@ -633,6 +779,7 @@ struct GameSettingsSheet: View {
                 environmentText = formatEnvironment(game.settings.environment)
                 loaded = true
             }
+            checkSteamComponents()
         }
         .onChange(of: settings) { _, newValue in
             // Debounced: a text field in the sheet saves per keystroke
@@ -648,6 +795,88 @@ struct GameSettingsSheet: View {
         .onChange(of: environmentText) { _, newValue in
             let parsed = parseEnvironment(newValue)
             if parsed != settings.environment { settings.environment = parsed }
+        }
+    }
+
+    /// The Steam launch section: mode, offline request, and Valve's client
+    /// components (fetched from Valve's own CDN, hash-pinned — no Valve binary
+    /// is bundled with the app). This is what makes Doz Dock and the Steam
+    /// desktop session possible.
+    private var steamLaunchCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionHeader(title: "Steam launch")
+                Picker("Launch mode", selection: $settings.launchMode) {
+                    ForEach(LaunchMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                switch settings.launchMode {
+                case .direct:
+                    note("Applied — the game's own program runs; its Steam identity is published when it sits inside Windows.", applied: true)
+                case .dock:
+                    note("Applied — MADEIRA_DOCK_SESSION=1: Valve's own Steam client runs in the session (port of Madeira Dock) and starts the game through Steam itself.", applied: true)
+                    Toggle("Steam offline sign-in (Valve's own offline mode)", isOn: $settings.steamOffline)
+                        .foregroundStyle(.white.opacity(0.9))
+                    note("Applied — MADEIRA_DOCK_OFFLINE=1 when on (or when the device has no network path). Valve's client decides what it can do offline.", applied: true)
+                case .steamDesktop:
+                    note("Applied — the full Windows Steam client runs on a virtual desktop (steam.exe); sign in inside the session.", applied: true)
+                }
+                Divider().overlay(.white.opacity(0.15))
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: steamReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(steamReady ? Theme.ok : Theme.warn)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(steamReady ? "Steam's Windows components are ready"
+                                        : "Steam's Windows components are not installed")
+                            .font(.footnote).foregroundStyle(.white)
+                        Text("Valve's own client files (about 72 MB) fetched from Valve's update CDN and checked against pinned sizes and SHA-256. Without them, Steam-DRM games cannot run through Steam.")
+                            .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+                if installingSteam {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(steamStage ?? "Preparing…").font(.caption).foregroundStyle(.white.opacity(0.7))
+                    }
+                } else if let steamError {
+                    Text(steamError).font(.caption2).foregroundStyle(Theme.bad.opacity(0.95))
+                }
+                if !steamReady && !installingSteam {
+                    Button("Download Steam's components") { installSteamComponents() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
+                }
+            }
+        }
+    }
+
+    private func checkSteamComponents() {
+        let root = engine.prefix.url.appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)")
+        steamReady = FileManager.default.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path)
+    }
+
+    private func installSteamComponents() {
+        installingSteam = true
+        steamError = nil
+        steamStage = "Preparing…"
+        let prefix = engine.prefix
+        Task {
+            do {
+                try await SteamClientInstaller.shared.prepare(prefix: prefix) { stage in
+                    await MainActor.run { self.steamStage = stage }
+                }
+                await MainActor.run {
+                    self.installingSteam = false
+                    self.steamStage = nil
+                    self.checkSteamComponents()
+                }
+            } catch {
+                await MainActor.run {
+                    self.installingSteam = false
+                    self.steamStage = nil
+                    self.steamError = error.localizedDescription
+                }
+            }
         }
     }
 
