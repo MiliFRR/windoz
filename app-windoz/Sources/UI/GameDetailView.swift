@@ -41,7 +41,7 @@ struct GameDetailView: View {
             ConsoleBackground()
             if let game {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 16) {
                         hero(game)
                         playButton(game)
                         launchModeRow(game)
@@ -66,7 +66,7 @@ struct GameDetailView: View {
                         case .friends: friendsTab(game)
                         }
                     }
-                    .padding(18)
+                    .padding(Metrics.pagePadding)
                 }
             } else {
                 Text("This game is no longer in the library.")
@@ -85,6 +85,8 @@ struct GameDetailView: View {
         }
         .sheet(isPresented: $showSettings) {
             GameSettingsSheet(gameID: gameID, gameTitle: game?.title ?? "Game")
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .onAppear {
             engine.refreshStatus()
@@ -106,20 +108,20 @@ struct GameDetailView: View {
     private func hero(_ game: InstalledGame) -> some View {
         ZStack(alignment: .bottomLeading) {
             HeroArtView(path: game.heroArtPath)
-            .frame(height: 240)
+            .frame(height: Metrics.bannerHeight)
             .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
             .overlay(
                 LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .center, endPoint: .bottom)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous)))
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous)))
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(game.title)
-                    .font(.system(size: 30, weight: .heavy, design: .rounded))
+                    .font(.system(size: 22, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white)
-                Text(game.execName).font(.caption).foregroundStyle(.white.opacity(0.6))
+                Text(game.execName).font(.caption2).foregroundStyle(.white.opacity(0.6))
             }
-            .padding(16)
+            .padding(14)
         }
     }
 
@@ -928,7 +930,7 @@ struct GameSettingsSheet: View {
                         Text("Saved per game. This build's session overlay does not read these controls yet — it shows a fixed key row, and touch maps 1:1 onto the game.")
                             .font(.caption2).foregroundStyle(.white.opacity(0.45))
                     }
-                    .padding(18)
+                    .padding(Metrics.pagePadding)
                 }
             }
             .navigationTitle("Settings")

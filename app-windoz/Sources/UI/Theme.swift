@@ -22,7 +22,7 @@ enum Theme {
         colors: [Color(red: 0.10, green: 0.14, blue: 0.28), Color(red: 0.04, green: 0.05, blue: 0.12)],
         startPoint: .topLeading, endPoint: .bottomTrailing)
 
-    static let corner: CGFloat = 18
+    static let corner: CGFloat = 16
 
     static func healthColor(_ health: EngineHealth) -> Color {
         switch health {
@@ -32,6 +32,22 @@ enum Theme {
         case .unknown: return .gray
         }
     }
+}
+
+/// Phone-first metrics. The 0.5.0 build used one fixed "10-foot console"
+/// scale on every screen, which on a 6-inch phone read as a zoomed iPad UI
+/// (owner report, 2026-10-18: "stuff is too big"). Screens now lay out from
+/// these values and from adaptive containers, so nothing is sized for a TV.
+enum Metrics {
+    static let pagePadding: CGFloat = 16
+    static let pageSpacing: CGFloat = 18
+    static let cardCorner: CGFloat = 16
+    static let tileCorner: CGFloat = 12
+    static let heroTileWidth: CGFloat = 176
+    static let heroTileHeight: CGFloat = 238
+    static let shelfTileWidth: CGFloat = 112
+    static let shelfTileHeight: CGFloat = 150
+    static let bannerHeight: CGFloat = 200
 }
 
 /// A translucent card. Uses the system material so it adapts to Liquid Glass on
@@ -70,9 +86,9 @@ struct ConsoleBackground: View {
                 ZStack {
                     Theme.background
                     RadialGradient(colors: [Theme.accent.opacity(0.18), .clear],
-                                   center: .topLeading, startRadius: 40, endRadius: 700)
+                                   center: .topLeading, startRadius: 40, endRadius: 520)
                     RadialGradient(colors: [Theme.accentWarm.opacity(0.14), .clear],
-                                   center: .bottomTrailing, startRadius: 40, endRadius: 700)
+                                   center: .bottomTrailing, startRadius: 40, endRadius: 520)
                 }
             }
         }

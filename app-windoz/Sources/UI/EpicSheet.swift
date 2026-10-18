@@ -31,7 +31,7 @@ struct EpicSignInSheet: View {
                             failedCard(why)
                         }
                     }
-                    .padding(18)
+                    .padding(Metrics.pagePadding)
                 }
             }
             .navigationTitle("Epic sign-in")
@@ -189,7 +189,7 @@ struct EpicSheet: View {
                             paywallCard
                         }
                     }
-                    .padding(18)
+                    .padding(Metrics.pagePadding)
                 }
                 .refreshable { await refresh() }
             }

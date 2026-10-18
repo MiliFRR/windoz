@@ -22,7 +22,7 @@ struct SetupWizardView: View {
                     ProgressView(value: Double(step + 1), total: Double(stepTitles.count))
                         .tint(Theme.accent)
                     Text(stepTitles[step])
-                        .font(.system(size: 28, weight: .heavy, design: .rounded))
+                        .font(.system(size: 24, weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
 
                     switch step {
@@ -34,11 +34,13 @@ struct SetupWizardView: View {
 
                     navigation
                 }
-                .padding(20)
+                .padding(Metrics.pagePadding)
             }
         }
         .navigationTitle("Setup")
-        .sheet(isPresented: $jit.showSetup) { JITSetupView() }
+        .sheet(isPresented: $jit.showSetup) {
+            JITSetupView().presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)

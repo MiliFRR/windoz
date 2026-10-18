@@ -9,7 +9,7 @@ import UIKit
 struct CoverArtView: View {
     let title: String
     var imagePath: String?
-    var corner: CGFloat = 14
+    var corner: CGFloat = Metrics.tileCorner
 
     @State private var image: UIImage?
 
@@ -22,7 +22,7 @@ struct CoverArtView: View {
             } else {
                 Theme.tileGradient
                 Text(initials)
-                    .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .font(.system(size: 26, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white.opacity(0.85))
                     .shadow(radius: 4)
             }
@@ -110,8 +110,8 @@ struct Badge: View {
             if let systemImage { Image(systemName: systemImage).font(.system(size: 10, weight: .bold)) }
             Text(text).font(.system(size: 11, weight: .semibold))
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(Capsule().fill(tint.opacity(0.18)))
         .overlay(Capsule().strokeBorder(tint.opacity(0.35)))
         .foregroundStyle(tint)
@@ -150,8 +150,8 @@ struct PrimaryButton: View {
                 Spacer()
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 15)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -170,8 +170,8 @@ struct SectionHeader: View {
     var body: some View {
         Text(title.uppercased())
             .font(.caption.weight(.bold))
-            .tracking(3)
-            .foregroundStyle(.white.opacity(0.45))
+            .tracking(2.2)
+            .foregroundStyle(.white.opacity(0.5))
     }
 }
 

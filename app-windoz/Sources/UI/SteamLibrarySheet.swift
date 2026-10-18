@@ -24,7 +24,7 @@ struct SteamLibrarySheet: View {
                             paywallCard
                         }
                     }
-                    .padding(18)
+                    .padding(Metrics.pagePadding)
                 }
                 .refreshable { await refresh() }
             }

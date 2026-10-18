@@ -19,7 +19,7 @@ struct DownloadsView: View {
         ZStack {
             ConsoleBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     controls
                     if everythingIsQuiet {
                         GlassCard {
@@ -34,7 +34,7 @@ struct DownloadsView: View {
                     epicSection
                     windozSection
                 }
-                .padding(20)
+                .padding(Metrics.pagePadding)
             }
         }
         .navigationTitle("Downloads")

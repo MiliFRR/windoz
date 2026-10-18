@@ -12,18 +12,18 @@ struct LibraryView: View {
     @ObservedObject private var steamStore = StoreRegistry.shared.steam
     @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 16)]
+    private let columns = [GridItem(.adaptive(minimum: 148), spacing: 14)]
 
     var body: some View {
         let _ = BootTrace.once("library body")
         ZStack {
             ConsoleBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 20) {
                     gamesSection
                     storesSection
                 }
-                .padding(20)
+                .padding(Metrics.pagePadding)
             }
         }
         .navigationTitle("Library")
@@ -46,10 +46,18 @@ struct LibraryView: View {
         } message: {
             Text(importMessage ?? "")
         }
-        .sheet(isPresented: $steamStore.showingSignIn) { SteamSignInView() }
-        .sheet(isPresented: $steamStore.showingLibrary) { SteamLibrarySheet(store: steamStore) }
-        .sheet(isPresented: $epicStore.showingSignIn) { EpicSignInSheet(store: epicStore) }
-        .sheet(isPresented: $epicStore.showingLibrary) { EpicSheet(store: epicStore) }
+        .sheet(isPresented: $steamStore.showingSignIn) {
+            SteamSignInView().presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $steamStore.showingLibrary) {
+            SteamLibrarySheet(store: steamStore).presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $epicStore.showingSignIn) {
+            EpicSignInSheet(store: epicStore).presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $epicStore.showingLibrary) {
+            EpicSheet(store: epicStore).presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
         .task {
             BootTrace.mark("library task: steamStore.start()")
             steamStore.start()
@@ -72,7 +80,7 @@ struct LibraryView: View {
                 }
             }
         } else {
-            LazyVGrid(columns: columns, spacing: 18) {
+            LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(library.games) { game in
                     Button { open(game) } label: { tile(game) }
                         .buttonStyle(.plain)
@@ -89,7 +97,7 @@ struct LibraryView: View {
     private func tile(_ game: InstalledGame) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             CoverArtView(title: game.title, imagePath: game.coverArtPath)
-                .frame(height: 200)
+                .aspectRatio(3.0 / 4.0, contentMode: .fit)
             Text(game.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
             HStack(spacing: 6) {
                 Badge(text: game.compatibility.title, tint: compatTint(game.compatibility))

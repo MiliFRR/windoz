@@ -16,7 +16,7 @@ struct HomeView: View {
         ZStack {
             ConsoleBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 20) {
                     header
                     if heroGames.isEmpty {
                         emptyState
@@ -26,7 +26,7 @@ struct HomeView: View {
                         if !library.recentlyAdded.isEmpty { recentlyAddedRow }
                     }
                 }
-                .padding(.vertical, 18)
+                .padding(.vertical, 14)
             }
         }
         .navigationDestination(item: $selection) { game in
@@ -48,34 +48,34 @@ struct HomeView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Windoz")
-                .font(.system(size: 42, weight: .heavy, design: .rounded))
+                .font(.system(size: 30, weight: .heavy, design: .rounded))
                 .foregroundStyle(.white)
-                .shadow(color: Theme.accent.opacity(0.5), radius: 12)
+                .shadow(color: Theme.accent.opacity(0.45), radius: 10)
             Text("Your Windows games, on your phone")
-                .font(.subheadline)
+                .font(.footnote)
                 .foregroundStyle(.white.opacity(0.55))
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, Metrics.pagePadding)
     }
 
     private var carousel: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     ForEach(Array(heroGames.enumerated()), id: \.element.id) { index, game in
                         Button { open(game) } label: {
-                            VStack(alignment: .leading, spacing: 10) {
-                                CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: 20)
-                                    .frame(width: 280, height: 380)
-                                    .shadow(color: .black.opacity(0.6), radius: 18, y: 10)
-                                    .scaleEffect(focus.index == index ? 1.0 : 0.9)
+                            VStack(alignment: .leading, spacing: 8) {
+                                CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: Metrics.cardCorner)
+                                    .frame(width: Metrics.heroTileWidth, height: Metrics.heroTileHeight)
+                                    .shadow(color: .black.opacity(0.55), radius: 12, y: 8)
+                                    .scaleEffect(focus.index == index ? 1.0 : 0.94)
                                     .animation(.spring(response: 0.3, dampingFraction: 0.8), value: focus.index)
                                 HStack {
-                                    Text(game.title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                                    Text(game.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
                                     Spacer()
                                     compatBadge(game.compatibility)
                                 }
-                                .frame(width: 280)
+                                .frame(width: Metrics.heroTileWidth)
                             }
                         }
                         .buttonStyle(.plain)
@@ -83,20 +83,20 @@ struct HomeView: View {
                         .accessibilityLabel("\(game.title), \(game.compatibility.title)")
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, Metrics.pagePadding)
             }
             .onChange(of: focus.index) { _, newValue in
                 withAnimation { proxy.scrollTo(newValue, anchor: .center) }
             }
         }
-        .frame(height: 460)
+        .frame(height: 330)
     }
 
     @ViewBuilder private var continueRow: some View {
         let items = library.continuePlaying
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                SectionHeader(title: "Continue playing").padding(.horizontal, 20)
+                SectionHeader(title: "Continue playing").padding(.horizontal, Metrics.pagePadding)
                 row(items)
             }
         }
@@ -104,21 +104,21 @@ struct HomeView: View {
 
     @ViewBuilder private var recentlyAddedRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Recently added").padding(.horizontal, 20)
+            SectionHeader(title: "Recently added").padding(.horizontal, Metrics.pagePadding)
             row(library.recentlyAdded)
         }
     }
 
     private func row(_ games: [InstalledGame]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 ForEach(games) { game in
                     Button { open(game) } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: 12)
-                                .frame(width: 132, height: 176)
+                            CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: Metrics.tileCorner)
+                                .frame(width: Metrics.shelfTileWidth, height: Metrics.shelfTileHeight)
                             Text(game.title).font(.caption).foregroundStyle(.white.opacity(0.85))
-                                .lineLimit(1).frame(width: 132, alignment: .leading)
+                                .lineLimit(1).frame(width: Metrics.shelfTileWidth, alignment: .leading)
                             if let last = game.lastPlayedAt {
                                 Text(Self.relativeText(last)).font(.caption2).foregroundStyle(.white.opacity(0.4))
                             }
@@ -127,7 +127,7 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Metrics.pagePadding)
         }
     }
 
@@ -151,7 +151,7 @@ struct HomeView: View {
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, Metrics.pagePadding)
     }
 
     private func compatBadge(_ status: CompatibilityStatus) -> some View {

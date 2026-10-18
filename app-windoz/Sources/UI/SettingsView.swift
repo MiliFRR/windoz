@@ -32,7 +32,9 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Settings")
-        .sheet(isPresented: $jit.showSetup) { JITSetupView() }
+        .sheet(isPresented: $jit.showSetup) {
+            JITSetupView().presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)
@@ -336,7 +338,7 @@ struct LicensesView: View {
                 Text("Microsoft Windows runtime files are downloaded on-device from Microsoft's own servers; Windoz does not redistribute them.")
             }
             .font(.footnote)
-            .padding(18)
+            .padding(Metrics.pagePadding)
         }
         .navigationTitle("Licenses")
     }

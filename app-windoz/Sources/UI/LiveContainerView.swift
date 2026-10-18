@@ -94,7 +94,7 @@ struct LiveContainerView: View {
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.45))
                 }
-                .padding(20)
+                .padding(Metrics.pagePadding)
             }
         }
         .navigationTitle("LiveContainer")
