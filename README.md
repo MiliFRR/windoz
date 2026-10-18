@@ -117,6 +117,22 @@ line — fixed in `7894113` (mode 100755); #17 built it and every stage after
 it. 0.5.0 is **device-verification pending**: the checklist above is the
 run that confirms it.
 
+**On-device status (LiveContainer, 2026-10-18 — build 0.5.0):** the owner ran
+0.5.0 and sent five findings that shape 0.6.0: **launching a game froze on the
+launch screen** (and warmed the phone); afterwards Windoz could not be
+**relaunched from LiveContainer for a while**; a **game download did not show
+up in the Downloads tab**; the **UI was still sized like an iPad app**; and
+the phone **still got hot**. Build 0.6.0 answers each — the stall watchdog
+that never fired now runs on the main thread and a stuck start-up becomes a
+named failure in 160 s with the Windows service stopped; a stalled run
+refuses retries by name instead of wedging again; **Quit Windoz**
+(failed-launch card, game page, session menu, Settings → Advanced) hands
+LiveContainer its slot back at once instead of after a system kill; the
+Downloads tab aggregates Steam and Epic installs with a live badge; the log
+sink is batched; and the UI is rebuilt phone-first. 0.6.0 is
+**device-verification pending**; the build, keeper release URL, size and
+SHA-256 are recorded in the ledger below when run #18 lands.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -269,6 +285,7 @@ order from a clean recursive clone — or simply `make ipa` (see the
 |---|---|
 | [`build-ipa.yml`](.github/workflows/build-ipa.yml) | The full chain on a cloud macOS runner: LLVM, llvm-mingw, the VC++ runtime, Wine/FEX/DXMT/D3D12, the app, the `windoz.ipa` artifact. |
 | [`typecheck.yml`](.github/workflows/typecheck.yml) | Fast `swiftc -typecheck` + the off-device Epic-protocol tests (mocked HTTP, `tests/host/`, since 0.5.0) + XcodeGen validation on `ci-*` branches — minutes instead of hours. |
+| [`release-ipa.yml`](.github/workflows/release-ipa.yml) | Publishes every green `main` build as a GitHub Release `v<version>` with the IPA attached (created on the first build of a version, `--clobber`-refreshed on rebuilds) — the keeper is a URL. `build-ipa.yml` itself now runs `scripts/check-ipa.py`, so only check-passing IPAs get published. |
 | [`issue-watcher.yml`](.github/workflows/issue-watcher.yml) | The self-healing loop. A failed `main` build, or a new owner-authored (or `autofix`-labelled) issue, is read by an AI agent; it writes the fix on an `autofix/…` branch; the full macOS build is dispatched on that branch; and **only a build-verified change is squash-merged to `main`** and reported back on the issue. If the attempts do not pass, it says so in the issue (or opens one). |
 
 Controls live in **Settings → Secrets and variables → Actions**:
@@ -1021,11 +1038,70 @@ the fix that is still in the tree.*
     it — install Wine Mono first); Epic > Download (watch `[epic-dl]` — a
     failure now names its stage and HTTP status instead of dying in one
     second).
+- **Owner round for 0.6.0 (LiveContainer, 2026-10-18 — build 0.5.0):** five
+  findings, each root-caused and fixed; every fix is device-verification
+  pending.
+  - **(1) "Whenever I launch a game it freezes in the launch screen."**
+    Three compounding faults in `WindozEngine`'s launch path: the stall
+    watchdog was scheduled with `Timer.scheduledTimer` from the launch body,
+    which runs off the main actor — a dispatch-worker thread never runs a run
+    loop, so the 180 s budget that should have turned a stall into an honest
+    failure **could not fire**; the guest-start continuation had no exit
+    while the CPU translator waited on the debugger's JIT script (the
+    engine's init lock held); and every UI state write in `launch` (phase,
+    session game, steps, failure card) was off the main actor, so SwiftUI's
+    updates were a coin toss. Now: the watchdog starts on the main thread; a
+    **160 s guest-start budget** with an exactly-one-resume guard turns the
+    stall into a named failure with the failing stage's own words; the run is
+    **marked spent** (`engineWedged`) so a later Play refuses by name instead
+    of wedging again; the Windows service process is stopped; and a
+    translator that answers *late* cannot start a guest behind the app's back
+    (`sessionAbandoned` checks).
+  - **(2) "I can't restart the app from LiveContainer for a bit."** The same
+    wedge: nothing released the engine or the process slot. With the teardown
+    above plus **Quit Windoz** (failed-launch card, game page, session menu,
+    Settings → Advanced — flush the log, then exit on purpose), LiveContainer
+    gets its slot back immediately instead of after a system kill.
+  - **(3) "Game download not showing up in the downloads tab."** Steam
+    installs (Windoz's depot downloader) and Epic's chunked installer keep
+    their progress in their own store objects; the tab only read
+    `DownloadManager`, which game installs never touch. The tab now shows one
+    section per live source with the same controls each store sheet offers,
+    plus a live count badge.
+  - **(4) "Phone still getting hot."** The wedged service process burning CPU
+    during a frozen launch (fixed above), plus the on-disk log sink writing
+    one dispatch + one syscall per line while a chatty boot logs thousands
+    per second — now batched (0.5 s / 256 KB, tails flush first). The audit
+    of every repeating source (timers, monitors, loops) found no idle
+    repeater: watchdog and session timers are launch/session-scoped, the idle
+    monitor is DEBUG-only and passive, Steam disconnects after 60 s idle, and
+    every animation is value-driven.
+  - **(5) "Stuff is too big, looks like iPadOS UI for iPhone."** One fixed
+    "10-foot" scale everywhere (42 pt wordmark, 280×380 hero tiles in a 460 pt
+    rail, 240 pt banner, fixed 200 pt covers, 18-20 pt padding). Redesigned
+    phone-first around new `Metrics`: 30 pt wordmark, 176×238 hero tiles in a
+    330 pt rail, 112×150 shelf tiles, 3:4 adaptive library grid, 200 pt
+    banner, 16 pt rhythm everywhere, real sheet detents with drag handles.
+  - **0.6.0 device checklist** (the proof that counts): launch the test game
+    and let it run — a stall must become a named failure with a Quit button
+    (≤160 s), never a frozen screen; if it stalls, tap **Quit Windoz**,
+    reopen from LiveContainer immediately (no waiting) and launch again — it
+    must start or refuse with the wedge message, not hang; install a
+    Steam/Epic game and watch it appear in Downloads with the tab badge;
+    leave the app open on Home (it should stay hand-temperature); judge the
+    new layout on the phone.
+  - **Record:** typecheck gate #33 (`f2535ee`) green for the launch fix; the
+    per-area commits are on `ci-060`, gated before the merge. The full build
+    after the merge is `build-ipa.yml` run #18; the IPA check
+    (`scripts/check-ipa.py --require 0.6.0`) now runs inside that workflow,
+    and `release-ipa.yml` publishes the artifact as the GitHub Release
+    `v0.6.0` automatically. Run number, size, SHA-256 and release URL are
+    recorded here when it completes.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
 
-What this build (0.5.0) actually offers, in order of what works:
+What this build (0.6.0) actually offers, in order of what works:
 
 - **The bundled helper extension** — added in 0.5.0. `WindozJITHelper.appex`
   (bundle id `com.milifrr.windoz.jit-helper`) runs inside the app and attaches

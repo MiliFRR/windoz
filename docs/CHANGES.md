@@ -173,3 +173,113 @@ which stage and why.
   off-device" where that is all 0.5.0 can prove; the owner's iPhone is the
   judge. The on-device test checklist is in the README's ledger entry for
   0.5.0.
+
+## 0.6.0 (2026-10-18) — the launch-freeze / heat / downloads / phone-UI round
+
+Built on 0.5.0. The owner ran the 0.5.0 keeper and sent five findings; each
+one is answered below with its root cause — and every freeze/heat fix was a
+bug in the app's own bookkeeping, not in the engine. Everything here is
+**device-verification pending**; nothing below claims a device result.
+
+### The launch freeze, and why LiveContainer could not relaunch
+
+Observed: "whenever i launch a game it freezes in the launch screen"; after a
+frozen launch, Windoz could not be started again from LiveContainer "for a
+little bit"; the phone heated up during the freeze.
+
+Root causes in `WindozEngine`'s launch path — three faults compounding:
+
+1. **The stall watchdog never fired.** `startLaunchWatchdog()` was called from
+   the launch body, which runs off the main actor after its first `await`.
+   `Timer.scheduledTimer` schedules on the *calling* thread's run loop; a
+   dispatch-worker thread never runs one, so the 180-second budget that was
+   supposed to turn a stall into an honest failure could not fire. A wedged
+   launch stayed on screen forever, with the engine's service process left
+   burning CPU — the heat.
+2. **The guest-start step had no way out.** The known wedge is the CPU
+   translator waiting on the debugger's JIT script with the engine's init lock
+   held; nothing bounded it, the UI stayed "starting" forever, and Play never
+   came back — and nothing released the engine or the process slot, which is
+   why LiveContainer had to wait for the old process to be reaped before it
+   would host Windoz again.
+3. **Every UI state write in `launch` was off the main thread** (phase, the
+   session game, the step list, the failure card), so SwiftUI's updates were a
+   coin toss — another way the launch screen could sit still while the engine
+   moved underneath.
+
+Fixes:
+
+- The watchdog now starts on the main thread. The guest-start stage gets its
+  own **160-second budget** with an exactly-one-resume guard (the same pattern
+  as the Steam logon guard): whichever of "stage finished / budget expired /
+  Cancel" happens first wins and the rest become no-ops — the double-resume
+  crash class is designed out.
+- A stalled launch is **marked spent** (`engineWedged`): later Play presses get
+  a named refusal that says why and how to recover, instead of wedging the
+  same engine lock again. The Windows service process is stopped (the heat),
+  and a translator that answers *late* cannot start a guest behind the app's
+  back (`sessionAbandoned` checks at every blocking step).
+- **Quit Windoz** — the honest repair for both Wine's one-session-per-run rule
+  and a wedged engine: a button on the failed-launch card and the game page,
+  an entry in the session menu, and a section at the top of Settings →
+  Advanced. It flushes the log and exits, so LiveContainer gets its slot back
+  immediately instead of after a system kill.
+
+### The Downloads tab
+
+Observed: "game download not showing up in the downloads tab". Root cause:
+Steam installs (Windoz's own depot downloader) and Epic's chunked installer
+keep their progress inside their own store objects; the tab only read
+`DownloadManager`, which game installs never touch. The tab now shows one
+section per live source — Steam rows (progress, exact bytes, Cancel,
+Resume/Dismiss on failure), Epic rows (phase, speed, ETA, Pause/Resume/Cancel)
+and the general Windoz queue — and the tab carries a live count badge.
+
+### Heat
+
+Beyond the wedged-launch teardown above, the audit of every repeating source
+in the app (timers, monitors, loops) found no idle repeater — the remaining
+per-event cost was the on-disk log sink: one dispatch and one write syscall
+per log line, and a chatty Wine/FEX boot logs thousands per second. The sink
+now batches (flush every 0.5 s or at 256 KB; session-end tails flush first),
+keeping the disk and a core out of the loop during the one moment the phone is
+already working hard.
+
+### The UI — phone-first, not console-first
+
+Observed: "stuff is too big looks like ipad os ui for iphone". Root cause: one
+fixed "10-foot" scale (42 pt wordmark, 280×380 hero tiles in a 460 pt rail,
+240 pt game banner, fixed 200 pt covers, 18-20 pt padding) with no adaptivity
+at all. The redesign keeps Windoz's look (dark blue-black, cyan/violet
+accents, glass cards) and rebuilds the scale for a phone: a single `Metrics`
+system every screen lays out from, a 30 pt wordmark, 176×238 hero tiles in a
+330 pt rail, 112×150 shelf tiles, true box-art proportions in an adaptive
+library grid (3:4), a 200 pt game banner, a 16 pt page rhythm everywhere, and
+real phone sheets (large detents, visible drag handles) for the store and
+settings sheets.
+
+### Automation — the keeper is a URL now
+
+- `scripts/check-ipa.py` is a real CLI (it was an untracked local script with
+  0.5.0-era markers): it reads version/build from the IPA itself, checks the
+  bundle, the built-in JIT helper, every subsystem string, and that the app's
+  claimed version is actually compiled into the executable. `build-ipa.yml`
+  runs it right after assembling, so a build that is not worth keeping fails
+  before anything is uploaded.
+- `release-ipa.yml` (new): when a build of `main` succeeds, its IPA artifact is
+  attached to the GitHub Release `v<version>` automatically — created on the
+  first build of that version, refreshed with `--clobber` on rebuilds. No
+  hand-run keeper downloads, no local keeper folder needed for the next
+  round.
+
+### Verification in this round
+
+- One commit per area on `ci-060`; the first typecheck gate (#33, `f2535ee`)
+  is green, and the head gate runs before the merge — runs that a newer push
+  cancelled say so and are not counted.
+- The full unsigned-IPA pipeline runs on `main` after the merge; the run
+  number, the keeper release URL, size and SHA-256 are recorded in the
+  README's ledger when it lands. The IPA gate now also runs inside that
+  workflow (`scripts/check-ipa.py --require <project.yml version>`).
+- **No device claims.** The freeze, heat, download-list and layout fixes are
+  exactly what the owner's next run judges; the checklist is in the README.

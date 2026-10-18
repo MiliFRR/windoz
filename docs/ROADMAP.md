@@ -79,13 +79,15 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 
 ## Next, in order
 
-1. **Device-verify 0.5.0** — the six-phase round: idle heat, one page per
-   tap, the launch pipeline's live steps, the bundled JIT helper (standalone
-   sideload — it cannot run under LiveContainer), the runtime installers on a
-   fresh prefix, and an Epic download end to end (the instant-failure root
-   cause is fixed). The storage negotiation, a game's install + Play and the
-   launch modes from 0.4.0 stay on the same list. The owner's run is what
-   confirms them.
+1. **Device-verify 0.6.0** — the launch-freeze / heat / downloads / UI round:
+   a stalled launch becomes a named failure within 160 s (no more frozen
+   screen), a stalled run refuses retries by name, **Quit Windoz** hands
+   LiveContainer its slot back, the Downloads tab shows Steam and Epic
+   installs with a live badge, the heat fixes land, and the UI is rebuilt
+   phone-first. The older checklist items (storage negotiation, a game's
+   install + Play, 0.5.0's six phases, the JIT helper on a standalone
+   sideload, an Epic download end to end) stay on the same list. The owner's
+   run is what confirms them.
 2. **Epic updates / repair** against the live manifest, and
    install-tag selection (resume landed in 0.5.0).
 3. **Launcher-in-Wine pipeline** for GOG, Rockstar and EA (the Steam dock is
