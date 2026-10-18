@@ -319,7 +319,7 @@ enum EpicDownloader {
         let payload = raw.subdata(in: headerSize..<raw.count)
         var candidates: [Data] = []
         if storedAs & 0x1 != 0 {
-            if let inflated = inflate(payload, hint: expected > 0 ? expected : nil) { candidates.append(inflated) }
+            if let inflated = inflateData(payload, hint: expected > 0 ? expected : nil) { candidates.append(inflated) }
             candidates.append(payload) // some CDN edges have served already-inflated bytes
         } else {
             candidates.append(payload)
@@ -368,7 +368,7 @@ enum EpicDownloader {
         var body = try cursor.bytes(cursor.remaining)
         if storedAs & 0x1 != 0 {
             let hint = declaredUncompressed > 0 && declaredUncompressed <= 256 << 20 ? declaredUncompressed : nil
-            guard let inflated = inflate(body, hint: hint, cap: 256 << 20) else {
+            guard let inflated = inflateData(body, hint: hint, cap: 256 << 20) else {
                 throw Failure.message("Epic's build manifest did not decompress.")
             }
             guard Data(Insecure.SHA1.hash(data: inflated)) == manifestSHA else {
@@ -420,7 +420,7 @@ enum EpicDownloader {
         for _ in 0..<chunkCount { hashes.append(try cursor.u64()) }
         var shas: [String] = []
         shas.reserveCapacity(chunkCount)
-        for _ in 0..<chunkCount { shas.append(try cursor.bytes(20).hexString()) }
+        for _ in 0..<chunkCount { shas.append(try cursor.bytes(20).hexString) }
         try cursor.skip(chunkCount) // group numbers (recomputed from the GUID)
         var windows: [UInt32] = []
         windows.reserveCapacity(chunkCount)
@@ -463,7 +463,7 @@ enum EpicDownloader {
         fileHashes.reserveCapacity(fileCount)
         for _ in 0..<fileCount {
             let raw = try cursor.bytes(20)
-            fileHashes.append(raw.contains(where: { $0 != 0 }) ? raw.hexString() : nil)
+            fileHashes.append(raw.contains(where: { $0 != 0 }) ? raw.hexString : nil)
         }
         var flags: [UInt8] = []
         flags.reserveCapacity(fileCount)
@@ -720,7 +720,7 @@ enum EpicDownloader {
     /// zlib first (Epic's chunks are zlib streams), then raw deflate as a
     /// fallback. `hint` bounds the output buffer when the expanded size is
     /// known; `cap` raises that limit for build manifests.
-    private static func inflate(_ data: Data, hint: Int?, cap limit: Int? = nil) -> Data? {
+    private static func inflateData(_ data: Data, hint: Int?, cap limit: Int? = nil) -> Data? {
         let cap = min(max(hint ?? limit ?? max(data.count * 4, 1 << 20), 1024), 256 << 20)
         for windowBits in [Int32(15), Int32(-15)] {
             var stream = z_stream()
@@ -843,8 +843,5 @@ private extension Data {
         let start = startIndex + offset
         return self[start..<start + length].map { String(format: "%02x", $0) }.joined()
     }
-
-    func hexString() -> String {
-        map { String(format: "%02x", $0) }.joined()
-    }
+    // Whole-buffer hex comes from `Data.hexString` (SteamCredentialAuth.swift).
 }
