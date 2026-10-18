@@ -97,13 +97,7 @@ struct GameDetailView: View {
 
     private func hero(_ game: InstalledGame) -> some View {
         ZStack(alignment: .bottomLeading) {
-            Group {
-                if let heroPath = game.heroArtPath, let image = UIImage(contentsOfFile: heroPath) {
-                    Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    Theme.heroGradient
-                }
-            }
+            HeroArtView(path: game.heroArtPath)
             .frame(height: 240)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))

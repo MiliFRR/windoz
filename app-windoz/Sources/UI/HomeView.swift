@@ -120,7 +120,7 @@ struct HomeView: View {
                             Text(game.title).font(.caption).foregroundStyle(.white.opacity(0.85))
                                 .lineLimit(1).frame(width: 132, alignment: .leading)
                             if let last = game.lastPlayedAt {
-                                Text(last, style: .relative).font(.caption2).foregroundStyle(.white.opacity(0.4))
+                                Text(Self.relativeText(last)).font(.caption2).foregroundStyle(.white.opacity(0.4))
                             }
                         }
                     }
@@ -129,6 +129,18 @@ struct HomeView: View {
             }
             .padding(.horizontal, 20)
         }
+    }
+
+    /// Static "2m ago"-style text. `Text(_:style:)` re-renders on a system
+    /// clock while visible; a formatted string costs nothing between updates.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
+
+    private static func relativeText(_ date: Date) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     private var emptyState: some View {

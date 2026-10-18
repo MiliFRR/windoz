@@ -26,17 +26,31 @@ final class DownloadActivity {
     static let shared = DownloadActivity()
 
     private var activities: [UUID: Activity<DownloadActivityAttributes>] = [:]
+    /// The last pushed picture per item, so progress callbacks do not become
+    /// UI work at their full rate.
+    private var lastPush: [UUID: (date: Date, progress: Double, state: String)] = [:]
 
     private init() {}
 
     func update(for item: DownloadItem) {
+        let stateText = stateText(for: item)
+        // The URLSession progress callback fires far more often than any
+        // observer needs; push at most twice a second, and only when the
+        // picture actually changed (state text or ≥1% progress).
+        if let last = lastPush[item.id], last.state == stateText,
+           Date().timeIntervalSince(last.date) < 0.5,
+           abs(item.progress - last.progress) < 0.01 {
+            return
+        }
+        lastPush[item.id] = (Date(), item.progress, stateText)
+
         let state = DownloadActivityAttributes.ContentState(
             progress: item.progress,
             receivedBytes: item.receivedBytes,
             totalBytes: item.totalBytes,
             bytesPerSecond: item.bytesPerSecond,
             etaSeconds: item.etaSeconds,
-            stateText: stateText(for: item))
+            stateText: stateText)
 
         if let existing = activities[item.id] {
             Task { await existing.update(ActivityContent(state: state, staleDate: nil)) }
@@ -61,6 +75,7 @@ final class DownloadActivity {
     }
 
     func finish(for id: UUID) {
+        lastPush[id] = nil
         guard let activity = activities.removeValue(forKey: id) else { return }
         Task { await activity.end(nil, dismissalPolicy: .after(.now + 5)) }
     }

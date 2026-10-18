@@ -3,14 +3,19 @@ import UIKit
 
 /// Cover art for a game. Falls back to a generated gradient tile with the
 /// title's initials so the shelf never shows an empty grey box.
+///
+/// The image is decoded off the main thread through `CoverArtCache` (idle-heat
+/// fix): re-rendering the shelf no longer re-reads every tile from disk.
 struct CoverArtView: View {
     let title: String
     var imagePath: String?
     var corner: CGFloat = 14
 
+    @State private var image: UIImage?
+
     var body: some View {
         ZStack {
-            if let image = loadImage() {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -26,16 +31,18 @@ struct CoverArtView: View {
         .overlay(
             RoundedRectangle(cornerRadius: corner, style: .continuous)
                 .strokeBorder(.white.opacity(0.10)))
+        .task(id: imagePath) {
+            guard let imagePath, !imagePath.isEmpty else {
+                image = nil
+                return
+            }
+            image = await CoverArtCache.image(at: imagePath)
+        }
     }
 
     private var initials: String {
         let words = title.split(separator: " ").prefix(2)
         return words.compactMap { $0.first }.map(String.init).joined().uppercased()
-    }
-
-    private func loadImage() -> UIImage? {
-        guard let imagePath, !imagePath.isEmpty else { return nil }
-        return UIImage(contentsOfFile: imagePath)
     }
 }
 
@@ -199,6 +206,33 @@ struct StatusLine: View {
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.8))
             Spacer(minLength: 0)
+        }
+    }
+}
+
+/// The game page's hero banner — decoded off the main thread through the same
+/// cache the tiles use, so opening a page never blocks on disk I/O.
+struct HeroArtView: View {
+    let path: String?
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Theme.heroGradient
+            }
+        }
+        .task(id: path) {
+            guard let path, !path.isEmpty else {
+                image = nil
+                return
+            }
+            image = await CoverArtCache.image(at: path, maxPixel: 1280)
         }
     }
 }

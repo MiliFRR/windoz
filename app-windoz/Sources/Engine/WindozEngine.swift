@@ -486,9 +486,12 @@ final class WindozEngine: ObservableObject {
             failStartingSession(EngineError.sessionStalled(lastStageLine.isEmpty ? "starting" : lastStageLine))
         case .running where sessionFrames == 0 && age > 300 && !noFrameWarned:
             // Say it on the session screen and in the log; the owner decides.
-            // (The timer keeps running and re-checks — first frames cancel it.)
+            // The warning is the last thing this timer has to offer: the
+            // session timer watches the process from here, so stop burning a
+            // tick every second on a question nobody is asking any more.
             noFrameWarned = true
             log.append("[session] no frame in five minutes — the game may still be loading; the startup stages are in this log", level: .warning)
+            launchWatchdog?.invalidate(); launchWatchdog = nil
         case .running where sessionFrames > 0:
             launchWatchdog?.invalidate(); launchWatchdog = nil
         default:

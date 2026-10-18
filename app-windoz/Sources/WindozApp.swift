@@ -13,6 +13,9 @@ struct WindozApp: App {
         AppContainer.bootstrap()
         DozDock.Offline.begin()
         DownloadManager.shared.restore()
+        #if DEBUG
+        IdleMonitor.shared.start()
+        #endif
         BootTrace.mark("app init done")
     }
 

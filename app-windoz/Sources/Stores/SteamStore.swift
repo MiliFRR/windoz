@@ -199,6 +199,13 @@ final class SteamStore: ObservableObject, StoreProvider {
             cachedAccount = Self.accountKey(SteamSignIn.accountName)
             writeCache()
             SteamLog.event("[steam-library] owned apps=\(apps.count) windows-installable=\(mapped.count)")
+            // Hand the CM socket back as soon as the fetch is done when no
+            // download needs it: an idle session costs a heartbeat every 30 s
+            // and radio wakeups for nothing. (SteamSession's own idle timer
+            // would do this after ~60 s; this makes it immediate.)
+            if active == nil && queue.isEmpty {
+                Task { await session.disconnectGracefully() }
+            }
             return mapped
         } catch {
             handleSessionError(error)
