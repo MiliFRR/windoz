@@ -118,7 +118,10 @@ jobs:
         # not worth keeping, so the run fails before anything is published.
         run: |
           set -e
-          VER="$(grep -m1 MARKETING_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
+          # The version is read by scripts/read-version.py, anchored to the
+          # settings line: run #19's unanchored grep caught a comment that
+          # mentions MARKETING_VERSION and fed the gate a garbage requirement.
+          VER="$(python3 scripts/read-version.py version)"
           echo "project.yml version: $VER"
           python3 scripts/check-ipa.py windoz.ipa --require "$VER"
 

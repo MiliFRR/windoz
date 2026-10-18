@@ -31,12 +31,11 @@ jobs:
         id: ver
         run: |
           set -e
-          ver="$(grep -m1 MARKETING_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
-          build="$(grep -m1 CURRENT_PROJECT_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
-          if [ -z "$ver" ] || [ -z "$build" ]; then
-            echo "::error::could not read MARKETING_VERSION / CURRENT_PROJECT_VERSION from app-windoz/project.yml"
-            exit 1
-          fi
+          # Same reader the IPA check uses (scripts/read-version.py): anchored
+          # to the settings lines, so comments and Info.plist references that
+          # mention the setting names cannot be mistaken for them.
+          ver="$(python3 scripts/read-version.py version)"
+          build="$(python3 scripts/read-version.py build)"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "Releasing Windoz $ver (build $build)"
