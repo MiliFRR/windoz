@@ -123,32 +123,28 @@ enum EpicAPI {
 
     // MARK: - Asset manifests (the download path)
 
-    /// One `elements` entry of launcher-public-service's assets response
-    /// (legendary's api/egs.py: get_game_manifest / get_game_assets).
-    struct AssetElement: Decodable {
-        struct ManifestRef: Decodable {
-            struct QueryParam: Decodable { let name: String; let value: String }
-            let uri: String
-            let queryParams: [QueryParam]?
-        }
-        let appName: String?
-        let labelName: String?
+    /// One `elements` entry of launcher-public-service's assets response —
+    /// assembled by `EpicProtocol.parseAssetElements` (lenient on purpose;
+    /// see that function's comment for why this is not Codable).
+    typealias AssetElement = EpicProtocol.AssetElement
+
+    /// The live Windows build manifest for one owned item: the URL to fetch
+    /// (the API's signed query params joined on verbatim — re-encoding them
+    /// would break the signature), the SHA-1 the launcher service recorded for
+    /// the manifest's bytes, and the build version. Nil means Epic answered
+    /// for this item with no manifest at all.
+    struct AssetManifest {
+        let url: URL
+        let sha1: String?
         let buildVersion: String?
-        let namespace: String?
-        let catalogItemId: String?
-        let manifests: [ManifestRef]?
     }
 
-    private struct AssetsResponse: Decodable { let elements: [AssetElement]? }
-
-    /// The live Windows build manifest URL for one owned item.
-    ///
     /// Tries the v2 endpoint by namespace + catalog item + app name (the
     /// launcher's own request shape), then without the app name, then the v1
     /// per-platform list filtered to this item. The bearer must be a
     /// launcher-scoped session; anything else is refused with Epic's status.
-    static func assetManifestURL(namespace: String, catalogItemId: String,
-                                 appName: String?, userToken: String) async throws -> URL? {
+    static func assetManifest(namespace: String, catalogItemId: String,
+                              appName: String?, userToken: String) async throws -> AssetManifest? {
         var attempts: [URL] = []
         if let appName, !appName.isEmpty,
            let url = assetsURL(namespace: namespace, catalogItemId: catalogItemId, appName: appName) {
@@ -169,7 +165,7 @@ enum EpicAPI {
                         || (appName.map { element.appName?.caseInsensitiveCompare($0) == .orderedSame } ?? false)
                 } ?? elements.first
                 guard let match, let ref = manifestRef(match), let manifest = manifestURL(ref) else { continue }
-                return manifest
+                return AssetManifest(url: manifest, sha1: match.hash, buildVersion: match.buildVersion)
             } catch {
                 lastError = error
             }
@@ -184,11 +180,7 @@ enum EpicAPI {
         request.setValue("UELauncher/11.0.1-14907503+++Portal+Release-Live Windows/10.0.19041.1.256.64bit",
                          forHTTPHeaderField: "User-Agent")
         let data = try await send(request, authScoped: false)
-        if let wrapped = try? JSONDecoder().decode(AssetsResponse.self, from: data),
-           let elements = wrapped.elements {
-            return elements
-        }
-        return (try? JSONDecoder().decode([AssetElement].self, from: data)) ?? []
+        return EpicProtocol.parseAssetElements(data)
     }
 
     private static func assetsURL(namespace: String, catalogItemId: String, appName: String?) -> URL? {
@@ -213,17 +205,16 @@ enum EpicAPI {
     }
 
     private static func manifestRef(_ element: AssetElement) -> AssetElement.ManifestRef? {
-        guard let manifests = element.manifests, !manifests.isEmpty else { return nil }
-        return manifests.first { $0.uri.lowercased().hasSuffix(".manifest") } ?? manifests.first
+        guard !element.manifests.isEmpty else { return nil }
+        return element.manifests.first { $0.uri.lowercased().hasSuffix(".manifest") } ?? element.manifests.first
     }
 
+    /// The manifest URL exactly as Legendary builds it: `uri` + "?" + the
+    /// query params joined verbatim (core.py get_cdn_urls). The values are
+    /// already signed; percent-encoding them here would break the signature.
     private static func manifestURL(_ ref: AssetElement.ManifestRef) -> URL? {
-        guard var components = URLComponents(string: ref.uri) else { return nil }
-        if let params = ref.queryParams, !params.isEmpty,
-           components.queryItems?.isEmpty ?? true {
-            components.queryItems = params.map { URLQueryItem(name: $0.name, value: $0.value) }
-        }
-        return components.url
+        EpicProtocol.requestURL(uri: ref.uri,
+                                queryParams: ref.queryParams.map { (name: $0.name, value: $0.value) })
     }
 
     private static func pathSegment(_ value: String) -> String {

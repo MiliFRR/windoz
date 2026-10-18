@@ -9,6 +9,7 @@ on:
     branches: ["ci-*"]
     paths:
       - "app-windoz/**"
+      - "tests/host/**"
       - ".github/workflows/typecheck.yml"
 
 concurrency:
@@ -49,6 +50,18 @@ jobs:
             -DDEBUG \
             -import-objc-header Sources/Support/Windoz-Bridging-Header.h \
             $FILES
+
+      - name: Off-device tests — Epic download protocol (mocked HTTP)
+        run: |
+          set -e
+          # EpicProtocol.swift is Foundation + CryptoKit + zlib only, so the host
+          # compiles it with plain swiftc; the tests mock HTTP and build
+          # synthetic manifests/chunks. Exit code 0 = all passed.
+          xcrun swiftc -O -swift-version 5 -parse-as-library \
+            -o "$RUNNER_TEMP/epic-host-tests" \
+            app-windoz/Sources/Epic/EpicProtocol.swift \
+            tests/host/epic-protocol-tests.swift
+          "$RUNNER_TEMP/epic-host-tests"
 
       - name: Validate project.yml through XcodeGen
         run: |

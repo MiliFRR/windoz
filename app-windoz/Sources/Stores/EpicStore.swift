@@ -57,6 +57,12 @@ final class EpicStore: ObservableObject, StoreProvider {
         var doneBytes: UInt64
         var totalBytes: UInt64
         var detail: String
+        /// True while the user has paused; the protocol stops between chunks.
+        var isPaused = false
+        /// Smoothed stored-bytes-per-second; 0 until the first measurement.
+        var speedBytesPerSecond: Double = 0
+        /// Seconds left at the current speed, when a speed is known.
+        var etaSeconds: TimeInterval?
 
         var fraction: Double {
             guard totalBytes > 0 else { return 0 }
@@ -71,6 +77,10 @@ final class EpicStore: ObservableObject, StoreProvider {
     @Published private(set) var launcherSignedIn = false
 
     private var started = false
+    /// The running install's pause/resume/cancel handle, and the window the
+    /// speed estimate is measured over.
+    private var installControl: EpicProtocol.InstallControl?
+    private var speedWindow: (at: Date, bytes: UInt64, speed: Double)?
     private var observer: NSObjectProtocol?
     private var launcherObserver: NSObjectProtocol?
     private var cachedAccount: String?
@@ -320,24 +330,34 @@ final class EpicStore: ObservableObject, StoreProvider {
             throw StoreError.notImplemented("This entry is missing its Epic identifiers; refresh the library and try again.")
         }
         let namespace = identifiers[0], catalogItemId = identifiers[1]
+        let control = EpicProtocol.InstallControl()
+        installControl = control
+        speedWindow = nil
 
         download = DownloadState(gameID: game.id, phase: "Preparing", doneBytes: 0, totalBytes: 0,
                                  detail: "Asking Epic for the live build")
-        defer { download = nil }
+        defer {
+            download = nil
+            installControl = nil
+            speedWindow = nil
+        }
 
         do {
-            let token = try await downloadToken()
+            let (token, tokenKind) = try await downloadToken()
+            EpicLog.event("[epic-download] auth scope=\(tokenKind)")
             let appName = await resolveAppName(namespace: namespace, catalogItemId: catalogItemId, token: token)
-            guard let manifestURL = try await EpicAPI.assetManifestURL(namespace: namespace,
-                                                                       catalogItemId: catalogItemId,
-                                                                       appName: appName, userToken: token) else {
+            guard let asset = try await EpicAPI.assetManifest(namespace: namespace,
+                                                              catalogItemId: catalogItemId,
+                                                              appName: appName, userToken: token) else {
                 throw StoreError.notImplemented("Epic has no live Windows build for this title. It may not be released for Windows yet.")
             }
-            EpicLog.event("[epic-download] start app=\(appName ?? catalogItemId)")
+            EpicLog.event("[epic-download] start app=\(appName ?? catalogItemId) build=\(asset.buildVersion ?? "unknown") url=\(EpicProtocol.redactedURL(asset.url))")
 
             let result = try await EpicDownloader.install(
-                manifestURL: manifestURL, bearerToken: token,
-                folderName: EpicDownloader.folderName(for: game.title)) { progress in
+                manifestURL: asset.url,
+                expectedManifestSHA1: asset.sha1,
+                folderName: EpicDownloader.folderName(for: game.title),
+                control: control) { progress in
                 await self.publish(progress, for: game.id)
             }
             EpicLog.event("[epic-download] done files=\(result.fileCount) bytes=\(result.bytes) "
@@ -348,10 +368,34 @@ final class EpicStore: ObservableObject, StoreProvider {
             // the art CDN fails.
             let art = await fetchArt(for: game)
             registerInstalled(game: game, result: result, art: art)
+        } catch EpicProtocol.Failure.cancelled {
+            EpicLog.event("[epic-download] cancelled app=\(game.title)")
+            libraryMessage = "The download was cancelled. Files that were already finished were kept; the file that was in progress was removed."
+            throw EpicProtocol.Failure.cancelled
         } catch {
             EpicLog.event("[epic-download] failed app=\(game.title) reason=\(Self.reason(error))")
             throw error
         }
+    }
+
+    // MARK: - Download controls (the sheet's Pause / Resume / Cancel)
+
+    func pauseDownload() {
+        guard let control = installControl else { return }
+        control.pause()
+        download?.isPaused = true
+        download?.phase = "Paused"
+    }
+
+    func resumeDownload() {
+        guard let control = installControl else { return }
+        control.resume()
+        download?.isPaused = false
+        download?.phase = "Downloading"
+    }
+
+    func cancelDownload() {
+        installControl?.cancel()
     }
 
     private func publish(_ progress: EpicDownloader.Progress, for gameID: String) {
@@ -362,20 +406,40 @@ final class EpicStore: ObservableObject, StoreProvider {
         state.doneBytes = progress.doneBytes
         state.totalBytes = progress.totalBytes
         state.detail = progress.detail
+        // Speed and ETA from the stored-byte deltas, smoothed over half-second
+        // windows so the label does not flicker.
+        let now = Date()
+        if let window = speedWindow, now.timeIntervalSince(window.at) > 0.5 {
+            let delta = progress.doneBytes >= window.bytes ? progress.doneBytes - window.bytes : 0
+            let instant = Double(delta) / now.timeIntervalSince(window.at)
+            let speed = window.speed == 0 ? instant : window.speed * 0.7 + instant * 0.3
+            speedWindow = (at: now, bytes: progress.doneBytes, speed: speed)
+        } else if speedWindow == nil {
+            speedWindow = (at: now, bytes: progress.doneBytes, speed: 0)
+        }
+        let speed = speedWindow?.speed ?? 0
+        state.speedBytesPerSecond = speed
+        if speed > 1, progress.phase == .downloading, progress.totalBytes > progress.doneBytes {
+            let remaining = Double(progress.totalBytes - progress.doneBytes) / speed
+            state.etaSeconds = remaining.isFinite ? min(remaining, 86_400 * 3) : nil
+        } else {
+            state.etaSeconds = nil
+        }
         download = state
     }
 
     /// The launcher session first (the assets service is launcher-scoped),
-    /// then the device session, then the client credentials.
-    private func downloadToken() async throws -> String {
+    /// then the device session, then the client credentials. Only the scope
+    /// name is ever logged; the token itself is never logged or printed.
+    private func downloadToken() async throws -> (token: String, kind: String) {
         if EpicLauncherSignIn.isSignedIn,
            let token = try? await EpicLauncherAuthClient.shared.userToken(), !token.isEmpty {
-            return token
+            return (token, "launcher")
         }
         if let token = try? await EpicAuthClient.shared.userToken(), !token.isEmpty {
-            return token
+            return (token, "device")
         }
-        return try await EpicAuthClient.shared.clientCredentials()
+        return (try await EpicAuthClient.shared.clientCredentials(), "client-credentials")
     }
 
     /// The app name Epic's assets service wants, from the owner's own library

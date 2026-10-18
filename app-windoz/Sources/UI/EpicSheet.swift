@@ -360,12 +360,28 @@ struct EpicSheet: View {
                             .lineLimit(1)
                     }
                     if let download = store.download, download.gameID == game.id {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             ProgressView(value: download.fraction)
                                 .tint(Theme.accent)
                             Text("\(download.phase.capitalized) — \(download.detail)")
                                 .font(.caption2).foregroundStyle(.white.opacity(0.6))
                                 .lineLimit(2)
+                            if !download.isPaused, download.speedBytesPerSecond > 1 {
+                                Text(downloadProgressLine(download))
+                                    .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(1)
+                            }
+                            HStack(spacing: 12) {
+                                Button(download.isPaused ? "Resume" : "Pause") {
+                                    if download.isPaused { store.resumeDownload() } else { store.pauseDownload() }
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                                Button("Cancel") { store.cancelDownload() }
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.red.opacity(0.9))
+                            }
+                            .buttonStyle(.plain)
                         }
                     } else if game.installed {
                         Badge(text: "Installed", systemImage: "checkmark.circle.fill", tint: Theme.ok)
@@ -395,9 +411,23 @@ struct EpicSheet: View {
             do {
                 try await store.install(game)
             } catch {
-                store.libraryMessage = EpicStore.reason(error)
+                // The real sentence, not the error's type name: Phase 6
+                // requires every refusal to read honestly in the UI.
+                store.libraryMessage = EpicStore.message(error)
             }
         }
+    }
+
+    /// "3.4 MB/s — about 2 min left" for the running download.
+    private func downloadProgressLine(_ download: EpicStore.DownloadState) -> String {
+        let speed = ByteCountFormatter.string(fromByteCount: Int64(download.speedBytesPerSecond), countStyle: .file) + "/s"
+        guard let eta = download.etaSeconds, eta > 1 else { return speed }
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = eta >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 1
+        guard let text = formatter.string(from: eta) else { return speed }
+        return "\(speed) — about \(text) left"
     }
 
     private func coverThumb(_ game: StoreGame) -> some View {
