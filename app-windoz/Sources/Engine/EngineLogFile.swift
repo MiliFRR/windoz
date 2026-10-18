@@ -20,6 +20,10 @@ final class EngineLogFile {
     private let limitBytes: UInt64 = 5 * 1024 * 1024
     private let queue = DispatchQueue(label: "windoz.log-file", qos: .utility)
     private var handle: FileHandle?
+    /// Lines not yet written (batched — see `append`).
+    private var pending = Data()
+    /// True while a flush is scheduled, so a burst schedules one, not one per line.
+    private var flushScheduled = false
 
     private init() {}
 
@@ -69,24 +73,57 @@ final class EngineLogFile {
     }
 
     /// Called by `EngineLogStream` for every line, on whatever thread produced
-    /// it. Writing is serialised on this class's queue; a missing handle is a
-    /// silent no-op.
+    /// it. A missing handle is a silent no-op.
+    ///
+    /// Writes are batched (heat fix, device report 2026-10-18: "phone still
+    /// getting hot"): a chatty boot logs thousands of lines per second, and
+    /// one dispatch + one write syscall per line kept the disk and a core
+    /// busy for no benefit. Lines land in one buffer that is flushed every
+    /// half second — or immediately at 256 KB, so a session's last lines are
+    /// never far behind a failure.
     func append(_ line: LogLine) {
         let text = "[\(Self.stamp.string(from: line.date))] [\(line.level.rawValue.uppercased())] \(line.text)\n"
         queue.async {
-            guard let handle = self.handle else { return }
-            handle.write(Data(text.utf8))
+            guard self.handle != nil else { return }
+            self.pending.append(Data(text.utf8))
+            self.scheduleFlush()
         }
+    }
+
+    /// Must run on `queue`.
+    private func scheduleFlush() {
+        if pending.count >= 256 * 1024 {
+            flushPending()
+        } else if !flushScheduled {
+            flushScheduled = true
+            queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                self.flushScheduled = false
+                self.flushPending()
+            }
+        }
+    }
+
+    /// Must run on `queue`.
+    private func flushPending() {
+        guard let handle, !pending.isEmpty else {
+            pending.removeAll(keepingCapacity: true)
+            return
+        }
+        handle.write(pending)
+        pending.removeAll(keepingCapacity: true)
     }
 
     /// Append the tail of the engine's own Wine/guest output, with a reason
     /// header. Called at session end (clean exit or failure) so the single
-    /// Windoz log carries the guest's last words too.
+    /// Windoz log carries the guest's last words too — and it flushes the
+    /// buffer first, so the tail follows its own lines on disk.
     func appendEngineLogTail(reason: String, maxBytes: Int = 128 * 1024) {
         guard let url = Self.engineLogURL else { return }
         queue.async {
             guard self.handle != nil, let data = Self.tail(url, maxBytes: maxBytes), !data.isEmpty,
                   let text = String(data: data, encoding: .utf8) else { return }
+            self.flushPending()
             let header = "\n==== Wine and guest output (\(reason); tail of \(url.lastPathComponent)) ====\n"
             self.handle?.write(Data(header.utf8))
             self.handle?.write(Data(text.utf8))
