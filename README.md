@@ -82,7 +82,12 @@ from Valve's pinned CDN in the game's settings; **Epic downloads** arrive
 `EpicGames/<title>`); installs and pre-0.3.5 entries backfill **cover art**
 from Steam's CDN; and the game page carries an **achievements card under
 Play**. 0.4.0 is **device-verification pending** — the run the owner is
-about to do is what confirms it.
+about to do is what confirms it; its IPA is `build-ipa.yml` run #15
+(`48415aa`, success, 2026-10-18), kept at `windoz-ipa-keep/windoz-15.ipa`
+(75,480,343 bytes, SHA-256
+`CBCFD1468ABC7FF80486B58CC193B994DE584DA8E05120F059F421EB72A26F11` —
+Info.plist `0.4.0` build 4, and the app binary carries the dock handoff
+(`windoz-dock`/`launch.auth`), the Epic assets host and `ChunksV5`/`ChunksV4`).
 
 ## app-windoz — the current app
 
