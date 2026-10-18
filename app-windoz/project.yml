@@ -103,8 +103,13 @@ targets:
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "0.5.0"
-        CFBundleVersion: "5"
+        # Version comes from the target's build settings (MARKETING_VERSION /
+        # CURRENT_PROJECT_VERSION in project.yml below) — the same pattern the
+        # JIT helper target already used. Hardcoding it here made the app
+        # bundle claim 0.5.0 build 5 while the helper said 0.6.0 build 6; the
+        # IPA check gate caught exactly that drift on its first live run.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleInfoDictionaryVersion: "6.0"
         LSRequiresIPhoneOS: true
         MinimumOSVersion: "26.0"
