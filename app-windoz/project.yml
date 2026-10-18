@@ -7,6 +7,9 @@ options:
 
 settings:
   base:
+    # One build setting names every bundle id this project derives: the app
+    # itself, its JIT helper extension, and the StikJIT framework's identifier.
+    WINDOZ_BUNDLE_IDENTIFIER: com.milifrr.windoz
     SWIFT_OBJC_BRIDGING_HEADER: Sources/Support/Windoz-Bridging-Header.h
     TARGETED_DEVICE_FAMILY: "1,2"
     SWIFT_VERSION: "5.0"
@@ -35,6 +38,10 @@ targets:
       - sdk: libz.tbd
       - sdk: libsqlite3.tbd
       - sdk: liblzma.tbd
+      # The built-in JIT helper extension (WindozJITHelper.appex). XcodeGen
+      # embeds it into PlugIns with CodeSignOnCopy; the app starts it by its
+      # bundle id (Sources/Engine/JITBuiltInHost.swift).
+      - target: WindozJITHelper
     sources:
       - path: Sources
       # --- engine binding layer (ObjC/C glue that drives the forks; GPL,
@@ -79,6 +86,11 @@ targets:
       # the engine; this is the matching debugger script).
       - path: ../madeira/app/Madeira/madeira-jit.js
         buildPhase: resources
+      # --- Windoz's own licences: the JIT-port credits, StikJIT/idevice texts
+      #     and the generated rppairing crate notices (THIRD-PARTY-NOTICES.md).
+      - path: Resources/Legal
+        type: folder
+        buildPhase: resources
     info:
       path: Windoz/Info.plist
       properties:
@@ -104,11 +116,22 @@ targets:
         LSApplicationQueriesSchemes:
           - stikdebug
           - localdevvpn
+        # LocalDevVPN connects and returns through windoz://… (`scheme=windoz`).
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes:
+              - windoz
+        # On-device pairing (iOS 27): this iPhone finds "Windoz" under Settings ›
+        # Privacy & Security › Developer Mode and shows a pairing code.
+        NSBonjourServices:
+          - _remotepairing-pairable-host._tcp
+        NSLocalNetworkUsageDescription: "Windoz plays the computer for on-device JIT pairing: this device finds it on the local network and shows a pairing code."
         NSSupportsLiveActivities: true
         UIBackgroundModes:
           - processing
         BGTaskSchedulerPermittedIdentifiers:
-          - com.milifrr.windoz.download
+          - $(WINDOZ_BUNDLE_IDENTIFIER).download
+          - $(WINDOZ_BUNDLE_IDENTIFIER).pairing.*
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -120,7 +143,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.milifrr.windoz
+        PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER)
         # Signing entitlements (get-task-allow + dynamic-codesigning; the file
         # explains each key). The CI build is unsigned, so this only matters if
         # someone signs the project; the plist is kept honest by
@@ -140,6 +163,9 @@ targets:
         ENABLE_DEBUG_DYLIB: "NO"
         HEADER_SEARCH_PATHS: "$(inherited) ../madeira/app/Madeira ../madeira/app/Madeira/Winios ../madeira/wine/include ../madeira/wine/build-arm64ec/include ../madeira/FEX/FEXCore/include ../madeira/FEX/FEXHeaderUtils ../madeira/FEX/CodeEmitter ../madeira/FEX/External/fmt/include ../madeira/FEX/External/range-v3/include ../madeira/FEX/External/unordered_dense/include ../madeira/FEX/build-ios ../madeira/FEX/build-ios/include ../madeira/FEX/build-ios/FEXCore/Source ../madeira/FEX ../madeira/build/ntdll-unix/shims"
         SUPPORTS_MACCATALYST: "NO"
+        # The on-device pairing library (build/rppairing-ios/build.sh writes it;
+        # CI builds it before the app). C interface: Sources/Support/WindozRPPairing.h.
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/libs"
         # Engine static libraries, linked explicitly in dependency order.
         # -force_load for libFEXCore.a: its LTO-compiled members are not always
         # pulled by the archive index on a non-LTO app link (CI run #31).
@@ -149,4 +175,83 @@ targets:
         # archive, and ld64 resolves archives left-to-right in one pass, so the
         # trailing copy is what satisfies a reference that only appears after
         # libdxmt_combined.a has been scanned.
-        OTHER_LDFLAGS: "$(inherited) -force_load ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore.a ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore_Base.a ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a ../madeira/FEX/build-ios/External/fmt/libfmt.a ../madeira/FEX/build-ios/External/cephes/libcephes_128bit.a ../madeira/FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a ../madeira/FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a ../madeira/app/Madeira/libntdll_unix.a ../madeira/app/Madeira/libwin32u_unix.a ../madeira/app/Madeira/libdxmt_combined.a ../madeira/app/Madeira/libwineserver.a ../madeira/app/Madeira/libgnutls.a ../madeira/app/Madeira/libhogweed.a ../madeira/app/Madeira/libnettle.a ../madeira/app/Madeira/libgmp.a ../madeira/app/Madeira/libavformat.a ../madeira/app/Madeira/libavcodec.a ../madeira/app/Madeira/libswresample.a ../madeira/app/Madeira/libavutil.a ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a"
+        OTHER_LDFLAGS: "$(inherited) -force_load ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore.a ../madeira/FEX/build-ios/FEXCore/Source/libFEXCore_Base.a ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a ../madeira/FEX/build-ios/External/fmt/libfmt.a ../madeira/FEX/build-ios/External/cephes/libcephes_128bit.a ../madeira/FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a ../madeira/FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a ../madeira/app/Madeira/libntdll_unix.a ../madeira/app/Madeira/libwin32u_unix.a ../madeira/app/Madeira/libdxmt_combined.a ../madeira/app/Madeira/libwineserver.a ../madeira/app/Madeira/libgnutls.a ../madeira/app/Madeira/libhogweed.a ../madeira/app/Madeira/libnettle.a ../madeira/app/Madeira/libgmp.a ../madeira/app/Madeira/libavformat.a ../madeira/app/Madeira/libavcodec.a ../madeira/app/Madeira/libswresample.a ../madeira/app/Madeira/libavutil.a ../madeira/FEX/build-ios/FEXCore/Source/libJemallocLibs.a -lwindoz_rppairing"
+    # The helper extension's framework is copied into the app's own Frameworks
+    # folder by this script: the helper loads it through
+    # @executable_path/../../Frameworks, and sideloaders re-sign the app's
+    # Frameworks folder — an ad-hoc copy inside the helper would stay unsigned
+    # after re-signing. Ported from Madeira's "Embed StikJIT" phase.
+    postBuildScripts:
+      - name: Embed StikJIT
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          [ "$PLATFORM_NAME" = iphoneos ] || exit 0
+          SRC="$SRCROOT/Frameworks/StikJIT.xcframework/ios-arm64/StikJIT.framework"
+          DST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/StikJIT.framework"
+          rm -rf "$DST"
+          mkdir -p "$(dirname "$DST")"
+          ditto "$SRC" "$DST"
+          # The framework ships without an Info.plist, which an app's embedded framework needs.
+          if [ ! -f "$DST/Info.plist" ]; then
+            P="$DST/Info.plist"
+            /usr/libexec/PlistBuddy -c 'Add :CFBundleExecutable string StikJIT' -c "Add :CFBundleIdentifier string $PRODUCT_BUNDLE_IDENTIFIER.StikJIT" -c 'Add :CFBundleName string StikJIT' -c 'Add :CFBundlePackageType string FMWK' -c 'Add :CFBundleInfoDictionaryVersion string 6.0' -c 'Add :CFBundleShortVersionString string 1.0' -c 'Add :CFBundleVersion string 1' -c 'Add :CFBundleSupportedPlatforms array' -c 'Add :CFBundleSupportedPlatforms:0 string iPhoneOS' -c 'Add :MinimumOSVersion string 26.0' "$P" >/dev/null
+            plutil -convert binary1 "$P"
+          fi
+          if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] && [ "$CODE_SIGNING_ALLOWED" != "NO" ]; then
+            codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$DST"
+          fi
+
+  # Windoz's JIT helper: a classic app extension (com.apple.ar.viewer, a
+  # FALSEPREDICATE activation rule — startable only through the private
+  # NSExtension API, as LiveContainer's LiveProcess is), linked against the
+  # vendored StikJIT framework and sharing the app's message structs. Ported
+  # from Madeira's MadeiraJITHelper target.
+  WindozJITHelper:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: JITHelper
+      # The same message shapes the app encodes: one file, both targets.
+      - path: Sources/Engine/WindozJITMessages.swift
+    info:
+      path: JITHelper/Info.plist
+      properties:
+        CFBundleDisplayName: Windoz JIT Helper
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: XPC!
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionAttributes:
+            NSExtensionActivationRule: FALSEPREDICATE
+          NSExtensionPointIdentifier: com.apple.ar.viewer
+          NSExtensionPrincipalClass: WindozJITHelperHandler
+          NSExtensionContextClass: NSExtensionContext
+          NSExtensionContextHostClass: NSExtensionContext
+        XPCService:
+          ServiceType: Application
+          _MultipleInstances: true
+          _ProcessType: App
+    settings:
+      base:
+        PRODUCT_NAME: WindozJITHelper
+        PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER).jit-helper
+        GENERATE_INFOPLIST_FILE: "NO"
+        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.4.0"
+        # The app's bridging header (engine C glue) must not leak into the
+        # helper, which links only StikJIT.
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Frameworks/StikJIT.xcframework/ios-arm64"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../Frameworks"
+        OTHER_LDFLAGS: "$(inherited) -framework StikJIT"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        SUPPORTS_MACCATALYST: "NO"
+        ENABLE_DEBUG_DYLIB: "NO"

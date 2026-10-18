@@ -99,7 +99,7 @@ enum AppEnvironment {
         if isLiveContainer {
             return "Inside LiveContainer, Windoz cannot start a bundled helper extension. Turn on “Launch with JIT” for Windoz in LiveContainer, point its JIT launch Script at Documents/LiveContainer/windoz-jit.js, and use StikDebug (on iOS 26 that is often StikDebug in another LiveContainer)."
         }
-        return "JIT needs a debugger attach. Windoz can use StikDebug or its own bundled helper."
+        return "JIT needs a debugger attach. Windoz can use StikDebug or its own bundled helper — see Settings › JIT setup."
     }
 
     /// Features that LiveContainer (or the Simulator) cannot provide. The UI

@@ -14,6 +14,10 @@
 #import "../../../madeira/app/Madeira/Winios/Winios.h"
 #import "../../../madeira/app/Madeira/PadOutput.h"
 #import "JITProbe.h"
+// On-device remote pairing (iOS 27 and later): build/rppairing-ios, linked as
+// libwindoz_rppairing.a — ported from Madeira's MadeiraRPPairing.h with
+// Windoz's symbol names.
+#import "WindozRPPairing.h"
 
 // The presented-frame counter exported by DXMT's unix side (the pinned engine
 // trees declare it the same way). The session overlay reads it to tell

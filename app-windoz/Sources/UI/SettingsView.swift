@@ -7,8 +7,9 @@ struct SettingsView: View {
     @ObservedObject private var steamStore = StoreRegistry.shared.steam
     @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
-    @AppStorage("windoz.jitMethod") private var jitMethodRaw =
-        (AppEnvironment.availableJITMethods.first ?? .stikDebug).rawValue
+    /// One source of truth for the JIT method and state: the setup screen and
+    /// the pre-launch auto-attempt read the same coordinator.
+    @ObservedObject private var jit = JITCoordinator.shared
 
     var body: some View {
         ZStack {
@@ -31,6 +32,7 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
         }
         .navigationTitle("Settings")
+        .sheet(isPresented: $jit.showSetup) { JITSetupView() }
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)
@@ -63,25 +65,31 @@ struct SettingsView: View {
             Button("Check again") { engine.refreshStatus() }
 
             // JIT setup, folded in so there is one engine story on one screen.
-            if AppEnvironment.availableJITMethods.count > 1 {
-                Picker("JIT method", selection: $jitMethodRaw) {
-                    ForEach(AppEnvironment.availableJITMethods) { method in
-                        Text(method.title).tag(method.rawValue)
-                    }
-                }
-            } else if let only = AppEnvironment.availableJITMethods.first {
-                LabeledContent("JIT method", value: only.title)
-            }
-            Text(AppEnvironment.jitSituation)
-                .font(.caption).foregroundStyle(.secondary)
-            if case .unavailable = engine.status.jit {
-                Button("Enable JIT with StikDebug") {
-                    if let url = JITManager.stikDebugEnableURL() { UIApplication.shared.open(url) }
+            Picker("JIT method", selection: $jit.method) {
+                ForEach(JITMethod.allCases) { method in
+                    Text(method.title).tag(method)
                 }
             }
-            if JITManager.builtInHelperUsable {
-                Text("Windoz's bundled helper can also be used on a normal sideload.")
-                    .font(.caption2).foregroundStyle(.secondary)
+            if jit.method == .automatic {
+                Text(jit.automaticDescription)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if jit.busy {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text(jit.status ?? "Working…")
+                }
+            } else if let error = jit.error {
+                Text(error).font(.caption).foregroundStyle(Theme.bad)
+            } else if let status = jit.status {
+                Text(status).font(.caption).foregroundStyle(Theme.ok)
+            } else {
+                Text(AppEnvironment.jitSituation)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("JIT setup") { jit.showSetup = true }
+            if case .unavailable = engine.status.jit, !jit.busy {
+                Button("Enable JIT") { jit.enable { _ in } }
             }
         }
     }
@@ -321,6 +329,7 @@ struct LicensesView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Windoz is licensed GPL-3.0-or-later. Its complete source is at https://github.com/MiliFRR/windoz, so any IPA you receive can be rebuilt from it.")
                 Text("Windoz uses the Wine (ARM64EC), FEX-Emu, DXMT and native-D3D12 engine forks. Their notices and the full licence texts are bundled in the app's licenses folder.")
+                Text("Windoz's JIT setup is ported from Madeira (GPL-3.0-or-later with its exception) and bundles StikJIT (MPL-2.0) and idevice (MIT). The full texts ship in the app's Legal folder with THIRD-PARTY-NOTICES.md.")
                 Text("Microsoft Windows runtime files are downloaded on-device from Microsoft's own servers; Windoz does not redistribute them.")
             }
             .font(.footnote)

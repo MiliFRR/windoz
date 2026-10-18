@@ -30,17 +30,15 @@ enum JITManager {
     static var flaggedWithoutDebugger: Bool { jit_check_debugged() && !liveDebuggerAttached }
 
     /// Whether the bundled helper extension may be used here. It has to be
-    /// genuinely present in the bundle: the extension is not part of this build
-    /// yet, and inside LiveContainer — where the guest app runs in LiveContainer's
-    /// own process — a nested extension can never be started anyway. The answer
+    /// genuinely present in the bundle (`WindozBuiltInJIT.helperFile`), and
+    /// inside LiveContainer — where the guest app runs in LiveContainer's own
+    /// process — a nested extension can never be started anyway. The answer
     /// therefore comes from the bundle, never from the build configuration.
     static var builtInHelperUsable: Bool {
         guard !AppEnvironment.isLiveContainer, !AppEnvironment.isSimulator else { return false }
-        guard let plugins = Bundle.main.builtInPlugInsURL,
-              let items = try? FileManager.default.contentsOfDirectory(
-                at: plugins, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        else { return false }
-        return !items.isEmpty
+        guard let helper = Bundle.main.builtInPlugInsURL?
+            .appendingPathComponent(WindozBuiltInJIT.helperFile) else { return false }
+        return FileManager.default.fileExists(atPath: helper.path)
     }
 
     /// The `stikdebug://enable-jit` URL for this process. StikDebug is given

@@ -7,6 +7,7 @@ import UIKit
 struct SetupWizardView: View {
     @EnvironmentObject private var engine: WindozEngine
     @ObservedObject private var installer = RuntimeInstaller.shared
+    @ObservedObject private var jit = JITCoordinator.shared
 
     @State private var step = 0
     @State private var runtimeMessage: String?
@@ -37,6 +38,7 @@ struct SetupWizardView: View {
             }
         }
         .navigationTitle("Setup")
+        .sheet(isPresented: $jit.showSetup) { JITSetupView() }
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)
@@ -62,9 +64,18 @@ struct SetupWizardView: View {
             }
             if !engine.status.jit.isReady {
                 Button {
-                    openStikDebug()
+                    jit.enable { _ in }
                 } label: {
-                    Label("Enable JIT with StikDebug", systemImage: "bolt.fill")
+                    Label(jit.resolvedMethod == .builtIn ? "Enable JIT (built-in helper)" : "Enable JIT with StikDebug",
+                          systemImage: "bolt.fill")
+                        .frame(maxWidth: .infinity).padding(.vertical, 12)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    jit.showSetup = true
+                } label: {
+                    Label("JIT setup", systemImage: "bolt.badge.clock")
                         .frame(maxWidth: .infinity).padding(.vertical, 12)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
@@ -167,11 +178,5 @@ struct SetupWizardView: View {
             }
         }
         .padding(.top, 8)
-    }
-
-    private func openStikDebug() {
-        if let url = JITManager.stikDebugEnableURL() {
-            UIApplication.shared.open(url)
-        }
     }
 }

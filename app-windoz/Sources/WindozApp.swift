@@ -27,6 +27,13 @@ struct WindozApp: App {
                 .environmentObject(library)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
+                .onOpenURL { url in
+                    // LocalDevVPN returns through windoz://… after connecting
+                    // (`scheme=windoz`); JIT setup re-checks the loopback so
+                    // the screen shows the tunnel's real state.
+                    if JITCoordinator.shared.handleOpenURL(url) { return }
+                    EngineLogStream.shared.append("[app] opened \(url.scheme ?? "?")://")
+                }
         }
     }
 }

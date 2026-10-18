@@ -1,9 +1,19 @@
 # windoz build inputs and outputs (never committed)
 work/
-build/
+# build/ is scratch — except the rppairing crate's sources, which are shipped
+# (its target/ output is not).
+build/*
+!build/rppairing-ios/
+build/rppairing-ios/target/
 *.ipa
 .DS_Store
 Thumbs.db
+
+# Generated at build time: the pairing static library and the crate licence
+# notices (build/rppairing-ios/build.sh writes both; CI builds them before the
+# app is generated/linked).
+app-windoz/libs/
+app-windoz/Resources/Legal/LICENSES-rppairing-crates.txt
 
 # The owner's local projects and experiments — not part of windoz
 CalculatorApp/

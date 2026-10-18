@@ -130,12 +130,12 @@ final class WindozEngine: ObservableObject {
             return "JIT is not available in the Simulator."
         }
         if JITManager.flaggedWithoutDebugger {
-            return "JIT was enabled, but the debugger is no longer attached — the engine's JIT requests need one to answer them. Enable JIT again and keep StikDebug attached."
+            return "JIT was enabled, but the debugger is no longer attached — the engine's JIT requests need one to answer them. Enable JIT again (Settings › JIT setup) and keep the debugger attached."
         }
         if AppEnvironment.isLiveContainer {
             return "JIT is off. Inside LiveContainer, turn on “Launch with JIT”, point its script at Documents/LiveContainer/windoz-jit.js, then attach StikDebug (Windoz's bundled helper cannot be used here)."
         }
-        return "JIT is off. Enable it from Setup with StikDebug, or with Windoz's bundled helper on a normal sideload."
+        return "JIT is off. Open Settings › JIT setup to attach StikDebug or Windoz's bundled helper, then try again."
     }
 
     static func freeStorageBytes() -> Int64 {
@@ -251,8 +251,15 @@ final class WindozEngine: ObservableObject {
         beginLaunchSteps()
 
         do {
-            // 1. JIT — re-checked on every launch, as required.
+            // 1. JIT — re-checked on every launch, as required. When the
+            //    built-in helper is the chosen method, one silent attempt is
+            //    made here: it attaches without leaving Windoz and without
+            //    user input. StikDebug cannot attach silently (it opens
+            //    another app), so its path stays a button in JIT setup.
             startStep(LaunchStepID.jit)
+            if !JITManager.probeEnabled(), await JITCoordinator.shared.autoEnableIfPossible() {
+                EngineLogStream.shared.append("[jit] attached before launch through the built-in helper.", level: .success)
+            }
             guard JITManager.probeEnabled() else {
                 throw EngineError.jitRequired(Self.jitExplanation())
             }

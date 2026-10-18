@@ -96,6 +96,12 @@ jobs:
       - name: Fetch VC++ x64 runtime DLLs
         run: ./scripts/fetch-vcruntime.sh
 
+      - name: Build on-device pairing library (rppairing)
+        # libwindoz_rppairing.a (iOS 27 on-device pairing), linked by the app.
+        # rustup + the aarch64-apple-ios target were installed above; the crate
+        # is pinned by build/rppairing-ios/Cargo.lock.
+        run: ./build/rppairing-ios/build.sh
+
       - name: Build runtime (Wine / FEX / DXMT / D3D12)
         run: ./scripts/build-runtime.sh
 
