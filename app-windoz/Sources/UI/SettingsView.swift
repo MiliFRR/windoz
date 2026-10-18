@@ -278,12 +278,26 @@ struct AdvancedSettingsView: View {
     }
 }
 
-/// The engine log, with an export action.
+/// The engine log, the on-disk copies, and the export actions.
 struct LogView: View {
     @ObservedObject private var log = EngineLogStream.shared
 
     var body: some View {
         List {
+            Section("On this device") {
+                let file = EngineLogFile.fileURL
+                if FileManager.default.fileExists(atPath: file.path) {
+                    Text(file.path).font(.caption2).foregroundStyle(.secondary)
+                    ShareLink(item: file) { Label("Share the Windoz log file", systemImage: "square.and.arrow.up") }
+                } else {
+                    Text("The on-disk log has not been opened; the in-memory log below still works.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let wine = EngineLogFile.engineLogURL, FileManager.default.fileExists(atPath: wine.path) {
+                    Text("Wine & guest output: \(wine.path)").font(.caption2).foregroundStyle(.secondary)
+                    ShareLink(item: wine) { Label("Share the Wine log", systemImage: "square.and.arrow.up") }
+                }
+            }
             ForEach(log.lines.reversed()) { line in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(line.text).font(.system(.caption, design: .monospaced))

@@ -11,6 +11,7 @@ struct WindozApp: App {
         // Documents/windoz-boot.log names the exact step it died on.
         BootTrace.mark("---- session start (app init) ----")
         AppContainer.bootstrap()
+        EngineLogFile.shared.start()
         DozDock.Offline.begin()
         DownloadManager.shared.restore()
         #if DEBUG

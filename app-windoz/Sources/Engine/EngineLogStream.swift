@@ -35,6 +35,9 @@ final class EngineLogStream: ObservableObject {
         let schedule = !flushScheduled
         flushScheduled = true
         lock.unlock()
+        // The on-disk sink sees every line as it arrives (the UI publish
+        // above is coalesced; the file must not be).
+        EngineLogFile.shared.append(line)
         if schedule {
             DispatchQueue.main.asyncAfter(deadline: .now() + flushInterval) { [weak self] in
                 self?.flush()

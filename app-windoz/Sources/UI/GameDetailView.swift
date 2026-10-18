@@ -45,7 +45,9 @@ struct GameDetailView: View {
                         launchModeRow(game)
                         achievementsSummary(game)
                         sessionNotes(game)
-                        if let message {
+                        if let failure = engine.lastFailedLaunch, failure.gameID == gameID {
+                            launchFailureCard(failure, game: game)
+                        } else if let message {
                             Text(message).font(.footnote).foregroundStyle(Theme.bad.opacity(0.95))
                         }
                         badges(game)
@@ -313,6 +315,76 @@ struct GameDetailView: View {
             let art = await SteamStore.fetchArtwork(appID: UInt32(appID))
             guard art.cover != nil || art.hero != nil else { return }
             library.updateArtwork(id: gameID, coverPath: art.cover?.path, heroPath: art.hero?.path)
+        }
+    }
+
+    /// The launch failure card: the real error, which step stopped, one
+    /// suggested repair, the step list and the log tail — plus Retry and a
+    /// share sheet. It stays until the next launch starts.
+    private func launchFailureCard(_ failure: LaunchFailure, game: InstalledGame) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "xmark.octagon.fill")
+                        .foregroundStyle(Theme.bad)
+                    Text("The last launch did not start")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                if let step = failure.failedStep {
+                    Text("Stopped at: \(step)")
+                        .font(.caption).foregroundStyle(.white.opacity(0.7))
+                }
+                Text(failure.message)
+                    .font(.caption).foregroundStyle(.white.opacity(0.85))
+                if let hint = failure.hint {
+                    Text("Suggested fix: \(hint)")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.6))
+                }
+                DisclosureGroup("The launch's steps and the last log lines") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(engine.launchSteps) { step in
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: step.symbol)
+                                    .font(.caption2)
+                                    .foregroundStyle(step.tint)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(step.title)
+                                        .font(.caption2).foregroundStyle(.white.opacity(0.9))
+                                    if !step.detail.isEmpty {
+                                        Text(step.detail)
+                                            .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                                    }
+                                }
+                            }
+                        }
+                        Divider().overlay(Color.white.opacity(0.2))
+                        ForEach(engine.log.recent(30)) { line in
+                            Text(line.text)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.caption)
+                .tint(.white.opacity(0.8))
+                HStack(spacing: 12) {
+                    Button {
+                        play(game)
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    ShareLink(item: LaunchReport.text(failure: failure,
+                                                      steps: engine.launchSteps,
+                                                      log: engine.log.recent(50))) {
+                        Label("Copy / share report", systemImage: "square.and.arrow.up")
+                    }
+                    .font(.footnote)
+                }
+            }
         }
     }
 

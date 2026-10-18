@@ -236,3 +236,27 @@ struct HeroArtView: View {
         }
     }
 }
+
+/// The launch checklist's colours, in the app's theme. The model
+/// (`LaunchStep`) stays SwiftUI-free; the mapping lives here.
+extension LaunchStep {
+    var symbol: String {
+        switch state {
+        case .pending: return "circle.dotted"
+        case .running: return "arrow.triangle.2.circlepath"
+        case .done: return "checkmark.circle.fill"
+        case .failed: return "xmark.octagon.fill"
+        case .skipped: return "minus.circle"
+        }
+    }
+
+    var tint: Color {
+        switch state {
+        case .pending: return .white.opacity(0.35)
+        case .running: return Theme.accent
+        case .done: return Theme.ok
+        case .failed: return Theme.bad
+        case .skipped: return .white.opacity(0.45)
+        }
+    }
+}

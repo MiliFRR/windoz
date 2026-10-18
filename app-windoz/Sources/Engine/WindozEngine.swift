@@ -35,6 +35,13 @@ final class WindozEngine: ObservableObject {
     /// the first session's registry state). After the first session, launching
     /// asks for a restart instead of pretending a second one works.
     @Published private(set) var sessionsThisRun = 0
+    /// The launch pipeline's steps, live: the session screen shows them while
+    /// a launch runs, and the game page shows them when one fails.
+    @Published private(set) var launchSteps: [LaunchStep] = []
+    /// The most recent launch that failed, for the game page's failure card:
+    /// the failing step, one suggested repair, the log tail behind Share.
+    /// Cleared when the next launch starts.
+    @Published private(set) var lastFailedLaunch: LaunchFailure?
 
     let log = EngineLogStream.shared
     private(set) var prefix: PrefixManager
@@ -68,6 +75,9 @@ final class WindozEngine: ObservableObject {
     /// a black screen that never ends.
     private var launchWatchdog: Timer?
     private var lastStageLine = ""
+    /// Set by Cancel while a launch has not reached a guest process yet; the
+    /// surface wait notices it and unwinds through `cancelStartingSession`.
+    private var launchCancelRequested = false
     /// The frame pacing choice for the running session; re-applied once the
     /// guest's first frame is seen (the engine's own call is the one the
     /// pinned front end uses — see `applyFPSLock`).
@@ -228,104 +238,288 @@ final class WindozEngine: ObservableObject {
     /// environment, then the session screen (which registers the presenting
     /// Metal layer), then the engine core and the guest process thread. The
     /// session ends when the guest process does — `pollSession` watches for it.
+    ///
+    /// Every stage is a visible step (`launchSteps`): the session screen and
+    /// the failure card on the game page read the same list, so "where did the
+    /// launch stop" is never a guess.
     func launch(_ game: InstalledGame) async throws {
         guard !phase.isActive, sessionGame == nil else { throw EngineError.sessionAlreadyRunning }
         guard sessionsThisRun == 0 else { throw EngineError.sessionAlreadyRanThisRun }
 
-        // 1. JIT — re-checked on every launch, as required.
-        guard JITManager.probeEnabled() else {
-            throw EngineError.jitRequired(Self.jitExplanation())
-        }
+        launchCancelRequested = false
+        lastFailedLaunch = nil
+        beginLaunchSteps()
 
-        // 2. Prefix.
-        try prefix.createIfNeeded()
-
-        // 3. Executable. Only a direct launch runs the game's own program —
-        //    the Steam modes run Valve's client, which finds the game itself.
-        if game.settings.launchMode == .direct {
-            guard FileManager.default.fileExists(atPath: game.executablePath) else {
-                throw EngineError.executableMissing(game.executablePath)
+        do {
+            // 1. JIT — re-checked on every launch, as required.
+            startStep(LaunchStepID.jit)
+            guard JITManager.probeEnabled() else {
+                throw EngineError.jitRequired(Self.jitExplanation())
             }
-        }
+            finishStep(LaunchStepID.jit, detail: Self.jitStepDetail())
 
-        // 4. Storage. Wine writes while it boots (registry, sockets, temp
-        //    files); a container that refuses writes would otherwise show up
-        //    as a black screen that never ends. This turns that case into a
-        //    named refusal *before* the session screen opens. The write test
-        //    is the same probe the storage negotiation ran, so the prefix's
-        //    own location is judged exactly as it was chosen.
-        try verifySessionStorage()
+            // 2. Prefix.
+            startStep(LaunchStepID.prefix)
+            try prefix.createIfNeeded()
+            finishStep(LaunchStepID.prefix, detail: prefix.url.path)
 
-        // 5. Launch mode + guest environment for the engine's launcher.
-        //    Doz Dock's contract (host, client files, Steam's own install
-        //    record, the one-use sign-in transfer) is validated here — a
-        //    missing piece must be a named refusal, never a black screen.
-        try prepareLaunchMode(for: game)
-        applyLaunchEnvironment(for: game)
-        log.append("[launch] preflight passed for \(game.title)")
-
-        // 6. Hand the game to the session screen. It registers the presenting
-        //    CAMetalLayer and calls sessionSurfaceReady(); the launch waits for
-        //    that below. The ordering is the engine's requirement: its display
-        //    shim resolves the layer once per process, and the guest's first
-        //    swapchain must find it already registered.
-        resetSessionSurface()
-        sessionFrames = 0
-        sessionDetail = "Preparing the session…"
-        lastStageLine = "Preparing the session…"
-        launchFPSLimit = game.settings.fpsLimit
-        fpsReapplied = false
-        noFrameWarned = false
-        currentGameID = game.id
-        sessionStart = Date()
-        sessionBaselineFrames = madeira_get_present_count()
-        GameLibrary.shared.markPlayed(id: game.id)
-        phase = .starting
-        sessionGame = game
-        log.append("[session] session screen requested.")
-        startLaunchWatchdog()
-
-        let surfaceWaitStart = Date()
-        let deadline = Date().addingTimeInterval(30)
-        while !sessionSurfaceIsReady {
-            if Task.isCancelled {
-                cancelStartingSession()
-                throw EngineError.sessionCancelled
+            // 3. Executable. Only a direct launch runs the game's own program —
+            //    the Steam modes run Valve's client, which finds the game itself.
+            startStep(LaunchStepID.exe)
+            if game.settings.launchMode == .direct {
+                guard FileManager.default.fileExists(atPath: game.executablePath) else {
+                    throw EngineError.executableMissing(game.executablePath)
+                }
+                finishStep(LaunchStepID.exe, detail: game.execName)
+            } else {
+                skipStep(LaunchStepID.exe, why: "\(game.settings.launchMode.title) starts the game through Steam itself.")
             }
-            if Date() >= deadline {
-                cancelStartingSession()
-                throw EngineError.sessionSurfaceTimeout
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        log.append("[session] presentation surface ready after "
-                   + String(format: "%.1f", Date().timeIntervalSince(surfaceWaitStart)) + " s.")
 
-        // 7. Start the engine core and the guest process on the session queue:
-        //    those calls block (one of them waits up to 60 s for the service
-        //    process), so they stay off the main thread — and off the core
-        //    queue, which a blocking diagnostics stop can hold.
-        let settings = game.settings
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            sessionQueue.async {
-                do {
-                    try self.startGuestProcess(settings: settings)
-                    DispatchQueue.main.async {
-                        self.sessionsThisRun += 1
-                        self.sawWineProcess = false
-                        self.phase = .running
-                        self.sessionDetail = "Starting the game…"
-                        self.lastStageLine = "Starting the game…"
-                        self.startSessionPolling()
-                        self.log.append("[session] guest process started.")
+            // 4. Storage. Wine writes while it boots (registry, sockets, temp
+            //    files); a container that refuses writes would otherwise show up
+            //    as a black screen that never ends. This turns that case into a
+            //    named refusal *before* the session screen opens. The write test
+            //    is the same probe the storage negotiation ran, so the prefix's
+            //    own location is judged exactly as it was chosen.
+            startStep(LaunchStepID.storage)
+            try verifySessionStorage()
+            finishStep(LaunchStepID.storage, detail: "The prefix and its drive_c accept writes.")
+
+            // 5. Launch mode + guest environment for the engine's launcher.
+            //    Doz Dock's contract (host, client files, Steam's own install
+            //    record, the one-use sign-in transfer) is validated here — a
+            //    missing piece must be a named refusal, never a black screen.
+            startStep(LaunchStepID.mode)
+            try prepareLaunchMode(for: game)
+            applyLaunchEnvironment(for: game)
+            finishStep(LaunchStepID.mode, detail: modeStepDetail(game))
+            log.append("[launch] preflight passed for \(game.title)")
+
+            // 6. Hand the game to the session screen. It registers the presenting
+            //    CAMetalLayer and calls sessionSurfaceReady(); the launch waits for
+            //    that below. The ordering is the engine's requirement: its display
+            //    shim resolves the layer once per process, and the guest's first
+            //    swapchain must find it already registered.
+            startStep(LaunchStepID.surface)
+            resetSessionSurface()
+            sessionFrames = 0
+            sessionDetail = "Preparing the session…"
+            lastStageLine = "Preparing the session…"
+            launchFPSLimit = game.settings.fpsLimit
+            fpsReapplied = false
+            noFrameWarned = false
+            currentGameID = game.id
+            sessionStart = Date()
+            sessionBaselineFrames = madeira_get_present_count()
+            GameLibrary.shared.markPlayed(id: game.id)
+            phase = .starting
+            sessionGame = game
+            log.append("[session] session screen requested.")
+            startLaunchWatchdog()
+
+            let surfaceWaitStart = Date()
+            let deadline = Date().addingTimeInterval(30)
+            while !sessionSurfaceIsReady {
+                if Task.isCancelled || launchCancelRequested {
+                    cancelStartingSession()
+                    throw EngineError.sessionCancelled
+                }
+                if Date() >= deadline {
+                    cancelStartingSession()
+                    throw EngineError.sessionSurfaceTimeout
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            finishStep(LaunchStepID.surface,
+                       detail: "Up in " + String(format: "%.1f", Date().timeIntervalSince(surfaceWaitStart)) + " s.")
+            log.append("[session] presentation surface ready after "
+                       + String(format: "%.1f", Date().timeIntervalSince(surfaceWaitStart)) + " s.")
+
+            // 7. Start the engine core and the guest process on the session queue:
+            //    those calls block (one of them waits up to 60 s for the service
+            //    process), so they stay off the main thread — and off the core
+            //    queue, which a blocking diagnostics stop can hold.
+            startStep(LaunchStepID.service)
+            let settings = game.settings
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                sessionQueue.async {
+                    do {
+                        try self.startGuestProcess(settings: settings)
+                        DispatchQueue.main.async {
+                            guard self.phase == .starting, self.sessionGame != nil else {
+                                // The launch was cancelled while the guest was
+                                // being started. A process may exist anyway —
+                                // never leave it untracked.
+                                if wine_process_is_running() != 0 || wineserver_is_running() != 0 {
+                                    self.sessionsThisRun += 1
+                                    self.phase = .running
+                                    self.detachSession(reason: "The launch was cancelled while the game process was starting.")
+                                }
+                                return
+                            }
+                            self.sessionsThisRun += 1
+                            self.sawWineProcess = false
+                            self.phase = .running
+                            self.sessionDetail = "Starting the game…"
+                            self.lastStageLine = "Starting the game…"
+                            self.startSessionPolling()
+                            self.log.append("[session] guest process started.")
+                            self.finishStep(LaunchStepID.service)
+                            self.finishStep(LaunchStepID.guest, detail: "The game's process thread is running.")
+                            self.startStep(LaunchStepID.frame, detail: "Waiting for the first frame…")
+                        }
+                        continuation.resume()
+                    } catch {
+                        DispatchQueue.main.async { self.failStartingSession(error) }
+                        continuation.resume(throwing: error)
                     }
-                    continuation.resume()
-                } catch {
-                    DispatchQueue.main.async { self.failStartingSession(error) }
-                    continuation.resume(throwing: error)
                 }
             }
+        } catch {
+            // The only place a failure becomes an entry: preflight steps and
+            // the guest startup both unwind here, exactly once.
+            if !Self.isCancellation(error) {
+                recordLaunchFailure(game: game, error: error)
+            }
+            throw error
         }
+    }
+
+    // MARK: - Launch steps
+
+    /// Seconds since the launch began, for the start screen's elapsed clock.
+    var sessionElapsed: TimeInterval {
+        sessionStart.map { Date().timeIntervalSince($0) } ?? 0
+    }
+
+    private func beginLaunchSteps() {
+        launchSteps = LaunchStep.pipeline()
+    }
+
+    private func updateStep(_ id: String, _ change: @escaping (inout LaunchStep) -> Void) {
+        let apply = {
+            if let index = self.launchSteps.firstIndex(where: { $0.id == id }) {
+                change(&self.launchSteps[index])
+            }
+        }
+        if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
+    }
+
+    private func startStep(_ id: String, detail: String = "") {
+        updateStep(id) { step in
+            step.state = .running
+            step.detail = detail
+            step.startedAt = Date()
+        }
+    }
+
+    private func finishStep(_ id: String, detail: String? = nil) {
+        updateStep(id) { step in
+            step.state = .done
+            if let detail { step.detail = detail }
+            step.finishedAt = Date()
+        }
+    }
+
+    private func skipStep(_ id: String, why: String) {
+        updateStep(id) { step in
+            step.state = .skipped(why)
+            step.detail = why
+            step.finishedAt = Date()
+        }
+    }
+
+    private func failStep(_ id: String, message: String) {
+        updateStep(id) { step in
+            step.state = .failed(message)
+            step.detail = message
+            step.finishedAt = Date()
+        }
+    }
+
+    /// Record a failed launch for the game page: mark whichever step was
+    /// running, keep the message, and attach a suggested repair. Called from
+    /// the launch task's only catch, so a launch is never double-recorded.
+    private func recordLaunchFailure(game: InstalledGame, error: Error) {
+        let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
+        let runningIndex = launchSteps.lastIndex { step in
+            if case .running = step.state { return true }
+            return false
+        }
+        if let index = runningIndex {
+            failStep(launchSteps[index].id, message: message)
+        }
+        lastFailedLaunch = LaunchFailure(
+            gameID: game.id,
+            gameTitle: game.title,
+            message: message,
+            hint: Self.launchHint(for: error),
+            failedStep: runningIndex.map { launchSteps[$0].title })
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        guard let engineError = error as? EngineError else { return false }
+        if case .sessionCancelled = engineError { return true }
+        return false
+    }
+
+    /// One suggested repair per failure — short, concrete, never "an unknown
+    /// error occurred". Nil when there is nothing honest to suggest.
+    private static func launchHint(for error: Error) -> String? {
+        guard let engineError = error as? EngineError else {
+            return "Try again. If it repeats, share this report — it carries the launch steps and the log tail."
+        }
+        switch engineError {
+        case .jitRequired:
+            return "Settings → JIT switches JIT back on; it turns off every time the app restarts."
+        case .executableMissing:
+            return "The recorded program path no longer exists. Re-import the game, or correct the path in this game's settings."
+        case .storageRefused:
+            return "This device refused the writes a session needs. Restarting LiveContainer — or reinstalling Windoz inside it — is the known repair."
+        case .prefixMissing, .prefixCreateFailed:
+            return "Advanced settings has Create / Repair for the Windows environment."
+        case .sessionSurfaceTimeout:
+            return "Retry once. If the screen still never comes up, share this report — the steps above say how far the launch got."
+        case .wineserverStartFailed, .wineserverNotReady, .fexInitFailed, .wineProcessStartFailed:
+            return "Retry once. If it repeats, close Windoz from the app switcher (Wine allows one session per app run), open it again and retry; share this report if it still fails."
+        case .sessionAlreadyRanThisRun, .sessionAlreadyRunning, .sessionStalled:
+            return "Close Windoz from the app switcher (swipe it away) and open it again."
+        case .dockNotReady, .steamDesktopNotReady:
+            return "The message above names the exact missing piece; this game's settings can switch the launch mode."
+        case .sessionCancelled:
+            return nil
+        }
+    }
+
+    private static func jitStepDetail() -> String {
+        if AppEnvironment.isSimulator { return "Simulator build" }
+        if AppEnvironment.isLiveContainer { return "Debugger attached — LiveContainer launched this app with JIT" }
+        return "Debugger attached"
+    }
+
+    private func modeStepDetail(_ game: InstalledGame) -> String {
+        switch game.settings.launchMode {
+        case .direct: return "Direct start: \(game.execName)"
+        case .dock: return "Doz Dock — Valve's client starts the game; sign-in transfer ready"
+        case .steamDesktop: return "Steam desktop — sign in inside the session"
+        }
+    }
+
+    /// Cancel a launch that has not reached the guest process yet (the start
+    /// screen's Cancel button). Once a guest exists, cancelling becomes
+    /// "leave the session, honestly" — Wine cannot un-start a process here.
+    func cancelLaunch() {
+        guard phase.isActive || sessionGame != nil else { return }
+        if wine_process_is_running() != 0 {
+            requestQuit()
+            detachSession(reason: "The launch was cancelled from the start screen after the game process had started — Windoz asked it to close.")
+            return
+        }
+        launchCancelRequested = true
+        if phase == .starting {
+            cancelStartingSession()
+        }
+        log.append("[session] launch cancelled from the start screen.")
     }
 
     /// Runs on the session queue. Brings the Wine service process and the CPU
@@ -354,6 +548,7 @@ final class WindozEngine: ObservableObject {
         setStage("Starting the CPU translator…")
         guard fex_initialize() else { throw EngineError.fexInitFailed }
         setStage("Launching the game…")
+        startStep(LaunchStepID.guest, detail: "Starting the game's process thread…")
         // The engine reports the exit of the process Windoz hands it through
         // wine_launched_process_did_exit → wine_crash_exit_status; forget the
         // previous session's report first.
@@ -368,6 +563,11 @@ final class WindozEngine: ObservableObject {
         log.append("[session] \(text)")
         DispatchQueue.main.async {
             if self.phase == .starting { self.sessionDetail = text }
+            // The start checklist's live line follows the same stage text.
+            if let index = self.launchSteps.firstIndex(where: { $0.id == LaunchStepID.service }),
+               self.launchSteps[index].state == .running {
+                self.launchSteps[index].detail = text
+            }
         }
     }
 
@@ -511,6 +711,7 @@ final class WindozEngine: ObservableObject {
         currentGameID = nil
         sessionStart = nil
         log.append("[session] \(message)", level: .error)
+        EngineLogFile.shared.appendEngineLogTail(reason: "the launch failed")
     }
 
     /// The session screen went away mid-launch and the launch was cancelled.
@@ -741,6 +942,12 @@ final class WindozEngine: ObservableObject {
             fpsReapplied = true
             applyFPSLock(launchFPSLimit)
         }
+        if sessionFrames > 0,
+           let index = launchSteps.firstIndex(where: { $0.id == LaunchStepID.frame }),
+           launchSteps[index].state == .running {
+            finishStep(LaunchStepID.frame,
+                       detail: "First frame after " + String(format: "%.1f", sessionElapsed) + " s.")
+        }
         if wine_process_is_running() != 0 {
             sawWineProcess = true
             sessionDetail = sessionFrames > 0
@@ -800,6 +1007,7 @@ final class WindozEngine: ObservableObject {
         lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: crashed,
                                             status: status, seconds: seconds, message: message)
         log.append("[session] \(message)")
+        EngineLogFile.shared.appendEngineLogTail(reason: "the session ended")
         sessionGame = nil
         sessionDetail = ""
         currentGameID = nil

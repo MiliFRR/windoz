@@ -173,6 +173,11 @@ final class SessionSurfaceView: UIView {
         hud.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         hud.title = WindozEngine.shared.sessionGame?.title ?? "Session"
         hud.line = { WindozEngine.shared.sessionHUDLine }
+        hud.launchState = {
+            let engine = WindozEngine.shared
+            guard case .starting = engine.phase, !engine.launchSteps.isEmpty else { return nil }
+            return LaunchHUDState(steps: engine.launchSteps, elapsed: engine.sessionElapsed)
+        }
     }
 
     private func teardown() {
@@ -318,9 +323,19 @@ final class SessionSurfaceView: UIView {
 final class SessionHUDView: UIView {
     var title: String? { didSet { titleLabel.text = title } }
     var line: (() -> String)?
+    /// The live launch checklist: non-nil only while a launch is in flight
+    /// (the engine's `.starting` phase). The panel hides itself the moment
+    /// the game is running.
+    var launchState: (() -> LaunchHUDState?)?
 
     private let titleLabel = UILabel()
     private let statusLabel = HUDInsetLabel()
+    private let launchPanel = UIStackView()
+    private let launchHeader = UILabel()
+    private let launchElapsed = UILabel()
+    private let launchCancel = UIButton(type: .system)
+    private let launchRows = UIStackView()
+    private var stepRows: [(id: String, glyph: UILabel, detail: UILabel)] = []
     private var keyButtons: [HUDKeyButton] = []
     private var timer: Timer?
 
@@ -406,6 +421,50 @@ final class SessionHUDView: UIView {
             keyRow.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
             keyRow.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
         ])
+        setUpLaunchPanel(textStack: textStack)
+    }
+
+    /// The start checklist. Built once; its rows are rebuilt only when a new
+    /// launch's step list replaces the old one (see `refreshLaunchPanel`).
+    private func setUpLaunchPanel(textStack: UIStackView) {
+        launchPanel.axis = .vertical
+        launchPanel.spacing = 6
+        launchPanel.isLayoutMarginsRelativeArrangement = true
+        launchPanel.layoutMargins = UIEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        launchPanel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        launchPanel.layer.cornerRadius = 14
+        launchPanel.layer.borderWidth = 1
+        launchPanel.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+        launchPanel.translatesAutoresizingMaskIntoConstraints = false
+        launchPanel.isHidden = true
+        addSubview(launchPanel)
+
+        launchHeader.font = .systemFont(ofSize: 12, weight: .semibold)
+        launchHeader.textColor = UIColor.white.withAlphaComponent(0.9)
+        launchHeader.text = "Starting the game"
+        launchElapsed.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        launchElapsed.textColor = UIColor.white.withAlphaComponent(0.65)
+        launchCancel.setTitle("Cancel", for: .normal)
+        launchCancel.titleLabel?.font = .systemFont(ofSize: 12, weight: .semibold)
+        launchCancel.addTarget(self, action: #selector(cancelLaunch), for: .touchUpInside)
+
+        let headerRow = UIStackView(arrangedSubviews: [launchHeader, launchElapsed, UIView(), launchCancel])
+        headerRow.axis = .horizontal
+        headerRow.spacing = 8
+        launchRows.axis = .vertical
+        launchRows.spacing = 4
+        launchPanel.addArrangedSubview(headerRow)
+        launchPanel.addArrangedSubview(launchRows)
+
+        NSLayoutConstraint.activate([
+            launchPanel.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            launchPanel.topAnchor.constraint(equalTo: textStack.bottomAnchor, constant: 10),
+            launchPanel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+        ])
+    }
+
+    @objc private func cancelLaunch() {
+        WindozEngine.shared.cancelLaunch()
     }
 
     private func keyButton(_ label: String, _ vk: Int32) -> HUDKeyButton {
@@ -438,11 +497,90 @@ final class SessionHUDView: UIView {
     private func refresh() {
         let text = line?() ?? ""
         if statusLabel.text != text { statusLabel.text = text }
+        refreshLaunchPanel()
+    }
+
+    /// Live checklist while a launch is in flight; hidden otherwise. Runs on
+    /// the HUD's own 0.5 s timer — cheap, and only while the panel is up is
+    /// anything rebuilt.
+    private func refreshLaunchPanel() {
+        guard let state = launchState?() else {
+            if !launchPanel.isHidden { launchPanel.isHidden = true }
+            return
+        }
+        rebuildStepRowsIfNeeded(state.steps)
+        launchElapsed.text = "\(Int(state.elapsed)) s"
+        for (index, step) in state.steps.enumerated() where index < stepRows.count {
+            let row = stepRows[index]
+            row.glyph.text = Self.glyph(for: step.state)
+            row.glyph.textColor = Self.color(for: step.state)
+            if row.detail.text != step.detail { row.detail.text = step.detail }
+        }
+        launchPanel.isHidden = false
+    }
+
+    private func rebuildStepRowsIfNeeded(_ steps: [LaunchStep]) {
+        if stepRows.map({ $0.id }) == steps.map({ $0.id }) { return }
+        launchRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        stepRows = steps.map { step in
+            let glyph = UILabel()
+            glyph.font = .systemFont(ofSize: 12, weight: .semibold)
+            glyph.textAlignment = .center
+            glyph.widthAnchor.constraint(equalToConstant: 16).isActive = true
+            glyph.text = Self.glyph(for: step.state)
+            glyph.textColor = Self.color(for: step.state)
+
+            let title = UILabel()
+            title.font = .systemFont(ofSize: 11, weight: .semibold)
+            title.textColor = UIColor.white.withAlphaComponent(0.9)
+            title.text = step.title
+            let detail = UILabel()
+            detail.font = .systemFont(ofSize: 10)
+            detail.textColor = UIColor.white.withAlphaComponent(0.55)
+            detail.numberOfLines = 2
+
+            let text = UIStackView(arrangedSubviews: [title, detail])
+            text.axis = .vertical
+            text.spacing = 1
+            let row = UIStackView(arrangedSubviews: [glyph, text])
+            row.axis = .horizontal
+            row.spacing = 6
+            row.alignment = .top
+            launchRows.addArrangedSubview(row)
+            return (step.id, glyph, detail)
+        }
+    }
+
+    private static func glyph(for state: LaunchStep.State) -> String {
+        switch state {
+        case .pending: return "○"
+        case .running: return "●"
+        case .done: return "✓"
+        case .failed: return "✕"
+        case .skipped: return "–"
+        }
+    }
+
+    private static func color(for state: LaunchStep.State) -> UIColor {
+        switch state {
+        case .pending: return UIColor.white.withAlphaComponent(0.3)
+        case .running: return UIColor(red: 0.42, green: 0.65, blue: 1.0, alpha: 1)
+        case .done: return UIColor(red: 0.35, green: 0.85, blue: 0.5, alpha: 1)
+        case .failed: return UIColor(red: 1.0, green: 0.42, blue: 0.38, alpha: 1)
+        case .skipped: return UIColor.white.withAlphaComponent(0.4)
+        }
     }
 
     private func releaseHeldKeys() {
         keyButtons.forEach { $0.releaseIfDown() }
     }
+}
+
+/// What the start screen's checklist needs from the engine, read through a
+/// closure on each HUD tick (never stored: the engine is the source of truth).
+struct LaunchHUDState {
+    var steps: [LaunchStep]
+    var elapsed: TimeInterval
 }
 
 /// A status chip: label + inner padding, dark translucent capsule.
