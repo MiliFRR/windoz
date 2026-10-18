@@ -4,6 +4,8 @@ import SwiftUI
 struct ConsoleRootView: View {
     @EnvironmentObject private var engine: WindozEngine
     @EnvironmentObject private var library: GameLibrary
+    @ObservedObject private var downloads = DownloadManager.shared
+    @ObservedObject private var registry = StoreRegistry.shared
 
     private enum Tab: Hashable { case home, library, downloads, settings }
 
@@ -36,6 +38,7 @@ struct ConsoleRootView: View {
             let _ = BootTrace.once("tab: building downloads")
             NavigationStack { DownloadsView() }
                 .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }
+                .badge(activeDownloadCount)
                 .tag(Tab.downloads)
 
             let _ = BootTrace.once("tab: building settings")
@@ -78,6 +81,18 @@ struct ConsoleRootView: View {
                 .environmentObject(engine)
                 .interactiveDismissDisabled(true)
         }
+    }
+
+    /// The live count behind the Downloads tab badge: items still moving in
+    /// the Windoz queue, Steam installs (queued or active), and Epic's one.
+    private var activeDownloadCount: Int {
+        var count = downloads.items.filter { !$0.state.isTerminal }.count
+        for download in registry.steam.downloads.values {
+            if case .failed = download.state { continue }
+            count += 1
+        }
+        if registry.epic.download != nil { count += 1 }
+        return count
     }
 
     private var jitBanner: some View {
