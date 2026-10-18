@@ -1,0 +1,82 @@
+name: Release keeper IPA
+
+# Every green build of main becomes a downloadable release, automatically:
+# the newest installable IPA always has a fixed URL, and keeping a build no
+# longer needs a hand-run download. The tag is the app version in
+# app-windoz/project.yml (e.g. v0.6.0); a fresh build for the same version
+# refreshes that release's asset instead of stacking duplicates.
+
+on:
+  workflow_run:
+    workflows: ["Build windoz IPA"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Publish the IPA as a release
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the built commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Read the app version from project.yml
+        id: ver
+        run: |
+          set -e
+          ver="$(grep -m1 MARKETING_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
+          build="$(grep -m1 CURRENT_PROJECT_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
+          if [ -z "$ver" ] || [ -z "$build" ]; then
+            echo "::error::could not read MARKETING_VERSION / CURRENT_PROJECT_VERSION from app-windoz/project.yml"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Releasing Windoz $ver (build $build)"
+
+      - name: Download the IPA artifact from the build run
+        uses: actions/download-artifact@v4
+        with:
+          name: windoz-unsigned-ipa
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: release-ipa
+
+      - name: Name the asset after its version
+        run: |
+          set -e
+          ls -l release-ipa
+          mv release-ipa/windoz.ipa "release-ipa/windoz-${{ steps.ver.outputs.version }}-build${{ steps.ver.outputs.build }}.ipa"
+
+      - name: Create or refresh the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.ver.outputs.version }}
+          TITLE: Windoz ${{ steps.ver.outputs.version }} (build ${{ steps.ver.outputs.build }})
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -e
+          notes="$(cat <<EOF
+          Unsigned iPhone IPA for **Windoz ${{ steps.ver.outputs.version }}** (build ${{ steps.ver.outputs.build }}).
+
+          - Built automatically from \`$SHA\` by the [build-ipa run]($RUN_URL).
+          - The IPA passed the layout / version / subsystem-marker check (\`scripts/check-ipa.py\`) inside that run.
+          - Unsigned: sign it with your own tooling before installing.
+          - This is exactly the artifact the run produced — nothing is rebuilt here.
+          EOF
+          )"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes "$notes"
+            gh release upload "$TAG" release-ipa/*.ipa --clobber
+          else
+            gh release create "$TAG" release-ipa/*.ipa --title "$TITLE" --notes "$notes" --target "$SHA"
+          fi
+          gh release view "$TAG" --json url --jq .url

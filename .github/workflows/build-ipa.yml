@@ -111,6 +111,17 @@ jobs:
       - name: Assemble IPA
         run: ./scripts/assemble-ipa.sh
 
+      - name: Verify the IPA (layout, version, subsystem markers)
+        # Automates the keeper check: version from project.yml must match the
+        # IPA and be compiled into the executable; the JIT helper and every
+        # subsystem string must be inside. A red check here means the IPA is
+        # not worth keeping, so the run fails before anything is published.
+        run: |
+          set -e
+          VER="$(grep -m1 MARKETING_VERSION app-windoz/project.yml | sed 's/.*"\(.*\)".*/\1/')"
+          echo "project.yml version: $VER"
+          python3 scripts/check-ipa.py windoz.ipa --require "$VER"
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
