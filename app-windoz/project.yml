@@ -91,6 +91,10 @@ targets:
       - path: Resources/Legal
         type: folder
         buildPhase: resources
+      # Windoz's runtime catalog (Phase 5): the components Settings › Windows
+      # runtimes shows, with the vendors' official URLs and the pinned hashes.
+      - path: Resources/runtime-manifest.json
+        buildPhase: resources
     info:
       path: Windoz/Info.plist
       properties:

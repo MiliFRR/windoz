@@ -212,21 +212,17 @@ struct AdvancedSettingsView: View {
     }
 
     private var runtimeSection: some View {
-        Section("Windows runtimes") {
-            ForEach(RuntimeComponent.allCases) { component in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(component.title).font(.subheadline)
-                        Text(component.detail).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    runtimeBadge(component)
-                }
-                if !(installer.states[component]?.isSatisfied ?? false), component.downloadURL != nil {
-                    Button("Download official installer") { _ = installer.download(component) }
-                        .font(.footnote)
-                }
+        Section {
+            if let problem = installer.manifestProblem {
+                Text(problem).font(.caption).foregroundStyle(Theme.bad)
             }
+            ForEach(installer.specs) { spec in
+                RuntimeRowView(spec: spec)
+            }
+        } header: {
+            Text("Windows runtimes")
+        } footer: {
+            Text("Windoz downloads only from the vendor's own links and verifies what it gets: a SHA-256 pinned in the build, or the first download's hash frozen in the prefix. A changed file is refused, never installed silently.")
         }
     }
 
@@ -267,19 +263,6 @@ struct AdvancedSettingsView: View {
     }
 
     // MARK: - Helpers
-
-    private func runtimeBadge(_ component: RuntimeComponent) -> some View {
-        Group {
-            switch installer.states[component] ?? .unknown {
-            case .present: Text("Installed").foregroundStyle(Theme.ok)
-            case .missing: Text("Missing").foregroundStyle(Theme.warn)
-            case .staged, .downloading: Text("Staged").foregroundStyle(Theme.accent)
-            case .failed: Text("Problem").foregroundStyle(Theme.bad)
-            case .unknown: Text("—").foregroundStyle(.secondary)
-            }
-        }
-        .font(.caption)
-    }
 
     private func perform(_ action: () throws -> Void) {
         do { try action() } catch { coreMessage = error.localizedDescription }

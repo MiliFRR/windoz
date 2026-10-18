@@ -119,40 +119,17 @@ struct SetupWizardView: View {
 
     private var runtimeStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ForEach(RuntimeComponent.allCases) { component in
+            if let problem = installer.manifestProblem {
+                Text(problem).font(.caption).foregroundStyle(Theme.bad)
+            }
+            ForEach(installer.specs) { spec in
                 GlassCard {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(component.title).font(.headline).foregroundStyle(.white)
-                            Spacer()
-                            runtimeBadge(component)
-                        }
-                        Text(component.detail)
-                            .font(.caption).foregroundStyle(.white.opacity(0.55))
-                        if !(installer.states[component]?.isSatisfied ?? false) {
-                            Button("Download the official installer") {
-                                runtimeMessage = installer.download(component)
-                            }
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
-                        }
-                    }
+                    RuntimeRowView(spec: spec)
                 }
             }
             if let runtimeMessage {
                 Text(runtimeMessage).font(.caption).foregroundStyle(.white.opacity(0.7))
             }
-        }
-    }
-
-    private func runtimeBadge(_ component: RuntimeComponent) -> some View {
-        switch installer.states[component] ?? .unknown {
-        case .present: return Text("Installed").font(.caption).foregroundStyle(Theme.ok)
-        case .missing: return Text("Missing").font(.caption).foregroundStyle(Theme.warn)
-        case .staged: return Text("Staged").font(.caption).foregroundStyle(Theme.accent)
-        case .downloading: return Text("Downloading").font(.caption).foregroundStyle(Theme.accent)
-        case .failed: return Text("Problem").font(.caption).foregroundStyle(Theme.bad)
-        case .unknown: return Text("—").font(.caption).foregroundStyle(.white.opacity(0.5))
         }
     }
 

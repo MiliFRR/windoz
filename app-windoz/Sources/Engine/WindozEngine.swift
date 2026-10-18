@@ -270,6 +270,16 @@ final class WindozEngine: ObservableObject {
             try prefix.createIfNeeded()
             finishStep(LaunchStepID.prefix, detail: prefix.url.path)
 
+            // 2b. Windows runtimes — information, never a gate: what the prefix
+            //     has, what is missing and where it is installed. Offline is
+            //     allowed and the game starts anyway (Phase 5).
+            startStep(LaunchStepID.runtimes)
+            if let runtimeNotice = await RuntimeInstaller.shared.launchNotice(prefix: prefix) {
+                finishStep(LaunchStepID.runtimes, detail: runtimeNotice)
+            } else {
+                finishStep(LaunchStepID.runtimes, detail: "The runtimes Windoz tracks are in place or provided by the engine.")
+            }
+
             // 3. Executable. Only a direct launch runs the game's own program —
             //    the Steam modes run Valve's client, which finds the game itself.
             startStep(LaunchStepID.exe)

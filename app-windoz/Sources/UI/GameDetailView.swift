@@ -16,6 +16,8 @@ struct GameDetailView: View {
     @State private var tab: DetailTab = .overview
     @State private var showSettings = false
     @StateObject private var steamInfo = SteamGameInfoModel()
+    @ObservedObject private var runtimeInstaller = RuntimeInstaller.shared
+    @State private var redistItems: [GameRedistItem] = []
 
     private enum DetailTab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -49,6 +51,9 @@ struct GameDetailView: View {
                             launchFailureCard(failure, game: game)
                         } else if let message {
                             Text(message).font(.footnote).foregroundStyle(Theme.bad.opacity(0.95))
+                        }
+                        if !redistItems.isEmpty {
+                            redistCard(game)
                         }
                         badges(game)
                         Picker("Section", selection: $tab) {
@@ -84,6 +89,7 @@ struct GameDetailView: View {
         .onAppear {
             engine.refreshStatus()
             backfillArtworkIfNeeded()
+            scanRedists()
         }
         .task(id: tab) {
             guard let appID = steamAppID else { return }
@@ -318,11 +324,81 @@ struct GameDetailView: View {
         }
     }
 
+    // MARK: - One-time installers (_CommonRedist)
+
+    /// Rescans the game's folder and Steam's shared redist folder. Read-only;
+    /// runs when the page appears or the user taps the refresh button.
+    private func scanRedists() {
+        guard let game else { return }
+        runtimeInstaller.refresh(prefix: engine.prefix)
+        redistItems = GameRedistScanner.scan(game: game, prefix: engine.prefix)
+    }
+
+    /// The game's own one-time installers (its _CommonRedist folders, Steam's
+    /// shared folder). Running one hands the vendor's installer to a real
+    /// Windows session — one session per launch of Windoz, and the card says so.
+    private func redistCard(_ game: InstalledGame) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "shippingbox.fill")
+                        .foregroundStyle(Theme.accent)
+                    Text("One-time installers")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Button { scanRedists() } label: { Image(systemName: "arrow.clockwise") }
+                        .font(.caption)
+                        .accessibilityLabel("Rescan the game's installers")
+                }
+                Text("This game ships the installers below. Windoz can run each in a Windows session; Windoz allows one session per launch of the app, so after it ends quit and reopen Windoz to play.")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.6))
+                ForEach(redistItems) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.name)
+                                .font(.caption).foregroundStyle(.white.opacity(0.9))
+                            Text("\(item.machine.label) — \(item.relativePath)")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                        }
+                        Spacer(minLength: 8)
+                        redistAction(item, game: game)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func redistAction(_ item: GameRedistItem, game: InstalledGame) -> some View {
+        let key = item.ledgerKey(for: game)
+        if item.machine.cannotRun {
+            Text("32-bit — cannot run here").font(.caption2).foregroundStyle(Theme.warn)
+        } else if case .installing = runtimeInstaller.states[key] ?? .unknown {
+            Text("Session running").font(.caption2).foregroundStyle(Theme.accent)
+        } else {
+            VStack(alignment: .trailing, spacing: 2) {
+                Button("Run") {
+                    runtimeInstaller.startInstallSession(file: URL(fileURLWithPath: item.hostPath),
+                                                         argsText: item.suggestedArguments,
+                                                         title: item.name,
+                                                         ledgerKey: key,
+                                                         using: engine)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                if let when = runtimeInstaller.recordedRedistRun(key: key) {
+                    Text("ran \(when.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+    }
+
     /// The launch failure card: the real error, which step stopped, one
     /// suggested repair, the step list and the log tail — plus Retry and a
     /// share sheet. It stays until the next launch starts.
-    private func launchFailureCard(_ failure: LaunchFailure, game: InstalledGame) -> some View {
-        GlassCard {
+    private func launchFailureCard(_ failure: LaunchFailure, game: InstalledGame) -> some View {        GlassCard {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "xmark.octagon.fill")

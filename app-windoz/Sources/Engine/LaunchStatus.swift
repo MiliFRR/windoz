@@ -9,6 +9,7 @@ import Foundation
 enum LaunchStepID {
     static let jit = "jit"
     static let prefix = "prefix"
+    static let runtimes = "runtimes"
     static let exe = "exe"
     static let storage = "storage"
     static let mode = "mode"
@@ -45,6 +46,7 @@ extension LaunchStep {
         [
             LaunchStep(id: LaunchStepID.jit, title: "JIT is enabled"),
             LaunchStep(id: LaunchStepID.prefix, title: "Windows environment is ready"),
+            LaunchStep(id: LaunchStepID.runtimes, title: "Windows runtimes checked"),
             LaunchStep(id: LaunchStepID.exe, title: "Game program found"),
             LaunchStep(id: LaunchStepID.storage, title: "Storage accepts writes"),
             LaunchStep(id: LaunchStepID.mode, title: "Launch mode prepared"),
