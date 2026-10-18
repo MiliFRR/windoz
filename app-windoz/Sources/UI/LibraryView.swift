@@ -74,7 +74,7 @@ struct LibraryView: View {
         } else {
             LazyVGrid(columns: columns, spacing: 18) {
                 ForEach(library.games) { game in
-                    Button { selection = game } label: { tile(game) }
+                    Button { open(game) } label: { tile(game) }
                         .buttonStyle(.plain)
                         .contextMenu {
                             Button(role: .destructive) {
@@ -128,6 +128,13 @@ struct LibraryView: View {
     }
 
     // MARK: - Import
+
+    /// One push per tap: a second tap while the first push is animating could
+    /// stack another game page on top of it.
+    private func open(_ game: InstalledGame) {
+        guard selection == nil else { return }
+        selection = game
+    }
 
     private func handleImport(_ result: Result<[URL], Error>) {
         switch result {

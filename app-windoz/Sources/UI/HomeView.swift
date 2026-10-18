@@ -63,7 +63,7 @@ struct HomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(Array(heroGames.enumerated()), id: \.element.id) { index, game in
-                        Button { selection = game } label: {
+                        Button { open(game) } label: {
                             VStack(alignment: .leading, spacing: 10) {
                                 CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: 20)
                                     .frame(width: 280, height: 380)
@@ -113,7 +113,7 @@ struct HomeView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
                 ForEach(games) { game in
-                    Button { selection = game } label: {
+                    Button { open(game) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: 12)
                                 .frame(width: 132, height: 176)
@@ -171,13 +171,27 @@ struct HomeView: View {
     // MARK: - Controller
 
     private func handle(_ button: ConsoleButton) {
+        // While a game page is pushed, the shelf underneath must stay quiet:
+        // a stray Select used to re-point the navigation at a different game.
+        // Back is the way out, mirroring the nav bar.
+        if selection != nil {
+            if case .back = button { selection = nil }
+            return
+        }
         switch button {
         case .left: focus.move(-1)
         case .right: focus.move(1)
         case .select:
             let games = heroGames
-            if games.indices.contains(focus.index) { selection = games[focus.index] }
+            if games.indices.contains(focus.index) { open(games[focus.index]) }
         default: break
         }
+    }
+
+    /// One push per tap: a second tap while the first push is animating could
+    /// stack another game page on top of it.
+    private func open(_ game: InstalledGame) {
+        guard selection == nil else { return }
+        selection = game
     }
 }
