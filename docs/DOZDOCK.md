@@ -125,7 +125,7 @@ client in a virtual desktop for manual sign-in and library browsing.
 |---|---|---|
 | Download engine (queue/resume/verify) | `Sources/Downloads/DownloadManager.swift` | working, in daily use |
 | Steam provider (sign-in, library, depots) | `Sources/Stores/SteamStore.swift` + `Sources/Steam/` | real: sign-in + owned library verified on device; depot downloads device-verification pending |
-| Epic provider | `Sources/Stores/EpicStore.swift` + `Sources/Epic/` | real: both sign-ins verified on device; chunked downloads in 0.4.0 (device verification pending) |
+| Epic provider | `Sources/Stores/EpicStore.swift` + `Sources/Epic/` | real: both sign-ins verified on device; chunked downloads in 0.4.0, instant-failure root cause fixed in 0.5.0 (chunk URLs had carried the manifest's signed query string), off-device tests in `tests/host` — device verification pending |
 | The dock itself | `Sources/Steam/Content/DozDock.swift` + `Sources/Engine/WindozEngine.swift` | ported in 0.4.0: modes, handoff, report, offline (device verification pending) |
 | Steam client components | `Sources/Steam/Content/SteamClientRuntime.swift` | pinned Valve packages, checked "prepared" state |
 | Store screens | `Sources/UI/` + Library → Stores | Steam and Epic open real sheets (install/progress); the rest show the stub state |

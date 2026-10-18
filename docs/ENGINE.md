@@ -53,7 +53,7 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 | Game **session host** (Metal presentation + input + the guest process) | **ported in 0.3.4 — device verification pending** | `WindozEngine.launch` → `wine_process_start`; the presenting layer and overlay live in `Sources/UI/GameSessionView.swift` |
 | Per-game **launch modes** (Direct / Doz Dock / Steam desktop) | **ported in 0.4.0 — device verification pending** | `WindozEngine.prepareLaunchMode` + `Sources/Steam/Content/DozDock.swift` |
 | **Storage negotiation** (the root that accepts writes) | **working (0.4.0)** | `AppContainer.probeWrites` / `storageRoot`; the prefix follows it (`PrefixManager`) |
-| Native store clients | **Steam: sign-in + owned library device-verified, depot downloads device-verification pending; Epic: both sign-ins device-verified, chunked downloads in 0.4.0 (device verification pending)** | `SteamStore`, `EpicStore`, `EpicDownloader` |
+| Native store clients | **Steam: sign-in + owned library device-verified, depot downloads device-verification pending; Epic: both sign-ins device-verified, chunked downloads in 0.4.0 — the instant-failure root cause (chunk URLs had carried the manifest's signed query string) fixed in 0.5.0, off-device tests in `tests/host` (device verification pending)** | `SteamStore`, `EpicStore`, `EpicDownloader` |
 
 `WindozEngine.launch` performs a **real** preflight — JIT re-checked, the
 prefix created at the negotiated storage root, the storage gate proving that

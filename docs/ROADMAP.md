@@ -71,20 +71,23 @@ Credentials live in the Keychain (`Keychain.swift`); tokens are never logged.
 | Requirement | State |
 |---|---|
 | Detect LiveContainer (`LC_HOME_PATH`) | ✅ |
-| Route JIT through StikDebug (no bundled helper) | ✅ |
+| Route JIT through StikDebug where the helper cannot run (LiveContainer) | ✅ |
+| Bundled JIT helper (`WindozJITHelper.appex`) attaching by PID | 🟡 built in 0.5.0; standalone-sideload verification pending |
 | Read the bundle id from `Bundle.main` (re-sign safe) | ✅ |
 | Re-sign-safe background-task identifier | 🟡 derived from the live bundle id; when it is not among the app's permitted identifiers the task is not registered and a log line says why |
 | Increased-memory entitlement | ⛔ not grantable via LiveContainer; reported as unavailable |
 
 ## Next, in order
 
-1. **Device-verify 0.4.0** — the storage negotiation (the environment must
-   relocate and prove writes), a game's install + Play, the launch modes
-   (Direct, Doz Dock with the Steam components installed, Steam desktop), an
-   Epic download end to end, and the art/achievements fit-and-finish. The
-   owner's run is what confirms them.
-2. **Epic updates / repair / resume** against the live manifest, and
-   install-tag selection.
+1. **Device-verify 0.5.0** — the six-phase round: idle heat, one page per
+   tap, the launch pipeline's live steps, the bundled JIT helper (standalone
+   sideload — it cannot run under LiveContainer), the runtime installers on a
+   fresh prefix, and an Epic download end to end (the instant-failure root
+   cause is fixed). The storage negotiation, a game's install + Play and the
+   launch modes from 0.4.0 stay on the same list. The owner's run is what
+   confirms them.
+2. **Epic updates / repair** against the live manifest, and
+   install-tag selection (resume landed in 0.5.0).
 3. **Launcher-in-Wine pipeline** for GOG, Rockstar and EA (the Steam dock is
    ported; the wrapper machinery for the other stores is not).
 4. **Widget extension** for the Live Activity / Dynamic Island rendering.
