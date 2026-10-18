@@ -177,6 +177,7 @@ struct AdvancedSettingsView: View {
         ZStack {
             ConsoleBackground()
             List {
+                quitSection
                 prefixSection
                 runtimeSection
                 downloadSection
@@ -201,6 +202,25 @@ struct AdvancedSettingsView: View {
     }
 
     // MARK: - Sections
+
+    private var quitSection: some View {
+        Section {
+            Button("Quit Windoz now", role: .destructive) {
+                AppContainer.quitNow(reason: "quitting from Settings → Advanced")
+            }
+            if engine.engineWedged {
+                Text("The engine is stuck from the last launch attempt, so this app run cannot start a game again. Quitting is the repair.")
+                    .font(.caption).foregroundStyle(Theme.warn)
+            } else if engine.sessionsThisRun > 0 {
+                Text("A game session already ran in this app run; Wine hosts one per process.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+            }
+        } header: {
+            Text("App run")
+        } footer: {
+            Text("Wine hosts one game session per app process, and a stalled start-up holds the engine's locks. Quitting closes Windoz on purpose so it can be opened fresh — nothing is lost: downloads resume and the library stays.")
+        }
+    }
 
     private var prefixSection: some View {
         Section("Windows environment") {

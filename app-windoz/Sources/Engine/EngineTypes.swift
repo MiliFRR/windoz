@@ -501,6 +501,7 @@ enum EngineError: LocalizedError {
     case sessionCancelled
     case storageRefused(String)
     case sessionStalled(String)
+    case engineWedged(String)
     case dockNotReady(String)
     case steamDesktopNotReady(String)
 
@@ -517,7 +518,7 @@ enum EngineError: LocalizedError {
         case .sessionSurfaceTimeout:
             return "The game screen never came up: the presentation layer was not ready within 30 seconds. The engine log names what happened."
         case .sessionAlreadyRanThisRun:
-            return "Wine can start only one game per app run here — its service process keeps the first session's state. Close Windoz from the app switcher (swipe it away) and open it again to play another game."
+            return "Wine can start only one game per app run here — its service process keeps the first session's state. Use Quit Windoz (Settings → Advanced) to end this app run cleanly, then open Windoz again to play another game."
         case .wineProcessStartFailed:
             return "The engine could not start the game's process thread. The log has the exact failing step."
         case .sessionCancelled:
@@ -525,7 +526,9 @@ enum EngineError: LocalizedError {
         case .storageRefused(let detail):
             return "This device refuses the writes a session needs (\(detail)). Free space: \(AppContainer.freeSpaceDescription()). The launch log's write-audit lines name every location that was probed and the exact error. If every location refused, reinstalling the app inside LiveContainer (fresh container) is the known repair."
         case .sessionStalled(let stage):
-            return "The session stalled at “\(stage)” and was stopped. The engine log has the last steps the engine reported."
+            return "The launch stalled at “\(stage)” and the engine is marked spent for this app run. The engine log has the last steps the engine reported; Quit Windoz is the way out."
+        case .engineWedged(let why):
+            return "The engine is still stuck from the last launch attempt (\(why)) and cannot try again in this app run. Quit Windoz and open the app again."
         case .dockNotReady(let why):
             return "Doz Dock cannot start this launch yet: \(why)"
         case .steamDesktopNotReady(let why):

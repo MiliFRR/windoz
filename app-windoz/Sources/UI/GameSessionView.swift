@@ -482,6 +482,10 @@ final class SessionHUDView: UIView {
                      image: UIImage(systemName: "rectangle.portrait.and.arrow.right")) { _ in
                 WindozEngine.shared.detachSession(reason: "You left the session screen.")
             },
+            UIAction(title: "Quit Windoz (restart the app)", image: UIImage(systemName: "power"),
+                     attributes: .destructive) { _ in
+                AppContainer.quitNow(reason: "quitting from the session menu")
+            },
         ])
     }
 

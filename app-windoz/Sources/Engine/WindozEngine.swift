@@ -42,6 +42,11 @@ final class WindozEngine: ObservableObject {
     /// the failing step, one suggested repair, the log tail behind Share.
     /// Cleared when the next launch starts.
     @Published private(set) var lastFailedLaunch: LaunchFailure?
+    /// Set when a launch stalls inside the engine's start-up and the app run
+    /// is spent: the stuck thread holds the engine's init lock, so another
+    /// attempt in this process would wedge the same way. Only a new process
+    /// clears it — the failure card and Settings both offer Quit Windoz.
+    @Published private(set) var engineWedged = false
 
     let log = EngineLogStream.shared
     private(set) var prefix: PrefixManager
@@ -78,6 +83,16 @@ final class WindozEngine: ObservableObject {
     /// Set by Cancel while a launch has not reached a guest process yet; the
     /// surface wait notices it and unwinds through `cancelStartingSession`.
     private var launchCancelRequested = false
+    /// Why the run is spent, in the failing stage's own words.
+    private var wedgeReason = ""
+    /// Set once a launch is abandoned (stalled, cancelled or failed): a stuck
+    /// `fex_initialize` that answers late must not quietly start the guest
+    /// behind the app's back.
+    private var sessionAbandoned = false
+    /// Exactly-one-resume handles for the guest-start continuation, so the
+    /// stall budget and Cancel can each unwind it safely.
+    private var guestStartGuard: ContinuationGuard?
+    private var guestStartContinuation: CheckedContinuation<Void, Error>?
     /// The frame pacing choice for the running session; re-applied once the
     /// guest's first frame is seen (the engine's own call is the one the
     /// pinned front end uses — see `applyFPSLock`).
@@ -243,11 +258,15 @@ final class WindozEngine: ObservableObject {
     /// the failure card on the game page read the same list, so "where did the
     /// launch stop" is never a guess.
     func launch(_ game: InstalledGame) async throws {
+        guard !engineWedged else {
+            throw EngineError.engineWedged(wedgeReason.isEmpty ? "the previous launch stalled" : wedgeReason)
+        }
         guard !phase.isActive, sessionGame == nil else { throw EngineError.sessionAlreadyRunning }
         guard sessionsThisRun == 0 else { throw EngineError.sessionAlreadyRanThisRun }
 
         launchCancelRequested = false
-        lastFailedLaunch = nil
+        sessionAbandoned = false
+        onMain { self.lastFailedLaunch = nil }
         beginLaunchSteps()
 
         do {
@@ -319,20 +338,25 @@ final class WindozEngine: ObservableObject {
             //    swapchain must find it already registered.
             startStep(LaunchStepID.surface)
             resetSessionSurface()
-            sessionFrames = 0
-            sessionDetail = "Preparing the session…"
-            lastStageLine = "Preparing the session…"
-            launchFPSLimit = game.settings.fpsLimit
-            fpsReapplied = false
-            noFrameWarned = false
-            currentGameID = game.id
-            sessionStart = Date()
-            sessionBaselineFrames = madeira_get_present_count()
-            GameLibrary.shared.markPlayed(id: game.id)
-            phase = .starting
-            sessionGame = game
-            log.append("[session] session screen requested.")
-            startLaunchWatchdog()
+            // Publish on the main thread: the launch body runs off the main
+            // actor, and off-main `@Published` writes made SwiftUI updates
+            // unreliable — which read as a launch screen that never moves.
+            onMain {
+                self.sessionFrames = 0
+                self.sessionDetail = "Preparing the session…"
+                self.lastStageLine = "Preparing the session…"
+                self.launchFPSLimit = game.settings.fpsLimit
+                self.fpsReapplied = false
+                self.noFrameWarned = false
+                self.currentGameID = game.id
+                self.sessionStart = Date()
+                self.sessionBaselineFrames = madeira_get_present_count()
+                GameLibrary.shared.markPlayed(id: game.id)
+                self.phase = .starting
+                self.sessionGame = game
+                self.log.append("[session] session screen requested.")
+                self.startLaunchWatchdog()
+            }
 
             let surfaceWaitStart = Date()
             let deadline = Date().addingTimeInterval(30)
@@ -358,16 +382,24 @@ final class WindozEngine: ObservableObject {
             //    queue, which a blocking diagnostics stop can hold.
             startStep(LaunchStepID.service)
             let settings = game.settings
+            let guardBox = ContinuationGuard()
+            guestStartGuard = guardBox
+            defer {
+                guestStartGuard = nil
+                guestStartContinuation = nil
+            }
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guestStartContinuation = continuation
                 sessionQueue.async {
                     do {
                         try self.startGuestProcess(settings: settings)
                         DispatchQueue.main.async {
                             guard self.phase == .starting, self.sessionGame != nil else {
-                                // The launch was cancelled while the guest was
-                                // being started. A process may exist anyway —
-                                // never leave it untracked.
-                                if wine_process_is_running() != 0 || wineserver_is_running() != 0 {
+                                // The launch was cancelled or declared stalled
+                                // while the guest was being started. A real
+                                // process may exist anyway — never leave it
+                                // untracked.
+                                if wine_process_is_running() != 0 {
                                     self.sessionsThisRun += 1
                                     self.phase = .running
                                     self.detachSession(reason: "The launch was cancelled while the game process was starting.")
@@ -385,10 +417,26 @@ final class WindozEngine: ObservableObject {
                             self.finishStep(LaunchStepID.guest, detail: "The game's process thread is running.")
                             self.startStep(LaunchStepID.frame, detail: "Waiting for the first frame…")
                         }
-                        continuation.resume()
+                        if guardBox.claim() { continuation.resume() }
                     } catch {
-                        DispatchQueue.main.async { self.failStartingSession(error) }
-                        continuation.resume(throwing: error)
+                        if guardBox.claim() {
+                            DispatchQueue.main.async { self.failStartingSession(error) }
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+                // The guest-start stall budget. The known wedge: the CPU
+                // translator waits on the debugger's JIT script with the
+                // engine's init lock held, so this stage never returns. The
+                // resume below is what turns "frozen on the launch screen
+                // forever" into a named failure with the Quit path.
+                DispatchQueue.global().asyncAfter(deadline: .now() + Self.guestStartBudget) { [weak self] in
+                    guard let self, guardBox.claim() else { return }
+                    DispatchQueue.main.async {
+                        let reason = self.lastStageLine.isEmpty ? "the start-up stage never finished" : self.lastStageLine
+                        self.wedgeAndFail(reason)
+                        self.failStartingSession(EngineError.sessionStalled(reason))
+                        continuation.resume(throwing: EngineError.sessionStalled(reason))
                     }
                 }
             }
@@ -410,7 +458,15 @@ final class WindozEngine: ObservableObject {
     }
 
     private func beginLaunchSteps() {
-        launchSteps = LaunchStep.pipeline()
+        onMain { self.launchSteps = LaunchStep.pipeline() }
+    }
+
+    /// Publish engine state on the main thread. The launch body runs off the
+    /// main actor (it awaits the engine's blocking calls), so every write the
+    /// UI reads comes through here — off-main `@Published` writes made SwiftUI
+    /// updates unreliable, which read as a frozen launch screen.
+    private func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
 
     private func updateStep(_ id: String, _ change: @escaping (inout LaunchStep) -> Void) {
@@ -459,19 +515,21 @@ final class WindozEngine: ObservableObject {
     /// the launch task's only catch, so a launch is never double-recorded.
     private func recordLaunchFailure(game: InstalledGame, error: Error) {
         let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
-        let runningIndex = launchSteps.lastIndex { step in
-            if case .running = step.state { return true }
-            return false
+        onMain {
+            let runningIndex = self.launchSteps.lastIndex { step in
+                if case .running = step.state { return true }
+                return false
+            }
+            if let index = runningIndex {
+                self.failStep(self.launchSteps[index].id, message: message)
+            }
+            self.lastFailedLaunch = LaunchFailure(
+                gameID: game.id,
+                gameTitle: game.title,
+                message: message,
+                hint: Self.launchHint(for: error),
+                failedStep: runningIndex.map { self.launchSteps[$0].title })
         }
-        if let index = runningIndex {
-            failStep(launchSteps[index].id, message: message)
-        }
-        lastFailedLaunch = LaunchFailure(
-            gameID: game.id,
-            gameTitle: game.title,
-            message: message,
-            hint: Self.launchHint(for: error),
-            failedStep: runningIndex.map { launchSteps[$0].title })
     }
 
     private static func isCancellation(_ error: Error) -> Bool {
@@ -498,9 +556,13 @@ final class WindozEngine: ObservableObject {
         case .sessionSurfaceTimeout:
             return "Retry once. If the screen still never comes up, share this report — the steps above say how far the launch got."
         case .wineserverStartFailed, .wineserverNotReady, .fexInitFailed, .wineProcessStartFailed:
-            return "Retry once. If it repeats, close Windoz from the app switcher (Wine allows one session per app run), open it again and retry; share this report if it still fails."
-        case .sessionAlreadyRanThisRun, .sessionAlreadyRunning, .sessionStalled:
-            return "Close Windoz from the app switcher (swipe it away) and open it again."
+            return "Retry once. If it repeats, use Quit Windoz (Settings → Advanced), open the app again and retry; share this report if it still fails."
+        case .sessionAlreadyRanThisRun, .sessionAlreadyRunning:
+            return "Quit Windoz (Settings → Advanced, or the button above) and open it again."
+        case .engineWedged:
+            return "Quit Windoz — the button above — then open the app again."
+        case .sessionStalled:
+            return "Quit Windoz and open the app again, then retry. If the stall was at the CPU translator, the debugger's JIT script did not answer the engine — re-attach JIT (Settings → JIT setup) before retrying."
         case .dockNotReady, .steamDesktopNotReady:
             return "The message above names the exact missing piece; this game's settings can switch the launch mode."
         case .sessionCancelled:
@@ -545,6 +607,7 @@ final class WindozEngine: ObservableObject {
     /// step updates the session screen's line so the visible stage is always
     /// the real one.
     private func startGuestProcess(settings: GameSettings) throws {
+        guard !sessionAbandoned else { throw EngineError.sessionCancelled }
         // Frame pacing before the process exists — the pinned front end
         // applies its own choice at exactly this point (Madeira
         // `Library.applyEnvironment`).
@@ -564,6 +627,9 @@ final class WindozEngine: ObservableObject {
         }
         setStage("Starting the CPU translator…")
         guard fex_initialize() else { throw EngineError.fexInitFailed }
+        // An abandoned attempt (stall budget or Cancel) must not quietly
+        // start the guest when the translator finally answers.
+        guard !sessionAbandoned else { throw EngineError.sessionCancelled }
         setStage("Launching the game…")
         startStep(LaunchStepID.guest, detail: "Starting the game's process thread…")
         // The engine reports the exit of the process Windoz hands it through
@@ -700,7 +766,9 @@ final class WindozEngine: ObservableObject {
         let age = Date().timeIntervalSince(start)
         switch phase {
         case .starting where age > 180:
-            failStartingSession(EngineError.sessionStalled(lastStageLine.isEmpty ? "starting" : lastStageLine))
+            let reason = lastStageLine.isEmpty ? "the start-up stage never finished" : lastStageLine
+            wedgeAndFail(reason)
+            failStartingSession(EngineError.sessionStalled(reason))
         case .running where sessionFrames == 0 && age > 300 && !noFrameWarned:
             // Say it on the session screen and in the log; the owner decides.
             // The warning is the last thing this timer has to offer: the
@@ -716,9 +784,40 @@ final class WindozEngine: ObservableObject {
         }
     }
 
+    /// The launch has made no progress for the full budget and its thread is
+    /// stuck inside the engine (the CPU translator waiting for the debugger's
+    /// JIT script is the known case). The engine's start-up lock is held by
+    /// that thread, so this app run cannot host another attempt: mark it
+    /// spent — every later attempt gets the named refusal instead of wedging
+    /// again — and stop what can be stopped.
+    private func wedgeAndFail(_ reason: String) {
+        engineWedged = true
+        wedgeReason = reason
+        sessionsThisRun += 1
+        sessionAbandoned = true
+        log.append("[session] the launch is wedged at “\(reason)” — this app run cannot try again; Quit Windoz is the repair.", level: .error)
+        teardownWedgedEngine()
+    }
+
+    /// Stop the pieces of a wedged start-up that can be stopped. The guest
+    /// process never started (that is what wedged means here), so only the
+    /// service process needs to go — it is the part that burns CPU with
+    /// nothing to do. `fex_shutdown` returns immediately while the stuck
+    /// thread holds the translator's init lock (checked against the pinned
+    /// fork's FEXBridge.mm), so this cannot hang the engine queue.
+    private func teardownWedgedEngine() {
+        guard wine_process_is_running() == 0 else { return }
+        queue.async {
+            self.log.append("[session] stopping the Windows service after the stalled launch", level: .warning)
+            fex_shutdown()
+            wineserver_stop()
+        }
+    }
+
     /// The launch failed before the guest process started: take the session
     /// screen down and leave the message where the game page shows it.
     private func failStartingSession(_ error: Error) {
+        sessionAbandoned = true
         sessionTimer?.invalidate(); sessionTimer = nil
         launchWatchdog?.invalidate(); launchWatchdog = nil
         let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
@@ -736,23 +835,39 @@ final class WindozEngine: ObservableObject {
     /// app restart ends it) — so the session is detached, honestly, rather
     /// than abandoned silently.
     private func cancelStartingSession() {
-        sessionTimer?.invalidate(); sessionTimer = nil
-        launchWatchdog?.invalidate(); launchWatchdog = nil
-        if wineserver_is_running() != 0 && wine_process_is_running() != 0 {
-            detachSession(reason: "The launch screen closed after the game process had already started.")
-        } else {
-            phase = .idle
-            sessionGame = nil
-            sessionDetail = ""
-            currentGameID = nil
-            sessionStart = nil
-            log.append("[session] launch cancelled before the process started.")
+        sessionAbandoned = true
+        // Unwind the guest-start continuation if that is the stuck piece —
+        // without this, Cancel during a wedged start-up would leave the Play
+        // button busy forever.
+        if let guardBox = guestStartGuard, guardBox.claim() {
+            guestStartContinuation?.resume(throwing: EngineError.sessionCancelled)
+        }
+        onMain {
+            self.sessionTimer?.invalidate(); self.sessionTimer = nil
+            self.launchWatchdog?.invalidate(); self.launchWatchdog = nil
+            if wineserver_is_running() != 0 && wine_process_is_running() != 0 {
+                self.detachSession(reason: "The launch screen closed after the game process had already started.")
+            } else {
+                if self.phase.isActive || self.sessionGame != nil {
+                    self.log.append("[session] launch cancelled before the process started.")
+                }
+                self.phase = .idle
+                self.sessionGame = nil
+                self.sessionDetail = ""
+                self.currentGameID = nil
+                self.sessionStart = nil
+            }
         }
     }
 
     /// The engine's virtual monitor default before `MADEIRA_SCREEN_W/H` is
     /// applied, and the base a game's render scale is expressed against.
     static let guestBaseResolution = (width: 1280, height: 720)
+
+    /// How long the guest-start stage may run without finishing before the
+    /// run is declared spent. The service wait inside it is itself bounded at
+    /// 60 s; the translator's start-up is the only unbounded step.
+    private static let guestStartBudget: TimeInterval = 160
 
     /// Write the environment the engine's launcher (`wine_process_start`) reads.
     ///
@@ -1095,5 +1210,21 @@ final class WindozEngine: ObservableObject {
             wineserver_stop()
         }
         log.append("Engine core stopped.")
+    }
+}
+
+/// Exactly-one resume for the guest-start continuation: the session queue's
+/// work block, the stall budget and Cancel can each finish first, and a
+/// second resume of the same continuation would trap (the same pattern as the
+/// Steam session's logon guard).
+private final class ContinuationGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

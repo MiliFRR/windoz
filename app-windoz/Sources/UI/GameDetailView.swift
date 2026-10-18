@@ -127,7 +127,7 @@ struct GameDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             PrimaryButton(title: "PLAY", systemImage: "play.fill",
                           busy: launching,
-                          enabled: engine.status.jit.isReady) {
+                          enabled: engine.status.jit.isReady && !engine.engineWedged) {
                 play(game)
             }
             if !engine.status.jit.isReady {
@@ -136,9 +136,22 @@ struct GameDetailView: View {
                      : "JIT is off, so games cannot run yet. Enable it in Setup or Settings.")
                     .font(.caption).foregroundStyle(Theme.warn)
             }
-            if engine.sessionsThisRun > 0, engine.sessionGame == nil {
-                Text("One game per app run: Wine keeps the first session's state. Close Windoz from the app switcher and open it again to start another game.")
+            if engine.engineWedged {
+                Text("The engine is stuck from the last launch, so this app run cannot start a game again. Quit Windoz and open it again.")
                     .font(.caption).foregroundStyle(Theme.warn.opacity(0.9))
+            } else if engine.sessionsThisRun > 0, engine.sessionGame == nil {
+                Text("One game per app run: Wine keeps the first session's state. Quit Windoz and open it again to start another game.")
+                    .font(.caption).foregroundStyle(Theme.warn.opacity(0.9))
+            }
+            if (engine.engineWedged || (engine.sessionsThisRun > 0 && engine.sessionGame == nil)) && !launching {
+                Button {
+                    AppContainer.quitNow(reason: "the run is spent — quitting from the game page")
+                } label: {
+                    Label("Quit Windoz", systemImage: "power")
+                        .font(.footnote.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .tint(Theme.warn)
             }
             if AppEnvironment.isLiveContainer, engine.status.memoryFootprintBytes > 0 {
                 Text("This LiveContainer process is using \(ByteCountFormatter.string(fromByteCount: engine.status.memoryFootprintBytes, countStyle: .memory)).")
@@ -453,12 +466,23 @@ struct GameDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
+                    .disabled(engine.engineWedged)
                     ShareLink(item: LaunchReport.text(failure: failure,
                                                       steps: engine.launchSteps,
                                                       log: engine.log.recent(50))) {
                         Label("Copy / share report", systemImage: "square.and.arrow.up")
                     }
                     .font(.footnote)
+                }
+                if engine.engineWedged || engine.sessionsThisRun > 0 {
+                    Button {
+                        AppContainer.quitNow(reason: "quitting from the failed-launch card")
+                    } label: {
+                        Label("Quit Windoz", systemImage: "power")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.warn)
                 }
             }
         }

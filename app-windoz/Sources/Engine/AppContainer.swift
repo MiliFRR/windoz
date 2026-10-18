@@ -338,6 +338,18 @@ enum AppContainer {
         auditWritableLocations()
     }
 
+    /// End this app run on purpose. Two reasons it exists: Wine hosts one
+    /// game session per app process, and a launch that stalls inside the
+    /// engine's start-up locks cannot be retried in the same process. Under
+    /// LiveContainer there is no easy "force quit" for a guest, so the app
+    /// offers the honest one — the owner is always the one pressing it. The
+    /// log is flushed first, then the process goes.
+    static func quitNow(reason: String) {
+        EngineLogStream.shared.append("[host] quitting on purpose: \(reason)", level: .warning)
+        EngineLogFile.shared.appendEngineLogTail(reason: "the owner quit the app")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { exit(0) }
+    }
+
     /// Locations beyond the six folders that accepted a real write, in probe
     /// order (home root, app-group containers, temp dirs). Empty when the
     /// device refused everything.
