@@ -100,6 +100,23 @@ works. Build 0.5.0 answers every item — the six phases are summarised in its
 own ledger entry in **Known issues** below, with the phase-by-phase detail in
 `docs/CHANGES.md`.
 
+**Build 0.5.0 shipped — `build-ipa.yml` run #17 (`main` = `7894113`,
+success, 2026-10-18):** the full chain built every stage green and the
+unsigned IPA is kept at `windoz-ipa-keep/windoz-16.ipa` (78,207,077 bytes,
+SHA-256
+`F3323EC9D4D06AD42F4BE7E31AD1F4B299EE6EA2E0E9663ECC409BE970FD71D4`).
+Verified inside: `Info.plist` `0.5.0` build 5, `MinimumOSVersion` 26.0, the
+`windoz://` scheme; `PlugIns/WindozJITHelper.appex` embedded (bundle id
+`com.milifrr.windoz.jit-helper`, version 0.5.0 build 5); and the app binary
+carries `ChunksV4`/`ChunksV5`, `windoz-dock`/`launch.auth`, `[epic-dl]`,
+`windoz-runtimes`, `windoz_rppairing`, `localdevvpn`/`stikdebug`. The first
+full build (#16, `62339df`) caught one real release bug the typecheck gate
+cannot see — `build/rppairing-ios/build.sh` had been committed without its
+executable bit and the step died at "Permission denied" before running a
+line — fixed in `7894113` (mode 100755); #17 built it and every stage after
+it. 0.5.0 is **device-verification pending**: the checklist above is the
+run that confirms it.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)

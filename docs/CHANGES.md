@@ -161,8 +161,14 @@ which stage and why.
   test had mistaken for a bad hash) and #31 is green.
 - `tests/host/epic-protocol-tests.swift` runs on every `ci-*` push from now
   on (the typecheck workflow gained the `tests/host/**` path trigger).
-- The full unsigned-IPA pipeline ran on `main` after the merge; the run
-  number, artifact and keeper file are recorded in the README ledger.
+- The full unsigned-IPA pipeline ran on `main` after the merge: run #17
+  (`7894113`) built every stage green; the artifact, the keeper
+  (`windoz-ipa-keep/windoz-16.ipa`, SHA-256 in the README ledger) and the
+  markers verified inside it are recorded there. The first attempt (#16 on
+  `62339df`) caught a real release bug the typecheck gate cannot see — the
+  ported `build/rppairing-ios/build.sh` had been committed without its
+  executable bit and the step died at "Permission denied" before it ran;
+  fixed in `7894113` (mode 100755).
 - **No device claims.** Every phase above says "compiled and tested
   off-device" where that is all 0.5.0 can prove; the owner's iPhone is the
   judge. The on-device test checklist is in the README's ledger entry for
