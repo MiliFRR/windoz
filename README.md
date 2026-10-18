@@ -55,7 +55,10 @@ re-installs say "checking files already on the device" and time themselves
 honestly; Steam installs fetch cover art from Steam's own CDN; and the
 per-game settings sheet grew real controls (frame pacing through the engine's
 own call, nine per-launch engine variables) with every stored-not-applied item
-labeled as such. 0.3.5 is **device-verification pending**.
+labeled as such. 0.3.5 is **device-verification pending**; its IPA is
+`build-ipa.yml` run #14 (`dbc5c22`, success, 2026-10-18), kept at
+`windoz-ipa-keep/windoz-14.ipa` (75,129,142 bytes, SHA-256
+`C17EBEB8EEC561F2B7C0B0CD3F164C7027D1C39DBAB31FA7972C538995B9C961`).
 
 ## app-windoz — the current app
 
