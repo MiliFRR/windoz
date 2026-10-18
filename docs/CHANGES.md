@@ -274,12 +274,23 @@ settings sheets.
 
 ### Verification in this round
 
-- One commit per area on `ci-060`; the first typecheck gate (#33, `f2535ee`)
-  is green, and the head gate runs before the merge — runs that a newer push
-  cancelled say so and are not counted.
-- The full unsigned-IPA pipeline runs on `main` after the merge; the run
-  number, the keeper release URL, size and SHA-256 are recorded in the
-  README's ledger when it lands. The IPA gate now also runs inside that
-  workflow (`scripts/check-ipa.py --require <project.yml version>`).
+- One commit per area on `ci-060`; typecheck gates #33 (`f2535ee`, the launch
+  fix), #36 (the full tree, including the UI redesign) and #37 (`158f669`,
+  the 0.6.0 bump) are green; runs cancelled by a newer push are not counted.
+- The new IPA gate (`scripts/check-ipa.py`) caught two real release bugs on
+  its first live runs, before anything was published: **#18** — the app
+  bundle still claimed 0.5.0 build 5 because its Info.plist values were
+  hardcoded in `project.yml` (fixed in `963cb1a`; the helper target had
+  always referenced the build settings) — and **#19** — the workflow's own
+  unanchored version grep caught a comment that mentions MARKETING_VERSION
+  and rejected an already-correct IPA (replaced by the tested
+  `scripts/read-version.py` in `4f51018`).
+- **Run #20 is green end to end** on `4f51018`: the IPA check passed inside
+  the workflow, and `release-ipa.yml` published the artifact automatically
+  as the GitHub Release `v0.6.0` — `windoz-0.6.0-build6.ipa`, 78,293,503
+  bytes, SHA-256
+  `4BB881B58149CA4C07306EA62A9D4BE1B499F584395D201482AC1DFB90653EA6`
+  (the same file is kept locally as `windoz-ipa-keep/windoz-17.ipa` and
+  re-checked with the same checker).
 - **No device claims.** The freeze, heat, download-list and layout fixes are
   exactly what the owner's next run judges; the checklist is in the README.

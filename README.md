@@ -130,8 +130,12 @@ refuses retries by name instead of wedging again; **Quit Windoz**
 LiveContainer its slot back at once instead of after a system kill; the
 Downloads tab aggregates Steam and Epic installs with a live badge; the log
 sink is batched; and the UI is rebuilt phone-first. 0.6.0 is
-**device-verification pending**; the build, keeper release URL, size and
-SHA-256 are recorded in the ledger below when run #18 lands.
+**device-verification pending**: the build is `build-ipa.yml` run #20
+(`4f51018`, green), published automatically as the GitHub Release
+[`v0.6.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.6.0)
+(`windoz-0.6.0-build6.ipa`, 78,293,503 bytes, SHA-256
+`4BB881B58149CA4C07306EA62A9D4BE1B499F584395D201482AC1DFB90653EA6`); the
+checklist below is the run that confirms it.
 
 ## app-windoz — the current app
 
@@ -1090,13 +1094,25 @@ the fix that is still in the tree.*
     Steam/Epic game and watch it appear in Downloads with the tab badge;
     leave the app open on Home (it should stay hand-temperature); judge the
     new layout on the phone.
-  - **Record:** typecheck gate #33 (`f2535ee`) green for the launch fix; the
-    per-area commits are on `ci-060`, gated before the merge. The full build
-    after the merge is `build-ipa.yml` run #18; the IPA check
-    (`scripts/check-ipa.py --require 0.6.0`) now runs inside that workflow,
-    and `release-ipa.yml` publishes the artifact as the GitHub Release
-    `v0.6.0` automatically. Run number, size, SHA-256 and release URL are
-    recorded here when it completes.
+  - **Record:** typecheck gates #33 (`f2535ee`, the launch fix), #36 (the
+    full tree, including the UI redesign) and #37 (`158f669`, the 0.6.0
+    bump) are green. The full pipeline then did exactly what the new gate
+    exists for: **run #18 failed inside the gate** — the app bundle still
+    claimed 0.5.0 build 5 because its Info.plist values were hardcoded in
+    `project.yml` while the helper's already referenced the build settings;
+    nothing broken was ever published. `963cb1a` made the build settings the
+    single source (gate #38 green). **Run #19 failed on the step's own
+    version extraction** — an unanchored grep caught a comment that mentions
+    MARKETING_VERSION — while the IPA itself was already fully correct;
+    `4f51018` replaced the extraction with the tested
+    `scripts/read-version.py`. **Run #20 is green end to end**: the IPA check
+    passed inside the workflow and `release-ipa.yml` published the artifact
+    automatically as the GitHub Release
+    [`v0.6.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.6.0) —
+    `windoz-0.6.0-build6.ipa`, 78,293,503 bytes, SHA-256
+    `4BB881B58149CA4C07306EA62A9D4BE1B499F584395D201482AC1DFB90653EA6`;
+    the same file is kept locally as `windoz-ipa-keep/windoz-17.ipa` and
+    re-checked with `scripts/check-ipa.py --require 0.6.0`.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
