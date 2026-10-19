@@ -392,10 +392,13 @@ Rebuilt:
 
 ### Verification in this round
 
-- One commit per area on `ci-070`: `abf1859` (engine) and `7fa218f` (UI).
-  Both are type-checked green by `typecheck.yml` run **#39** (2026-10-19).
-- The 0.7.0 version bump is the third commit; its typecheck gate and the full
-  `build-ipa.yml` run are recorded in the README ledger when they finish.
+- One commit per area on `ci-070`: `abf1859` (engine), `7fa218f` (UI), then
+  the pool-pinning, cover-size, step-order and step-marking follow-ups. The
+  final tree (`b8b3fed`) is type-checked green by `typecheck.yml` run **#43**
+  (2026-10-19); earlier gates #39 and #40 were green too, and were cancelled
+  or superseded only by later pushes on the same branch.
+- The 0.7.0 version bump is part of this tree; the full `build-ipa.yml` run and
+  the keeper IPA hash are recorded in the README ledger when they finish.
 - **No device claims.** The owner's next run is the judge: launch a game and
   watch the new "Executable memory is ready" step; the pool must appear in the
   log before Wine's service starts, and the game must reach its own window
