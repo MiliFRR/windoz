@@ -632,7 +632,8 @@ final class PadButtonView: UIButton {
         didSet { updateFill() }
     }
 
-    private var held = false
+    /// Not `held`: UIButton already declares that name in this SDK.
+    private var pressedDown = false
 
     init(title: String, size: CGFloat) {
         super.init(frame: .zero)
@@ -655,14 +656,14 @@ final class PadButtonView: UIButton {
     @objc private func up() { setHeld(false) }
 
     func setHeld(_ value: Bool) {
-        guard held != value else { return }
-        held = value
+        guard pressedDown != value else { return }
+        pressedDown = value
         updateFill()
         onPress?(value)
     }
 
     private func updateFill() {
-        backgroundColor = held ? UIColor.white.withAlphaComponent(0.42) : baseColor
+        backgroundColor = pressedDown ? UIColor.white.withAlphaComponent(0.42) : baseColor
     }
 }
 
