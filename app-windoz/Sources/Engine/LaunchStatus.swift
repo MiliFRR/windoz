@@ -52,8 +52,8 @@ extension LaunchStep {
             LaunchStep(id: LaunchStepID.storage, title: "Storage accepts writes"),
             LaunchStep(id: LaunchStepID.mode, title: "Launch mode prepared"),
             LaunchStep(id: LaunchStepID.surface, title: "Game screen is up"),
-            LaunchStep(id: LaunchStepID.service, title: "Windows service is running"),
             LaunchStep(id: LaunchStepID.pool, title: "Executable memory is ready"),
+            LaunchStep(id: LaunchStepID.service, title: "Windows service is running"),
             LaunchStep(id: LaunchStepID.guest, title: "Game process started"),
             LaunchStep(id: LaunchStepID.frame, title: "First frame presented"),
         ]
