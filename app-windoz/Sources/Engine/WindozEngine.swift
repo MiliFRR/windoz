@@ -86,7 +86,7 @@ final class WindozEngine: ObservableObject {
     /// Why the run is spent, in the failing stage's own words.
     private var wedgeReason = ""
     /// Set once a launch is abandoned (stalled, cancelled or failed): a stuck
-    /// `fex_initialize` that answers late must not quietly start the guest
+    /// debugger exchange that answers late must not quietly start the guest
     /// behind the app's back.
     private var sessionAbandoned = false
     /// Exactly-one-resume handles for the guest-start continuation, so the
@@ -211,13 +211,21 @@ final class WindozEngine: ObservableObject {
 
     // MARK: - Engine core
 
-    /// Start the engine's core services (the Wine service process and the FEX
-    /// translator) without a game. This is the part that is fully wired and is
-    /// what the diagnostics screen exercises on device.
+    /// Start the engine's core services (the Wine service process and this
+    /// run's executable-memory pool) without a game. This is the part that is
+    /// fully wired and is what the diagnostics screen exercises on device.
     func startEngineCore() async throws {
         guard !phase.isActive, sessionGame == nil else { throw EngineError.sessionAlreadyRunning }
         guard sessionsThisRun == 0 else { throw EngineError.sessionAlreadyRanThisRun }
         try prefix.createIfNeeded()
+
+        let poolOK = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            queue.async { continuation.resume(returning: JITPool.ensure()) }
+        }
+        guard poolOK else {
+            throw EngineError.jitPoolFailed(JITPool.failure ?? "the JIT pool could not be allocated")
+        }
+        self.log.append("Executable memory pool ready (\(JITPool.sizeMB) MB).", level: .success)
 
         let ready = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
             queue.async {
@@ -232,17 +240,10 @@ final class WindozEngine: ObservableObject {
         }
         guard ready else { throw EngineError.wineserverNotReady }
         self.log.append("Wine service process ready.", level: .success)
-
-        let fexOK = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            queue.async { continuation.resume(returning: fex_initialize()) }
-        }
-        guard fexOK else { throw EngineError.fexInitFailed }
-        self.log.append("CPU translator (FEX) initialized.", level: .success)
     }
 
     func stopEngineCore() {
         queue.async {
-            fex_shutdown()
             wineserver_stop()
         }
     }
@@ -555,14 +556,14 @@ final class WindozEngine: ObservableObject {
             return "Advanced settings has Create / Repair for the Windows environment."
         case .sessionSurfaceTimeout:
             return "Retry once. If the screen still never comes up, share this report — the steps above say how far the launch got."
-        case .wineserverStartFailed, .wineserverNotReady, .fexInitFailed, .wineProcessStartFailed:
+        case .wineserverStartFailed, .wineserverNotReady, .jitPoolFailed, .wineProcessStartFailed:
             return "Retry once. If it repeats, use Quit Windoz (Settings → Advanced), open the app again and retry; share this report if it still fails."
         case .sessionAlreadyRanThisRun, .sessionAlreadyRunning:
             return "Quit Windoz (Settings → Advanced, or the button above) and open it again."
         case .engineWedged:
             return "Quit Windoz — the button above — then open the app again."
         case .sessionStalled:
-            return "Quit Windoz and open the app again, then retry. If the stall was at the CPU translator, the debugger's JIT script did not answer the engine — re-attach JIT (Settings → JIT setup) before retrying."
+            return "Quit Windoz and open the app again, then retry. If the stall was at the JIT memory step, the debugger did not answer the engine — re-attach JIT (Settings → JIT setup) before retrying."
         case .dockNotReady, .steamDesktopNotReady:
             return "The message above names the exact missing piece; this game's settings can switch the launch mode."
         case .sessionCancelled:
@@ -613,6 +614,23 @@ final class WindozEngine: ObservableObject {
         // `Library.applyEnvironment`).
         applyFPSLock(settings.fpsLimit)
 
+        // Madeira's order, exactly: the debugger grants the JIT pool, the
+        // debugger leaves, the Wine service starts, the guest starts. The
+        // pool's three environment variables are the engine's own contract
+        // (virtual_ios.c reads them); without this step the guest has no
+        // executable memory and the launch screen never gets past black.
+        startStep(LaunchStepID.pool, detail: "Asking the debugger for executable memory…")
+        setStage("Preparing executable memory…")
+        guard JITPool.ensure() else {
+            let why = JITPool.failure ?? "the JIT pool could not be allocated"
+            failStep(LaunchStepID.pool, message: why)
+            throw EngineError.jitPoolFailed(why)
+        }
+        finishStep(LaunchStepID.pool, detail: "\(JITPool.sizeMB) MB granted to the engine.")
+        guard !sessionAbandoned else { throw EngineError.sessionCancelled }
+        setStage("Detaching the debugger…")
+        JITPool.detachDebugger()
+
         if wineserver_is_running() == 0 {
             setStage("Starting the Windows service…")
             guard wineserver_start(prefix.url.path) == 0 else { throw EngineError.wineserverStartFailed }
@@ -625,10 +643,8 @@ final class WindozEngine: ObservableObject {
         } else {
             setStage("The Windows service is already up.")
         }
-        setStage("Starting the CPU translator…")
-        guard fex_initialize() else { throw EngineError.fexInitFailed }
         // An abandoned attempt (stall budget or Cancel) must not quietly
-        // start the guest when the translator finally answers.
+        // start the guest when the pool finally answers.
         guard !sessionAbandoned else { throw EngineError.sessionCancelled }
         setStage("Launching the game…")
         startStep(LaunchStepID.guest, detail: "Starting the game's process thread…")
@@ -785,11 +801,11 @@ final class WindozEngine: ObservableObject {
     }
 
     /// The launch has made no progress for the full budget and its thread is
-    /// stuck inside the engine (the CPU translator waiting for the debugger's
-    /// JIT script is the known case). The engine's start-up lock is held by
-    /// that thread, so this app run cannot host another attempt: mark it
-    /// spent — every later attempt gets the named refusal instead of wedging
-    /// again — and stop what can be stopped.
+    /// stuck inside the engine (the debugger exchange for the JIT pool is the
+    /// known case). The engine's start-up lock is held by that thread, so this
+    /// app run cannot host another attempt: mark it spent — every later
+    /// attempt gets the named refusal instead of wedging again — and stop what
+    /// can be stopped.
     private func wedgeAndFail(_ reason: String) {
         engineWedged = true
         wedgeReason = reason
@@ -802,14 +818,13 @@ final class WindozEngine: ObservableObject {
     /// Stop the pieces of a wedged start-up that can be stopped. The guest
     /// process never started (that is what wedged means here), so only the
     /// service process needs to go — it is the part that burns CPU with
-    /// nothing to do. `fex_shutdown` returns immediately while the stuck
-    /// thread holds the translator's init lock (checked against the pinned
-    /// fork's FEXBridge.mm), so this cannot hang the engine queue.
+    /// nothing to do. Nothing here calls into the in-process FEX bridge:
+    /// Madeira's launch path does not use it, and the pool itself belongs to
+    /// the process, not the session.
     private func teardownWedgedEngine() {
         guard wine_process_is_running() == 0 else { return }
         queue.async {
             self.log.append("[session] stopping the Windows service after the stalled launch", level: .warning)
-            fex_shutdown()
             wineserver_stop()
         }
     }
@@ -866,7 +881,8 @@ final class WindozEngine: ObservableObject {
 
     /// How long the guest-start stage may run without finishing before the
     /// run is declared spent. The service wait inside it is itself bounded at
-    /// 60 s; the translator's start-up is the only unbounded step.
+    /// 60 s; the debugger's pool request (a BRK exchange) is the only other
+    /// step that can wait, and an unanswered request is a refusal, not a hang.
     private static let guestStartBudget: TimeInterval = 160
 
     /// Write the environment the engine's launcher (`wine_process_start`) reads.
@@ -1206,7 +1222,6 @@ final class WindozEngine: ObservableObject {
             return
         }
         queue.async {
-            fex_shutdown()
             wineserver_stop()
         }
         log.append("Engine core stopped.")

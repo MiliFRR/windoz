@@ -492,7 +492,7 @@ enum EngineError: LocalizedError {
     case prefixCreateFailed(String)
     case wineserverStartFailed
     case wineserverNotReady
-    case fexInitFailed
+    case jitPoolFailed(String)
     case sessionAlreadyRunning
     case executableMissing(String)
     case sessionSurfaceTimeout
@@ -512,7 +512,7 @@ enum EngineError: LocalizedError {
         case .prefixCreateFailed(let why): return "The Windows environment could not be created: \(why)"
         case .wineserverStartFailed: return "The Windows service process could not start."
         case .wineserverNotReady: return "The Windows service process started but did not become ready."
-        case .fexInitFailed: return "The CPU translator (FEX) failed to initialize."
+        case .jitPoolFailed(let why): return "The engine's executable memory could not be prepared: \(why)"
         case .sessionAlreadyRunning: return "A game session is already running."
         case .executableMissing(let path): return "The game program was not found: \(path)"
         case .sessionSurfaceTimeout:

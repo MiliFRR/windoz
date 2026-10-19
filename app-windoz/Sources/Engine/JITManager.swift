@@ -10,15 +10,15 @@ import Darwin
 /// `madeira-jit.js` script, which the engine's `jit26_*` BRK protocol needs.
 enum JITManager {
 
-    /// True when JIT can actually serve a launch right now. The probe maps and
-    /// executes nothing: on iOS 26 the platform rejects RX pages an app mapped
-    /// itself (the engine's JITAllocator documents the resulting "fault loop"),
-    /// and an unanswered jit26_* BRK kills the process. The rule is the
+    /// True when JIT can actually serve a launch right now. Once this run's
+    /// pool has been granted, the debugger is detached on purpose (Madeira's
+    /// launch path), so the pool — not the live attach — is what makes JIT
+    /// ready for the rest of the run. Before the pool exists, the rule is the
     /// engine's own (Madeira's StikJITHelper.ready): `CS_DEBUGGED` is set AND a
-    /// debugger is attached right now to answer the BRK protocol. The sticky
-    /// flag alone is not proof — it stays set after a debugger detaches.
+    /// debugger is attached right now to answer the BRK protocol.
     static func probeEnabled() -> Bool {
-        windoz_jit_probe() != 0
+        if JITPool.isReady { return true }
+        return windoz_jit_probe() != 0
     }
 
     /// A debugger is attached to this process right now (`P_TRACED`).
@@ -26,8 +26,9 @@ enum JITManager {
 
     /// `CS_DEBUGGED` is set but no debugger is attached to answer the engine's
     /// JIT requests (enable-then-leave tools leave exactly this state): JIT has
-    /// to be enabled again before a session could run.
-    static var flaggedWithoutDebugger: Bool { jit_check_debugged() && !liveDebuggerAttached }
+    /// to be enabled again before a session could run. Once this run's pool is
+    /// ready, earlier detach is the normal state, not a fault.
+    static var flaggedWithoutDebugger: Bool { !JITPool.isReady && jit_check_debugged() && !liveDebuggerAttached }
 
     /// Whether the bundled helper extension may be used here. It has to be
     /// genuinely present in the bundle (`WindozBuiltInJIT.helperFile`), and
