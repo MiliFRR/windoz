@@ -5,17 +5,22 @@ plus the piece that hands a Steam-DRM title to **Valve's own client** running
 inside Wine when Direct launch cannot work. This document says exactly what
 exists today, what the pieces are, and the rules the implementation must keep.
 
-> **State, plainly (2026-10-18, build 0.4.0 — device verification pending):**
+> **State, plainly (2026-10-19, build 0.8.0 — device verification pending):**
 > the **Steam client is real** — native sign-in (password + Steam Guard, or a
 > QR code), the owned library, headless depot downloads into the prefix
-> (`Sources/Steam/`, wired by `Sources/Stores/SteamStore.swift`), and, new in
+> (`Sources/Steam/`, wired by `Sources/Stores/SteamStore.swift`), and, since
 > 0.4.0, the **dock itself**: the per-game launch modes (Direct / **Doz
 > Dock** / Steam desktop), Madeira's dock contract ported exactly, the Steam
 > client's own Windows components installed from Valve's pinned CDN, and
-> Valve's own offline mode behind a per-game toggle. **Epic is real through
-> its downloads too** in 0.4.0 — device-code sign-in, the launcher-scoped
-> sign-in its library service requires, the owned library with real art, and
-> now chunked downloads from Epic's own CDN with every chunk SHA-1-verified
+> Valve's own offline mode behind a per-game toggle. 0.8.0 adds the rest of
+> "full Steam support": the dock finds **every Steam library the client
+> knows** (not just the canonical folder), the session screen **reports the
+> dock's live stage** while the client works, **Add installed games** imports
+> what Valve's client installed as launchable library entries, and **Open
+> Steam** starts the client itself as a session. **Epic is real through its
+> downloads too** — device-code sign-in, the launcher-scoped sign-in its
+> library service requires, the owned library with real art, and chunked
+> downloads from Epic's own CDN with every chunk SHA-1-verified
 > (`Sources/Epic/EpicDownloader.swift`, ported from Legendary). The launcher
 > stores (EA, Rockstar) still report plainly what they can and cannot do. The
 > generic download engine (queue, pause/resume, SHA-256 verification,
@@ -103,11 +108,16 @@ byte-for-byte:
 Before a Doz Dock launch, Windoz validates and refuses by name when anything
 is missing: the bundled dock host, a Steam sign-in it can read
 (`SteamTokenStore`), the Steam client components, and the game's own
-`appmanifest_<appid>.acf` inside the **active** prefix's `steamapps`. A game
-installed by Windoz's own depot downloader lands exactly there (0.4.0 moved
-the Steam library to follow the active prefix), so Valve's client sees it.
-**Steam desktop** is the same components with no game auto-started: the full
-client in a virtual desktop for manual sign-in and library browsing.
+`appmanifest_<appid>.acf` inside the **active** prefix's `steamapps`. Since
+0.8.0 the lookup covers **every library in every `libraryfolders.vdf` the
+client knows** (`DozDock.libraries`), not only the canonical folder, and each
+manifest is resolved relative to its own library — so a game Valve's client
+installed into a second library validates and starts exactly like one in the
+default folder. A game installed by Windoz's own depot downloader lands in
+the default library, so Valve's client sees it too. **Steam desktop** is the
+same components with no game auto-started: the full client in a virtual
+desktop for manual sign-in and library browsing, and since 0.8.0 it is also
+reachable directly as **Open Steam** from the Steam library sheet.
 
 ## What this will never do
 
@@ -126,7 +136,8 @@ client in a virtual desktop for manual sign-in and library browsing.
 | Download engine (queue/resume/verify) | `Sources/Downloads/DownloadManager.swift` | working, in daily use |
 | Steam provider (sign-in, library, depots) | `Sources/Stores/SteamStore.swift` + `Sources/Steam/` | real: sign-in + owned library verified on device; depot downloads device-verification pending |
 | Epic provider | `Sources/Stores/EpicStore.swift` + `Sources/Epic/` | real: both sign-ins verified on device; chunked downloads in 0.4.0, instant-failure root cause fixed in 0.5.0 (chunk URLs had carried the manifest's signed query string), off-device tests in `tests/host` — device verification pending |
-| The dock itself | `Sources/Steam/Content/DozDock.swift` + `Sources/Engine/WindozEngine.swift` | ported in 0.4.0: modes, handoff, report, offline (device verification pending) |
+| The dock itself | `Sources/Steam/Content/DozDock.swift` + `Sources/Engine/WindozEngine.swift` | ported in 0.4.0: modes, handoff, report, offline; 0.8.0 adds all-library discovery and the live stage for the session HUD (device verification pending) |
+| Client-installed games → library | `Sources/Steam/Content/SteamClientLibrary.swift` | 0.8.0: scans every library in the prefix, adds/completes entries, fetches missing art (device verification pending) |
 | Steam client components | `Sources/Steam/Content/SteamClientRuntime.swift` | pinned Valve packages, checked "prepared" state |
 | Store screens | `Sources/UI/` + Library → Stores | Steam and Epic open real sheets (install/progress); the rest show the stub state |
 | Launcher pipelines (EA/Rockstar) | — | not implemented; the UI says so |
@@ -146,9 +157,10 @@ Tracked in `docs/ROADMAP.md` (Phase 5 in `README.md`'s phase list); in order:
 4. **Launch hook + the dock** — done in 0.4.0: `WindozEngine` prepares the
    mode (Direct / Doz Dock / Steam desktop), writes the handoff, applies the
    host environment, reads the report back and answers in plain words; the
-   Steam client components install from Valve's CDN. Device verification
-   pending. Next: draw the report's offline/unlock states into the session
-   screen so a slow first launch reads as progress, not a stall.
+   Steam client components install from Valve's CDN. 0.8.0 completed the
+   next step: the session HUD draws the dock's live stage (stall → progress)
+   and its failures in plain words, and the dock reaches every library the
+   client knows. Device verification pending.
 5. **Epic** — done in 0.4.0 through the downloads: device-code + launcher
    sign-ins, the owned library, and Legendary-ported chunked downloads with
    per-chunk verification and library registration. Device verification

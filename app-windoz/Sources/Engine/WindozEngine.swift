@@ -1131,7 +1131,6 @@ final class WindozEngine: ObservableObject {
         }
     }
 
-    /// The single end-of-session path: playtime is recorded once, the engine's
     /// Live Doz Dock progress. The host appends its numeric report to
     /// `C:\madeira-dock.txt` while the session runs; read it every poll and
     /// turn the newest stage into words. A refusal is shown the moment the
@@ -1164,6 +1163,7 @@ final class WindozEngine: ObservableObject {
         return DozDock.humanFailure(fields)
     }
 
+    /// The single end-of-session path: playtime is recorded once, the engine's
     /// exit report is read, the session screen is dismissed and the story is
     /// kept for the game page.
     private func finishSession(early: Bool = false) {

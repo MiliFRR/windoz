@@ -1188,6 +1188,70 @@ the fix that is still in the tree.*
     iPhone app, not a television. If the pool step fails, the named message
     says whether no debugger was attached or the placement was refused; use
     Quit Windoz and reopen instead of waiting on a frozen screen.
+- **Owner round for 0.8.0 (LiveContainer, 2026-10-19 — build 0.7.0):** the
+  owner ran the 0.7.0 keeper, confirmed **direct launches work on device**,
+  and asked for the next round: swap memory; Doz Dock fixes plus fuller Steam
+  support; a settings icon during a game with control layouts and performance
+  stats; and a more modern UI in the same direction as 0.7.0's redesign
+  ("a step in the right place"). All answered; everything is
+  device-verification pending.
+  - **(1) Swap memory.** The pinned engine already has a file-backed guest
+    memory tier and its iOS bridge already arms it — `wine_process_start`
+    reads `swap-mb` from `Documents/madeira.cfg`, and at ≥ 64 MB recreates
+    `NSTemporaryDirectory()/madeira-swap.bin` (`NSFileProtectionNone`) and
+    exports `MADEIRA_SWAP_FILE` / `MADEIRA_SWAP_MB`. Windoz never wrote that
+    file. New `Sources/Engine/MadeiraConfig.swift` + Settings → Memory: Off /
+    1 GB / 2 GB / 4 GB (the same choices, units and default as Madeira's own
+    page) plus the `env.MADEIRA_SWAP_COVERAGE` picker (classic default;
+    blocks / wide / broad). The writer merges — comments and foreign keys stay
+    byte-for-byte, atomic write, read-back verified — and the launch log names
+    the tier it found. Takes effect on the next launch.
+  - **(2) Doz Dock fixes.** Two code-level causes: (a) only Steam's canonical
+    folder was searched, so a game installed into any other
+    `libraryfolders.vdf` library failed validation with "install record not
+    found" — `DozDock` now lists **every library the client knows**, resolves
+    each manifest against its own library, unions depots, and keeps the same
+    caps and path-safety rules; (b) a slow client start read as a stall — the
+    session HUD now polls `C:\madeira-dock.txt` every 0.5 s and shows the live
+    stage (handoff → connection → offline logon → updates → launch) as a chip,
+    with refusals in plain words. No device log of the owner's failed run
+    exists; these are code-level fixes, marked as such.
+  - **(3) Full Steam support.** **Open Steam** starts Valve's client as a
+    session (`.steamDesktop`) signed in with the stored token; **Add installed
+    games** (`Sources/Steam/Content/SteamClientLibrary.swift`) scans every
+    library in the prefix for what the client installed, adds/completes
+    entries (defaulting to Doz Dock mode) and fetches missing art; the Steam
+    sheet's client card reports readiness, installs components with live stage
+    text, then offers both actions.
+  - **(4) In-session settings, layouts, stats.** The session HUD gear opens a
+    menu (raw UIKit, drawn above the host): **Controls** — Keyboard & mouse
+    (default; the physical pad is translated to WASD + mouse + template keys
+    and the game is never told a controller exists), Xbox, or PlayStation 5
+    (on-screen pad + physical pad merge into one XInput snapshot published to
+    slot 0; PS5 = the same pad with DualSense glyphs, stated honestly) —
+    stored per game, changeable mid-session, also pickable on the game page;
+    **Performance stats** — one persisted toggle; overlay shows FPS,
+    1 %/0.1 % lows (percentiles of the last minute of the engine's presented
+    frames), RAM (physical footprint), CPU (thread times, ported CPUMeter) and
+    battery (level + session delta). Every number is measured on device.
+  - **(5) UI modern pass.** Same compact native direction: one accent→indigo
+    gradient for primary actions only (Play, the featured card's control);
+    Home opens with a full-width featured card (most recent game, hero art,
+    one play affordance) and the shelf becomes "Recently played"; Library
+    gains system search and All/Imported/Steam/Epic filter chips; the game
+    page's Controls section is the new layout picker (the old custom
+    touch-overlay editor stored layouts the session never read — its stale
+    note said so — and is replaced).
+  - **Record:** the round was built on `ci-080`; the typecheck gate, the
+    `build-ipa.yml` run and the release/keeper are recorded here when they
+    complete.
+  - **0.8.0 device checklist** (the proof that counts): set a swap size in
+    Settings → Memory (or leave it off), then launch a game and confirm the
+    log line naming the tier; on a Doz Dock launch, the session chip must
+    advance through the stages (or turn into plain words on failure); **Open
+    Steam** must reach Valve's client window; **Add installed games** must
+    list what the client installed; the ⚙ menu must switch layouts live and
+    the overlay must show FPS / 1 % / 0.1 % / RAM / CPU / battery.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT

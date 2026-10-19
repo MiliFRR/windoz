@@ -53,6 +53,8 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 | Windows runtime detection / official download | **working** | `RuntimeInstaller` (files + `DownloadManager`) |
 | Game **session host** (Metal presentation + input + the guest process) | **ported in 0.3.4 — device verification pending** | `WindozEngine.launch` → `wine_process_start`; the presenting layer and overlay live in `Sources/UI/GameSessionView.swift` |
 | Per-game **launch modes** (Direct / Doz Dock / Steam desktop) | **ported in 0.4.0 — device verification pending** | `WindozEngine.prepareLaunchMode` + `Sources/Steam/Content/DozDock.swift` |
+| Session **gamepad** (on-screen pad + a physical controller → XInput slot 0) | **0.8.0 — device verification pending** | `SessionGamepad` → `winios_gamepad_set_state` (WiniosGamepad.h) |
+| **Swap tier** (the engine's file-backed guest memory) | **0.8.0 — device verification pending** | `MadeiraConfig` writes `Documents/madeira.cfg`; armed by `wine_process_start` |
 | **Storage negotiation** (the root that accepts writes) | **working (0.4.0)** | `AppContainer.probeWrites` / `storageRoot`; the prefix follows it (`PrefixManager`) |
 | Native store clients | **Steam: sign-in + owned library device-verified, depot downloads device-verification pending; Epic: both sign-ins device-verified, chunked downloads in 0.4.0 — the instant-failure root cause (chunk URLs had carried the manifest's signed query string) fixed in 0.5.0, off-device tests in `tests/host` (device verification pending)** | `SteamStore`, `EpicStore`, `EpicDownloader` |
 
@@ -82,8 +84,14 @@ The honest limits of this first session host:
 - **Input** is a single primary touch mapped 1:1 onto the guest's virtual
   monitor (aspect-fit), a hardware keyboard when one is attached (UIKey →
   virtual-key, US layout), and a small on-screen key row (arrows, Esc, Tab,
-  Enter, Space) — enough to play a platformer with touch as the mouse. No
-  gamepad and no software keyboard yet.
+  Enter, Space) — enough to play a platformer with touch as the mouse. 0.8.0
+  adds controllers, chosen per game and switchable from the session's ⚙ menu:
+  **Keyboard & mouse** (default) translates a physical pad to WASD + mouse +
+  the template keys and never tells the game a controller exists; **Xbox** and
+  **PlayStation 5** merge a physical controller and the on-screen pad into one
+  XInput snapshot (dead zone 7849, the engine's own value) published to slot 0
+  with `winios_gamepad_set_state` — the PS5 layout is the same Xbox-style pad
+  with DualSense glyphs, stated plainly. No software keyboard yet.
 - **Leaving a session** asks the game to close with Alt+F4; "leave the session
   screen" detaches and says plainly that a still-running guest ends with the
   app. Nothing here ever calls `wineserver_stop()` while a guest thread exists
@@ -114,6 +122,24 @@ pinned forks actually read. Sources are the fork/app files named below.
 | `MADEIRA_FASTSYNC` | Wine's sync engine — `auto`, `1`, `cells`, `0` | when the game's Sync engine choice is not "Engine default" | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
 | `FEX_X87REDUCEDPRECISION`, `MADEIRA_FEX_AVX`, `MADEIRA_CPU_COUNT`, `MADEIRA_DINPUT_PAD`, `DXMT_D9_ANISO_LIMIT`, `MADEIRA_GAME_WINDOWS`, `MADEIRA_WAIT_CHILDREN`, `MADEIRA_VIRTUAL_MODE_SET` | the per-game engine switches in the settings sheet — each is set *or* unset on every launch, so a previous game's choice never leaks into the next | when the game sets them | `WineProcessBridge.m` (per-launch list), `Library.swift applyEnvironment` |
 | `FEX_X87REDUCEDPRECISION`, `MADEIRA_CPU_COUNT`, `DXMT_D9_ANISO_LIMIT`, … | the user's own fork switches (applied last, so an expert entry can override the sheet) | from `GameSettings.environment` | `Library.swift applyEnvironment` |
+
+### Swap memory (0.8.0)
+
+The pinned engine has a file-backed guest memory tier; the app does not
+allocate it. `MadeiraConfig` owns exactly two keys in **`Documents/madeira.cfg`**
+— the same file and keys Madeira's Memory page writes — and everything else in
+the file is preserved byte-for-byte (atomic write, read-back verified):
+
+| Key | Meaning |
+|---|---|
+| `swap-mb` | tier size in MB; **Off** removes the key. `wine_process_start` arms the tier only at ≥ 64 MB: it recreates `NSTemporaryDirectory()/madeira-swap.bin` (`NSFileProtectionNone`) and exports `MADEIRA_SWAP_FILE` / `MADEIRA_SWAP_MB` to the guest |
+| `env.MADEIRA_SWAP_COVERAGE` | which allocations draw on the tier — `classic` (the engine's default: omitted), `blocks`, `wide`, `broad` |
+
+The bridge reads the file when the session starts, so a change takes effect on
+the **next launch**; the launch log states the tier it found (on with size and
+coverage, or off). If removing the keys leaves no meaningful line, the file is
+deleted rather than left empty (an empty cfg would still switch the engine from
+legacy per-key files to cfg parsing).
 
 ### Launch modes (0.4.0)
 

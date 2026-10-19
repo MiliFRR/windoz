@@ -412,3 +412,162 @@ Rebuilt:
   watch the new "Executable memory is ready" step; the pool must appear in the
   log before Wine's service starts, and the game must reach its own window
   instead of the black launch screen. The UI checklist is in the README.
+
+## 0.8.0 (2026-10-19) — swap memory, full Steam support, session settings, modern UI
+
+Built on 0.7.0. The owner ran the 0.7.0 keeper, confirmed direct launches
+work, and replied, verbatim:
+
+> running the game without steam works now add swap memory support fix steam
+> with doz dock and full steam support add a settings icon when luanching a
+> game with controller support or keybaord controls changeing from that menu
+> add a default layout for kbm and a xbox controller layour and a ps5
+> controller layout add a toggle for perforamnce stats on screen in there make
+> it have fps low 1% and low 0.1% ram usage and cpu usage battery usage remake
+> the ui to look more modern last redesign you did what a step in the right
+> place
+
+This round delivers all of it. The 0.7.0 launch path is untouched: direct
+launches keep the pinned engine's own sequence. Every item below is **compiled
+and type-checked, not verified on a device**.
+
+### Swap memory — the engine's own tier, switched on from Settings
+
+Observed (owner): "add swap memory support".
+
+Root cause of the missing feature: the pinned engine has a file-backed guest
+memory tier, and the iOS bridge already arms it — `wine_process_start` in
+`WineProcessBridge.m` reads `swap-mb` from `Documents/madeira.cfg`, and when
+the value is at least 64 MB it recreates
+`NSTemporaryDirectory()/madeira-swap.bin` with `NSFileProtectionNone` and
+exports `MADEIRA_SWAP_FILE` / `MADEIRA_SWAP_MB` to the guest. Windoz never
+wrote that file, so the tier was always off. No engine change was needed.
+
+Fix (`Sources/Engine/MadeiraConfig.swift`, Settings → Memory):
+
+- Off / 1 GB / 2 GB / 4 GB — the same choices, units and default (Off) as
+  Madeira's own Memory page. A size the bridge would discard (under 64 MB) is
+  stored and shown as off, never as a size that silently does nothing.
+- Coverage picker for `env.MADEIRA_SWAP_COVERAGE` — Large allocations
+  (default), 1 MB and larger, overflow allocations, whole reservations — with
+  one honest sentence per mode; `classic` writes no env line because it is the
+  engine's default.
+- The writer merges rather than replaces: comments and every key Windoz does
+  not own stay byte-for-byte in `Documents/madeira.cfg`, the write is atomic,
+  the file is read back and verified against what the bridge will parse, and
+  a failure is surfaced in Settings and the log with its reason. If removing
+  the swap keys leaves no meaningful line, the file is deleted instead, so the
+  engine is never handed an empty cfg.
+- Takes effect on the **next launch** (the bridge reads the file when the
+  session starts). The launch log states the tier it found: on (with size and
+  coverage), or off.
+
+### Doz Dock: every library the client knows, and progress while it works
+
+Observed (owner): "fix steam with doz dock" — a Doz Dock launch that never
+reached the game.
+
+Root causes, from Windoz's side (no device log of the owner's run exists;
+these fixes are code-level):
+
+1. **Only Steam's canonical folder was searched.** Paths were joined onto the
+   known Steam root by string concatenation, so a library on any other folder
+   listed in `libraryfolders.vdf` was invisible: validate answered "install
+   record not found" for a game Valve's client could plainly see, and the
+   dock refused before starting. The dock now parses **every library** the
+   client knows (`DozDock.libraries`: every `libraryfolders.vdf` on C:),
+   resolves each manifest relative to its own library, lists games across the
+   union with shared-only records filtered out, and unions the depots each
+   library lent. The same caps and path-safety rules as Madeira's dock apply
+   unchanged (16 libraries, 2000 manifests, `c:/` only, one safe folder name
+   per record).
+2. **A slow client start read as a stall.** The session HUD now watches
+   `C:\madeira-dock.txt` while the dock runs (every 0.5 s,
+   `DozDock.progressStage`) and shows the live stage — handoff accepted,
+   connection, offline logon, updates, launch — as a chip; a refusal or
+   failure reads in plain words (`humanFailure`) in the HUD instead of a
+   silent black screen. Report files are still deleted after the session, and
+   the chip clears with it.
+
+### Full Steam support: the client as a session, and imports
+
+The other half of "full steam support": Valve's client is now usable for what
+Windoz's own downloader cannot do — buying, updating, and installing titles
+whose manifests aren't reachable headlessly.
+
+- **Open Steam** (Steam library sheet → Steam client card): starts
+  `steam.exe` from the installed client components as an ordinary session
+  through the engine (`.steamDesktop`), signed in with the stored token, so
+  the full client opens for browsing, buying and installing.
+- **Add installed games**: scans all Steam libraries inside the prefix (the
+  new `Sources/Steam/Content/SteamClientLibrary.swift`) for titles Valve's
+  client installed, adds or completes their library entries (new entries
+  default to the Doz Dock mode so they launch through the client), and fetches
+  missing artwork from Steam's CDN.
+- The client card reports the prepared state (`steamclient64.dll` present),
+  installs the pinned client components with live stage text, and then offers
+  Open Steam and Add installed games. Nothing about the client path is
+  simulated: it is Valve's own client, Valve's own components.
+
+### The session: a settings menu, three control layouts, performance stats
+
+Observed (owner): "add a settings icon when launching a game ... changeing
+from that menu add a default layout for kbm and a xbox controller layour and
+a ps5 controller layout add a toggle for perforamnce stats".
+
+The session HUD has a gear button that opens the in-game menu
+(`SessionControls.swift`, `SessionPerformance.swift`):
+
+- **Controls** — Keyboard & mouse (default), Xbox, PlayStation 5. Per game,
+  stored with the game's settings (Game page → Controls shows the same
+  picker), changeable while the game runs:
+  - *Keyboard & mouse*: the session keeps the key row, touch stays the game's
+    own pointer, and a connected controller is translated to keyboard and
+    mouse — WASD on the left stick (dead zone 0.35), the mouse on the right
+    stick (1500 px/s, squared response), the template keys on the buttons —
+    the game is never told a controller exists.
+  - *Xbox / PlayStation 5*: a physical controller and the on-screen pad merge
+    into one XInput snapshot (dead zone 7849, the engine's value) published
+    to slot 0 via `winios_gamepad_set_state`; the on-screen pad is drawn with
+    Xbox or DualSense glyphs and the key row hides. The PS5 layout is honest
+    about what it is: the same Xbox-style pad with DualSense art — Windoz
+    does not present a DualSense.
+- **Performance stats** — one persisted toggle (all games). The overlay
+  samples the engine's own presented-frame counter at 4 Hz and shows: FPS
+  (smoothed), 1 % and 0.1 % lows (percentiles of the last minute of frame
+  times), RAM (the app's own physical footprint), CPU (process thread times
+  as a share of all cores, ported from Madeira's CPUMeter), and battery
+  (level, plus the change since the session started). Every number is
+  measured on the device; nothing is estimated.
+
+### The UI: a modern pass, in the same direction
+
+Observed (owner): "remake the ui to look more modern last redesign you did
+what a step in the right place". 0.7.0's compact-native direction stays; this
+round is a polish pass, not another rebuild:
+
+- One gradient, used only for primary actions — Play buttons and the featured
+  card's play control — the accent sweeping into indigo. Everything else
+  stays flat system colour; no glow, no wallpaper.
+- **Home** now opens with a full-width featured card: the most recently
+  played game drawn with its hero art, title, last-played line and one play
+  affordance; the rest of "Continue playing" follows as the compact shelf,
+  renamed "Recently played".
+- **Library** gained a system search field and a row of filter chips
+  (All / Imported / Steam / Epic) that compose with search.
+- The Game page's Controls section is the new layout picker (the old custom
+  touch-overlay editor's layouts were never read by the session, and its
+  stale note said so; the picker replaces it).
+
+### Verification in this round
+
+- One commit on `ci-080` carries the whole round; the four small helper
+  scripts the round used (`check-build.*`, `watcher-*`) stay untracked.
+- The verification ledger (typecheck run, IPA run, release, keeper IPA) is
+  recorded in the README, as with every previous round.
+- **No device claims.** The owner's next run is the judge: the Settings →
+  Memory page must write `Documents/madeira.cfg` (the log says which tier the
+  launch found), a Doz Dock launch must show the stage chip advancing, Open
+  Steam must reach the client's own window, the ⚙ menu must switch layouts,
+  and the stats overlay must show all six numbers. The checklist is in the
+  README.
