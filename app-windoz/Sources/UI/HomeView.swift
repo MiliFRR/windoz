@@ -1,138 +1,155 @@
 import SwiftUI
+import UIKit
 
-/// The console home screen: a large cover-art carousel, then Continue Playing
-/// and Recently Added rows. Controller-driven and VoiceOver-labelled.
+/// Home is a normal iPhone shelf now: "Continue playing", "Recently added",
+/// and a compact list of the rest. No wordmark, no hero carousel, no glow.
 struct HomeView: View {
     @EnvironmentObject private var library: GameLibrary
     @ObservedObject private var controller = ControllerManager.shared
     @StateObject private var focus = ConsoleFocus()
     @State private var selection: InstalledGame?
 
-    private var heroGames: [InstalledGame] {
-        library.recentlyAdded.isEmpty ? library.games : library.recentlyAdded
-    }
+    private var continueGames: [InstalledGame] { library.continuePlaying }
+    private var recentGames: [InstalledGame] { library.recentlyAdded }
 
     var body: some View {
-        ZStack {
-            ConsoleBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    if heroGames.isEmpty {
-                        emptyState
-                    } else {
-                        carousel
-                        continueRow
-                        if !library.recentlyAdded.isEmpty { recentlyAddedRow }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 26) {
+                if library.games.isEmpty {
+                    emptyState
+                } else {
+                    if !continueGames.isEmpty {
+                        shelf(title: "Continue playing", games: continueGames,
+                              width: Metrics.heroTileWidth, height: Metrics.heroTileHeight)
                     }
+                    if !recentGames.isEmpty {
+                        shelf(title: "Recently added", games: recentGames,
+                              width: Metrics.shelfTileWidth, height: Metrics.shelfTileHeight)
+                    }
+                    allGames
                 }
-                .padding(.vertical, 14)
             }
+            .padding(.horizontal, Metrics.pagePadding)
+            .padding(.vertical, 8)
         }
+        .background(ConsoleBackground())
+        .navigationTitle("Home")
         .navigationDestination(item: $selection) { game in
             GameDetailView(gameID: game.id)
         }
         .onAppear {
-            focus.count = heroGames.count
+            focus.count = continueGames.count
             controller.onButton = handle
         }
         .onDisappear { controller.onButton = nil }
-        .onChange(of: heroGames.count) { _, newValue in
+        .onChange(of: continueGames.count) { _, newValue in
             focus.count = newValue
             focus.reset()
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Shelves
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Windoz")
-                .font(.system(size: 30, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
-                .shadow(color: Theme.accent.opacity(0.45), radius: 10)
-            Text("Your Windows games, on your phone")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.55))
-        }
-        .padding(.horizontal, Metrics.pagePadding)
-    }
-
-    private var carousel: some View {
-        ScrollViewReader { proxy in
+    private func shelf(title: String, games: [InstalledGame], width: CGFloat, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: title)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(Array(heroGames.enumerated()), id: \.element.id) { index, game in
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(games) { game in
                         Button { open(game) } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: Metrics.cardCorner)
-                                    .frame(width: Metrics.heroTileWidth, height: Metrics.heroTileHeight)
-                                    .shadow(color: .black.opacity(0.55), radius: 12, y: 8)
-                                    .scaleEffect(focus.index == index ? 1.0 : 0.94)
-                                    .animation(.spring(response: 0.3, dampingFraction: 0.8), value: focus.index)
-                                HStack {
-                                    Text(game.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                                    Spacer()
-                                    compatBadge(game.compatibility)
+                            VStack(alignment: .leading, spacing: 6) {
+                                CoverArtView(title: game.title, imagePath: game.coverArtPath,
+                                             corner: Metrics.tileCorner)
+                                    .frame(width: width, height: height)
+                                    .overlay {
+                                        if isFocused(game) {
+                                            RoundedRectangle(cornerRadius: Metrics.tileCorner, style: .continuous)
+                                                .strokeBorder(Theme.accent, lineWidth: 2)
+                                        }
+                                    }
+                                Text(game.title)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .frame(width: width, alignment: .leading)
+                                if let last = game.lastPlayedAt {
+                                    Text(Self.relativeText(last))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: width, alignment: .leading)
                                 }
-                                .frame(width: Metrics.heroTileWidth)
                             }
                         }
                         .buttonStyle(.plain)
-                        .id(index)
                         .accessibilityLabel("\(game.title), \(game.compatibility.title)")
                     }
                 }
-                .padding(.horizontal, Metrics.pagePadding)
+                .padding(.vertical, 2)
             }
-            .onChange(of: focus.index) { _, newValue in
-                withAnimation { proxy.scrollTo(newValue, anchor: .center) }
-            }
-        }
-        .frame(height: 330)
-    }
-
-    @ViewBuilder private var continueRow: some View {
-        let items = library.continuePlaying
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionHeader(title: "Continue playing").padding(.horizontal, Metrics.pagePadding)
-                row(items)
-            }
+            .scrollClipDisabled()
         }
     }
 
-    @ViewBuilder private var recentlyAddedRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Recently added").padding(.horizontal, Metrics.pagePadding)
-            row(library.recentlyAdded)
-        }
-    }
-
-    private func row(_ games: [InstalledGame]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(games) { game in
-                    Button { open(game) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: Metrics.tileCorner)
-                                .frame(width: Metrics.shelfTileWidth, height: Metrics.shelfTileHeight)
-                            Text(game.title).font(.caption).foregroundStyle(.white.opacity(0.85))
-                                .lineLimit(1).frame(width: Metrics.shelfTileWidth, alignment: .leading)
-                            if let last = game.lastPlayedAt {
-                                Text(Self.relativeText(last)).font(.caption2).foregroundStyle(.white.opacity(0.4))
-                            }
-                        }
+    /// The rest of the library as a plain list, the way a first-party library
+    /// tab draws it. The full grid lives in the Library tab.
+    private var allGames: some View {
+        let shown = Array(library.games.prefix(8))
+        return VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "All games")
+            VStack(spacing: 0) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, game in
+                    Button { open(game) } label: { row(game) }
+                        .buttonStyle(.plain)
+                    if index < shown.count - 1 {
+                        Divider().padding(.leading, 58)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, Metrics.pagePadding)
+            .padding(.horizontal, 14)
+            .background(Color(uiColor: .secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
+            if library.games.count > shown.count {
+                Text("Showing \(shown.count) of \(library.games.count). The Library tab has the rest.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
-    /// Static "2m ago"-style text. `Text(_:style:)` re-renders on a system
-    /// clock while visible; a formatted string costs nothing between updates.
+    private func row(_ game: InstalledGame) -> some View {
+        HStack(spacing: 12) {
+            CoverArtView(title: game.title, imagePath: game.coverArtPath, corner: 6)
+                .frame(width: 44, height: 58)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(game.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(game.lastPlayedAt.map { "Played \(Self.relativeText($0))" } ?? "Not played yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No games yet", systemImage: "gamecontroller")
+        } description: {
+            Text("Import a game from Files, or connect a store in the Library tab. DRM-free games run best.")
+        }
+        .padding(.top, 40)
+    }
+
+    // MARK: - Helpers
+
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -143,37 +160,14 @@ struct HomeView: View {
         relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    private var emptyState: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("No games yet").font(.headline).foregroundStyle(.white)
-                Text("Add a game from Files, or connect a store in the Library tab. DRM-free games run best.")
-                    .font(.footnote).foregroundStyle(.white.opacity(0.6))
-            }
-        }
-        .padding(.horizontal, Metrics.pagePadding)
-    }
-
-    private func compatBadge(_ status: CompatibilityStatus) -> some View {
-        Badge(text: status.title, systemImage: "checkmark.seal", tint: tint(status))
-    }
-
-    private func tint(_ status: CompatibilityStatus) -> Color {
-        switch status {
-        case .verified: return Theme.ok
-        case .playable: return Theme.accent
-        case .runsPoorly: return Theme.warn
-        case .unsupported: return Theme.bad
-        case .unknown: return .gray
-        }
+    private func isFocused(_ game: InstalledGame) -> Bool {
+        guard controller.connectedName != nil, continueGames.indices.contains(focus.index) else { return false }
+        return continueGames[focus.index].id == game.id
     }
 
     // MARK: - Controller
 
     private func handle(_ button: ConsoleButton) {
-        // While a game page is pushed, the shelf underneath must stay quiet:
-        // a stray Select used to re-point the navigation at a different game.
-        // Back is the way out, mirroring the nav bar.
         if selection != nil {
             if case .back = button { selection = nil }
             return
@@ -182,8 +176,7 @@ struct HomeView: View {
         case .left: focus.move(-1)
         case .right: focus.move(1)
         case .select:
-            let games = heroGames
-            if games.indices.contains(focus.index) { open(games[focus.index]) }
+            if continueGames.indices.contains(focus.index) { open(continueGames[focus.index]) }
         default: break
         }
     }

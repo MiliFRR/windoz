@@ -12,7 +12,7 @@ struct LibraryView: View {
     @ObservedObject private var steamStore = StoreRegistry.shared.steam
     @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
-    private let columns = [GridItem(.adaptive(minimum: 148), spacing: 14)]
+    private let columns = [GridItem(.adaptive(minimum: 100, maximum: 140), spacing: 12)]
 
     var body: some View {
         let _ = BootTrace.once("library body")
@@ -70,17 +70,17 @@ struct LibraryView: View {
     // MARK: - Games
 
     @ViewBuilder private var gamesSection: some View {
-        SectionHeader(title: "My games")
+        SectionHeader(title: "Games")
         if library.games.isEmpty {
             GlassCard {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Nothing installed").font(.headline).foregroundStyle(.white)
+                    Text("Nothing installed").font(.headline)
                     Text("Use the + button to import a game, or connect a store below.")
-                        .font(.footnote).foregroundStyle(.white.opacity(0.6))
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
         } else {
-            LazyVGrid(columns: columns, spacing: 16) {
+            LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(library.games) { game in
                     Button { open(game) } label: { tile(game) }
                         .buttonStyle(.plain)
@@ -95,16 +95,17 @@ struct LibraryView: View {
     }
 
     private func tile(_ game: InstalledGame) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             CoverArtView(title: game.title, imagePath: game.coverArtPath)
                 .aspectRatio(3.0 / 4.0, contentMode: .fit)
-            Text(game.title).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-            HStack(spacing: 6) {
-                Badge(text: game.compatibility.title, tint: compatTint(game.compatibility))
-                if let ac = game.antiCheat {
-                    Badge(text: ac.kind.title, systemImage: "shield.lefthalf.filled", tint: Theme.warn)
-                }
-            }
+            Text(game.title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(game.compatibility.title)
+                .font(.caption2)
+                .foregroundStyle(compatTint(game.compatibility))
+                .lineLimit(1)
         }
     }
 
@@ -118,7 +119,7 @@ struct LibraryView: View {
                      extraAction: extraAction(for: summary))
         }
         Text("Steam signs in natively, installs owned games into the Windows environment, and shows each game's achievements and friends on its page. Epic signs in with a device code you approve on Epic's own site — no password ever touches the app — and its library uses the launcher sign-in. The other stores will run their official launcher in Wine once that is ported; until then they say so.")
-            .font(.caption2).foregroundStyle(.white.opacity(0.4))
+            .font(.caption2).foregroundStyle(.secondary)
     }
 
     /// The per-store row button that opens the store's own sheet, when signing
@@ -226,41 +227,28 @@ struct StoreRow: View {
     var body: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 10) {
                     StoreIcon(id: summary.id, size: 30)
-                    Text(summary.title).font(.headline).foregroundStyle(.white)
+                    Text(summary.title).font(.headline)
                     Spacer()
                     authBadge
                 }
                 Text(summary.summary)
-                    .font(.footnote).foregroundStyle(.white.opacity(0.6))
-                HStack(spacing: 8) {
-                    Badge(text: "Library", systemImage: "books.vertical",
-                          tint: summary.capability.library ? Theme.ok : .gray)
-                    Badge(text: "Downloads: \(summary.capability.downloads.title)",
-                          systemImage: "arrow.down.circle",
-                          tint: summary.capability.downloads == .native ? Theme.ok : Theme.warn)
-                    if summary.capability.runtimeLauncherNeeded {
-                        Badge(text: "Launcher in Wine", systemImage: "shippingbox", tint: Theme.warn)
-                    }
-                }
-                HStack(spacing: 12) {
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text(capabilityLine)
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
                     if summary.authState.isSignedIn, let extraAction {
-                        // The library action pops: a filled capsule is the
-                        // one thing to do on a connected store.
                         Button(action: extraAction.handler) {
                             Label(extraAction.title, systemImage: "books.vertical.fill")
-                                .font(.footnote.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(Capsule().fill(Theme.accent))
-                                .foregroundStyle(.white)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
                     if summary.capability.signIn != .none, !summary.authState.isSignedIn {
                         Button("Sign in") { registry.signIn(summary.id) }
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                     }
                     Spacer()
                     if summary.authState.isSignedIn {
@@ -272,14 +260,21 @@ struct StoreRow: View {
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
-                                .font(.footnote.weight(.semibold))
+                                .font(.body)
                         }
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(.secondary)
                         .accessibilityLabel("\(summary.title) account actions")
                     }
                 }
             }
         }
+    }
+
+    private var capabilityLine: String {
+        var parts = [summary.capability.library ? "Library" : "No library"]
+        parts.append("Downloads: \(summary.capability.downloads.title)")
+        if summary.capability.runtimeLauncherNeeded { parts.append("Launcher in Wine") }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var authBadge: some View {

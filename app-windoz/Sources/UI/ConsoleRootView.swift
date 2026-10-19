@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The console shell. Four destinations, dark by default, controller-friendly.
+/// The app shell: four standard tabs over a NavigationStack each.
 struct ConsoleRootView: View {
     @EnvironmentObject private var engine: WindozEngine
     @EnvironmentObject private var library: GameLibrary
@@ -108,12 +108,13 @@ struct ConsoleRootView: View {
                     .font(.footnote.weight(.semibold))
                 Spacer()
             }
-            .foregroundStyle(.black)
+            .foregroundStyle(Theme.warn)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Theme.warn)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.warn.opacity(0.25)))
             .padding(.horizontal, 12)
+            .padding(.top, 4)
         }
         .buttonStyle(.plain)
     }

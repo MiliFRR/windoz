@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Cover art for a game. Falls back to a generated gradient tile with the
-/// title's initials so the shelf never shows an empty grey box.
+/// Cover art for a game. Falls back to a generated tile with the title's
+/// initials so the shelf never shows an empty grey box.
 ///
 /// The image is decoded off the main thread through `CoverArtCache` (idle-heat
 /// fix): re-rendering the shelf no longer re-reads every tile from disk.
@@ -22,15 +22,11 @@ struct CoverArtView: View {
             } else {
                 Theme.tileGradient
                 Text(initials)
-                    .font(.system(size: 26, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .shadow(radius: 4)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .strokeBorder(.white.opacity(0.10)))
         .task(id: imagePath) {
             guard let imagePath, !imagePath.isEmpty else {
                 image = nil
@@ -51,22 +47,18 @@ struct CoverArtView: View {
 /// own initial(s); the colours are Windoz's.
 struct StoreIcon: View {
     let id: StoreID
-    var size: CGFloat = 44
+    var size: CGFloat = 36
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+            RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
                 .fill(LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing))
             Text(monogram)
                 .font(.system(size: size * (monogram.count > 1 ? 0.34 : 0.44),
-                              weight: .heavy, design: .rounded))
-                .foregroundStyle(.white.opacity(0.92))
-                .shadow(radius: 2)
+                              weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
         }
         .frame(width: size, height: size)
-        .overlay(
-            RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                .strokeBorder(.white.opacity(0.12)))
         .accessibilityLabel(id.title)
     }
 
@@ -99,21 +91,21 @@ struct StoreIcon: View {
     }
 }
 
-/// A small capsule badge (store, anti-cheat, compatibility).
+/// A small badge (store, anti-cheat, compatibility). Plain and compact — no
+/// capsule outline, no glow.
 struct Badge: View {
     let text: String
     var systemImage: String?
     var tint: Color = .white
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let systemImage { Image(systemName: systemImage).font(.system(size: 10, weight: .bold)) }
-            Text(text).font(.system(size: 11, weight: .semibold))
+        HStack(spacing: 3) {
+            if let systemImage { Image(systemName: systemImage).font(.caption2.weight(.semibold)) }
+            Text(text).font(.caption2.weight(.medium))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(tint.opacity(0.18)))
-        .overlay(Capsule().strokeBorder(tint.opacity(0.35)))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
         .foregroundStyle(tint)
     }
 }
@@ -123,12 +115,11 @@ struct HealthDot: View {
     var body: some View {
         Circle()
             .fill(Theme.healthColor(health))
-            .frame(width: 9, height: 9)
-            .shadow(color: Theme.healthColor(health).opacity(0.7), radius: 4)
+            .frame(width: 8, height: 8)
     }
 }
 
-/// The console's primary action button.
+/// The app's primary action: a standard filled iOS button, not a console bar.
 struct PrimaryButton: View {
     let title: String
     var systemImage: String = "play.fill"
@@ -138,26 +129,22 @@ struct PrimaryButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 if busy {
                     ProgressView().tint(.white)
                 } else {
                     Image(systemName: systemImage)
                 }
-                Text(title)
-                    .font(.system(.headline, design: .rounded))
-                    .tracking(1.5)
+                Text(title).font(.headline)
                 Spacer()
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 15)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 50)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(LinearGradient(colors: [Theme.accent, Theme.accent.opacity(0.55)],
-                                         startPoint: .leading, endPoint: .trailing)))
-            .opacity(enabled && !busy ? 1 : 0.5)
+                RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous)
+                    .fill(Theme.accent))
+            .opacity(enabled && !busy ? 1 : 0.45)
         }
         .buttonStyle(.plain)
         .disabled(!enabled || busy)
@@ -165,13 +152,14 @@ struct PrimaryButton: View {
     }
 }
 
+/// A section title in the normal iOS sense: sentence case, headline weight.
 struct SectionHeader: View {
     let title: String
     var body: some View {
-        Text(title.uppercased())
-            .font(.caption.weight(.bold))
-            .tracking(2.2)
-            .foregroundStyle(.white.opacity(0.5))
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -179,18 +167,18 @@ struct SectionHeader: View {
 struct InfoRow: View {
     let label: String
     let value: String
-    var valueColor: Color = .white.opacity(0.55)
+    var valueColor: Color = .secondary
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(.white.opacity(0.85))
+            Text(label).foregroundStyle(.primary)
             Spacer(minLength: 12)
             Text(value)
                 .foregroundStyle(valueColor)
                 .multilineTextAlignment(.trailing)
         }
         .padding(.vertical, 6)
-        .overlay(Divider().overlay(.white.opacity(0.08)), alignment: .bottom)
+        .overlay(Divider(), alignment: .bottom)
     }
 }
 
@@ -203,14 +191,14 @@ struct StatusLine: View {
         HStack(spacing: 8) {
             HealthDot(health: health)
             Text(text)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.8))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
             Spacer(minLength: 0)
         }
     }
 }
 
-/// The game page's hero banner — decoded off the main thread through the same
+/// The game page's hero art, decoded off the main thread through the same
 /// cache the tiles use, so opening a page never blocks on disk I/O.
 struct HeroArtView: View {
     let path: String?
@@ -242,7 +230,7 @@ struct HeroArtView: View {
 extension LaunchStep {
     var symbol: String {
         switch state {
-        case .pending: return "circle.dotted"
+        case .pending: return "circle"
         case .running: return "arrow.triangle.2.circlepath"
         case .done: return "checkmark.circle.fill"
         case .failed: return "xmark.octagon.fill"
@@ -252,11 +240,11 @@ extension LaunchStep {
 
     var tint: Color {
         switch state {
-        case .pending: return .white.opacity(0.35)
+        case .pending: return .secondary
         case .running: return Theme.accent
         case .done: return Theme.ok
         case .failed: return Theme.bad
-        case .skipped: return .white.opacity(0.45)
+        case .skipped: return .secondary
         }
     }
 }

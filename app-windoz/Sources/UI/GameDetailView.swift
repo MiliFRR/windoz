@@ -42,7 +42,7 @@ struct GameDetailView: View {
             if let game {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        hero(game)
+                        header(game)
                         playButton(game)
                         launchModeRow(game)
                         achievementsSummary(game)
@@ -105,29 +105,38 @@ struct GameDetailView: View {
 
     // MARK: - Header pieces
 
-    private func hero(_ game: InstalledGame) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            HeroArtView(path: game.heroArtPath)
-            .frame(height: Metrics.bannerHeight)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
-            .overlay(
-                LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .center, endPoint: .bottom)
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous)))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(game.title)
-                    .font(.system(size: 22, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(game.execName).font(.caption2).foregroundStyle(.white.opacity(0.6))
+    private func header(_ game: InstalledGame) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            CoverArtView(title: game.title,
+                         imagePath: game.coverArtPath ?? game.heroArtPath,
+                         corner: 10)
+                .frame(width: 82, height: 110)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(game.execName)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(game.compatibility.title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(compatTint(game.compatibility))
+                if let antiCheat = game.antiCheat {
+                    Label(antiCheat.kind.title, systemImage: "shield.lefthalf.filled")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.warn)
+                }
+                if game.playtimeSeconds > 0 {
+                    Text("Played \(game.playtimeSeconds.playtimeDescription)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(14)
+            Spacer(minLength: 0)
         }
     }
 
     private func playButton(_ game: InstalledGame) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            PrimaryButton(title: "PLAY", systemImage: "play.fill",
+            PrimaryButton(title: "Play", systemImage: "play.fill",
                           busy: launching,
                           enabled: engine.status.jit.isReady && !engine.engineWedged) {
                 play(game)

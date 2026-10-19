@@ -12,24 +12,20 @@ struct SettingsView: View {
     @ObservedObject private var jit = JITCoordinator.shared
 
     var body: some View {
-        ZStack {
-            ConsoleBackground()
-            List {
-                engineSection
-                accountsSection
-                if AppEnvironment.isLiveContainer {
-                    liveContainerSection
-                }
-                Section {
-                    NavigationLink {
-                        AdvancedSettingsView()
-                    } label: {
-                        Label("Advanced", systemImage: "wrench.and.screwdriver")
-                    }
-                }
-                aboutSection
+        List {
+            engineSection
+            accountsSection
+            if AppEnvironment.isLiveContainer {
+                liveContainerSection
             }
-            .scrollContentBackground(.hidden)
+            Section {
+                NavigationLink {
+                    AdvancedSettingsView()
+                } label: {
+                    Label("Advanced", systemImage: "wrench.and.screwdriver")
+                }
+            }
+            aboutSection
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $jit.showSetup) {
@@ -176,16 +172,12 @@ struct AdvancedSettingsView: View {
     @State private var coreMessage: String?
 
     var body: some View {
-        ZStack {
-            ConsoleBackground()
-            List {
-                quitSection
-                prefixSection
-                runtimeSection
-                downloadSection
-                diagnosticsSection
-            }
-            .scrollContentBackground(.hidden)
+        List {
+            quitSection
+            prefixSection
+            runtimeSection
+            downloadSection
+            diagnosticsSection
         }
         .navigationTitle("Advanced")
         .onAppear { installer.refresh(prefix: engine.prefix) }

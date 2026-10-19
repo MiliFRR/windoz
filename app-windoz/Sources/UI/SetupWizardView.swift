@@ -15,28 +15,25 @@ struct SetupWizardView: View {
     private let stepTitles = ["Just-in-time code", "Memory & storage", "Windows runtimes", "Ready"]
 
     var body: some View {
-        ZStack {
-            ConsoleBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    ProgressView(value: Double(step + 1), total: Double(stepTitles.count))
-                        .tint(Theme.accent)
-                    Text(stepTitles[step])
-                        .font(.system(size: 24, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                ProgressView(value: Double(step + 1), total: Double(stepTitles.count))
+                    .tint(Theme.accent)
+                Text(stepTitles[step])
+                    .font(.title2.weight(.semibold))
 
-                    switch step {
-                    case 0: jitStep
-                    case 1: memoryStep
-                    case 2: runtimeStep
-                    default: readyStep
-                    }
-
-                    navigation
+                switch step {
+                case 0: jitStep
+                case 1: memoryStep
+                case 2: runtimeStep
+                default: readyStep
                 }
-                .padding(Metrics.pagePadding)
+
+                navigation
             }
+            .padding(Metrics.pagePadding)
         }
+        .background(ConsoleBackground())
         .navigationTitle("Setup")
         .sheet(isPresented: $jit.showSetup) {
             JITSetupView().presentationDetents([.large]).presentationDragIndicator(.visible)
@@ -53,16 +50,15 @@ struct SetupWizardView: View {
         VStack(alignment: .leading, spacing: 14) {
             StatusLine(health: engine.status.jit, text: jitSummary)
             Text(AppEnvironment.jitSituation)
-                .font(.footnote).foregroundStyle(.white.opacity(0.6))
+                .font(.footnote).foregroundStyle(.secondary)
             if AppEnvironment.isLiveContainer {
                 NavigationLink {
                     LiveContainerView()
                 } label: {
                     Label("LiveContainer setup", systemImage: "shippingbox")
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
             }
             if !engine.status.jit.isReady {
                 Button {
@@ -70,18 +66,16 @@ struct SetupWizardView: View {
                 } label: {
                     Label(jit.resolvedMethod == .builtIn ? "Enable JIT (built-in helper)" : "Enable JIT with StikDebug",
                           systemImage: "bolt.fill")
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderedProminent)
                 Button {
                     jit.showSetup = true
                 } label: {
                     Label("JIT setup", systemImage: "bolt.badge.clock")
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
             }
             if let why = engine.status.jit.reason {
                 Text(why).font(.caption).foregroundStyle(Theme.bad.opacity(0.9))
