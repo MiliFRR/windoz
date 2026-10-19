@@ -23,7 +23,7 @@ enum CoverArtCache {
         guard !path.isEmpty else { return nil }
         return await withCheckedContinuation { continuation in
             queue.async {
-                let key = cacheKey(path)
+                let key = cacheKey(path, maxPixel: maxPixel)
                 if let cached = cache.object(forKey: key as NSString) {
                     continuation.resume(returning: cached)
                     return
@@ -37,13 +37,13 @@ enum CoverArtCache {
 
     /// The key includes the file's modification date, so the art backfill
     /// replacing a file invalidates the entry without any bookkeeping.
-    private static func cacheKey(_ path: String) -> String {
+    private static func cacheKey(_ path: String, maxPixel: CGFloat) -> String {
         var stamp = 0.0
         if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
            let modified = attrs[.modificationDate] as? Date {
             stamp = modified.timeIntervalSince1970
         }
-        return "\(path)#\(stamp)"
+        return "\(path)#\(stamp)#\(Int(maxPixel))"
     }
 
     private static func decode(path: String, maxPixel: CGFloat) -> UIImage? {

@@ -10,6 +10,10 @@ struct CoverArtView: View {
     let title: String
     var imagePath: String?
     var corner: CGFloat = Metrics.tileCorner
+    /// Longest-edge decode bound. Tiles are ~124 pt wide at 3x, so 512 px is
+    /// already above their rendered size; decoding at 1024 wasted memory and
+    /// jetsam headroom for no visible gain.
+    var maxPixel: CGFloat = 512
 
     @State private var image: UIImage?
 
@@ -32,7 +36,7 @@ struct CoverArtView: View {
                 image = nil
                 return
             }
-            image = await CoverArtCache.image(at: imagePath)
+            image = await CoverArtCache.image(at: imagePath, maxPixel: maxPixel)
         }
     }
 
@@ -136,7 +140,6 @@ struct PrimaryButton: View {
                     Image(systemName: systemImage)
                 }
                 Text(title).font(.headline)
-                Spacer()
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
