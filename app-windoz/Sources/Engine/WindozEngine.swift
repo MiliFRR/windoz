@@ -377,11 +377,11 @@ final class WindozEngine: ObservableObject {
             log.append("[session] presentation surface ready after "
                        + String(format: "%.1f", Date().timeIntervalSince(surfaceWaitStart)) + " s.")
 
-            // 7. Start the engine core and the guest process on the session queue:
-            //    those calls block (one of them waits up to 60 s for the service
-            //    process), so they stay off the main thread — and off the core
-            //    queue, which a blocking diagnostics stop can hold.
-            startStep(LaunchStepID.service)
+            // 7. Start the guest process on the session queue: the JIT pool,
+            //    Wine service and guest calls block (the service waits up to
+            //    60 s), so they stay off the main thread — and off the core
+            //    queue, which a blocking diagnostics stop can hold. The guest
+            //    path marks its own pool and service steps in execution order.
             let settings = game.settings
             let guardBox = ContinuationGuard()
             guestStartGuard = guardBox
@@ -414,7 +414,6 @@ final class WindozEngine: ObservableObject {
                             self.lastStageLine = "Starting the game…"
                             self.startSessionPolling()
                             self.log.append("[session] guest process started.")
-                            self.finishStep(LaunchStepID.service)
                             self.finishStep(LaunchStepID.guest, detail: "The game's process thread is running.")
                             self.startStep(LaunchStepID.frame, detail: "Waiting for the first frame…")
                         }
@@ -602,11 +601,10 @@ final class WindozEngine: ObservableObject {
         log.append("[session] launch cancelled from the start screen.")
     }
 
-    /// Runs on the session queue. Brings the Wine service process and the CPU
-    /// translator up if they are not already, sets the frame pacing, resets
-    /// the engine's exit report, then starts the guest process thread. Every
-    /// step updates the session screen's line so the visible stage is always
-    /// the real one.
+    /// Runs on the session queue. Grants the JIT pool, detaches the debugger,
+    /// brings the Wine service up, sets the frame pacing, resets the engine's
+    /// exit report, then starts the guest process thread. Every step updates
+    /// the session screen's line so the visible stage is always the real one.
     private func startGuestProcess(settings: GameSettings) throws {
         guard !sessionAbandoned else { throw EngineError.sessionCancelled }
         // Frame pacing before the process exists — the pinned front end
@@ -631,6 +629,7 @@ final class WindozEngine: ObservableObject {
         setStage("Detaching the debugger…")
         JITPool.detachDebugger()
 
+        startStep(LaunchStepID.service, detail: "Waiting for Wine's service process.")
         if wineserver_is_running() == 0 {
             setStage("Starting the Windows service…")
             guard wineserver_start(prefix.url.path) == 0 else { throw EngineError.wineserverStartFailed }
@@ -643,6 +642,7 @@ final class WindozEngine: ObservableObject {
         } else {
             setStage("The Windows service is already up.")
         }
+        finishStep(LaunchStepID.service, detail: "Wine's service process is ready.")
         // An abandoned attempt (stall budget or Cancel) must not quietly
         // start the guest when the pool finally answers.
         guard !sessionAbandoned else { throw EngineError.sessionCancelled }
@@ -662,9 +662,9 @@ final class WindozEngine: ObservableObject {
         log.append("[session] \(text)")
         DispatchQueue.main.async {
             if self.phase == .starting { self.sessionDetail = text }
-            // The start checklist's live line follows the same stage text.
-            if let index = self.launchSteps.firstIndex(where: { $0.id == LaunchStepID.service }),
-               self.launchSteps[index].state == .running {
+            // The checklist's live line belongs to whichever step is running;
+            // the service, pool and guest steps run one at a time.
+            if let index = self.launchSteps.firstIndex(where: { $0.state == .running }) {
                 self.launchSteps[index].detail = text
             }
         }
