@@ -99,6 +99,8 @@ final class SessionSurfaceView: UIView {
 
     private var primaryTouch: UITouch?
     private lazy var hud = SessionHUDView()
+    private lazy var controls = SessionPadOverlayView()
+    private lazy var stats = SessionPerformanceView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -133,6 +135,7 @@ final class SessionSurfaceView: UIView {
             window.addSubview(host)
         }
         host.isHidden = false
+        attachControls(to: window)
         attachHUD(to: window)
         applyLayout()
 
@@ -149,10 +152,17 @@ final class SessionSurfaceView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         applyLayout()
-        // The host re-adds itself on its own move events; the overlay is
-        // pinned back to the top on every layout so it cannot fall under it.
-        if let window, hud.superview === window {
-            window.bringSubviewToFront(hud)
+        // The host re-adds itself on its own move events; the controls and the
+        // overlay are pinned back to the top on every layout so they cannot
+        // fall under it.
+        if let window {
+            if stats.superview === window {
+                let safe = window.safeAreaInsets
+                stats.frame = CGRect(x: safe.left + 12, y: safe.top + 56, width: 208, height: 96)
+            }
+            if controls.superview === window { window.bringSubviewToFront(controls) }
+            if stats.superview === window { window.bringSubviewToFront(stats) }
+            if hud.superview === window { window.bringSubviewToFront(hud) }
         }
     }
 
@@ -178,10 +188,65 @@ final class SessionSurfaceView: UIView {
             guard case .starting = engine.phase, !engine.launchSteps.isEmpty else { return nil }
             return LaunchHUDState(steps: engine.launchSteps, elapsed: engine.sessionElapsed)
         }
+        hud.controlLayout = { [weak self] in self?.sessionLayout ?? .keyboardMouse }
+        hud.onControlLayoutChange = { [weak self] layout in self?.applyControlLayout(layout) }
+        hud.performanceEnabled = { SessionPerformanceView.isEnabled }
+        hud.onTogglePerformance = { [weak self] in self?.togglePerformance() }
+        hud.dockStage = {
+            let engine = WindozEngine.shared
+            if let failure = engine.dockFailure { return (failure, true) }
+            if let stage = engine.dockStage { return (stage, false) }
+            return nil
+        }
+    }
+
+    /// The session's control layout: the game's stored choice, read live so a
+    /// change made in the settings menu is what the next session starts with.
+    private var sessionLayout: ControlLayout {
+        guard let id = WindozEngine.shared.sessionGame?.id,
+              let game = GameLibrary.shared.game(withID: id) else { return .keyboardMouse }
+        return game.settings.controlLayout
+    }
+
+    private func attachControls(to window: UIWindow) {
+        if controls.superview !== window {
+            controls.removeFromSuperview()
+            window.addSubview(controls)
+        }
+        controls.frame = window.bounds
+        controls.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        controls.layout = sessionLayout
+        SessionGamepad.shared.activate(layout: sessionLayout)
+
+        if stats.superview !== window {
+            stats.removeFromSuperview()
+            window.addSubview(stats)
+        }
+        stats.isShown = SessionPerformanceView.isEnabled
+    }
+
+    private func applyControlLayout(_ layout: ControlLayout) {
+        controls.layout = layout
+        SessionGamepad.shared.setLayout(layout)
+        guard let id = WindozEngine.shared.sessionGame?.id,
+              let game = GameLibrary.shared.game(withID: id) else { return }
+        var settings = game.settings
+        settings.controlLayout = layout
+        GameLibrary.shared.setSettings(settings, for: id)
+    }
+
+    private func togglePerformance() {
+        let enabled = !SessionPerformanceView.isEnabled
+        SessionPerformanceView.isEnabled = enabled
+        stats.isShown = enabled
     }
 
     private func teardown() {
         WindozMetalHostView.shared.isHidden = true
+        SessionGamepad.shared.deactivate()
+        controls.removeFromSuperview()
+        stats.stop()
+        stats.removeFromSuperview()
         hud.removeFromSuperview()
     }
 
@@ -328,16 +393,31 @@ final class SessionHUDView: UIView {
     /// the game is running.
     var launchState: (() -> LaunchHUDState?)?
 
+    /// Session settings, read through closures on each tick so the engine and
+    /// the library stay the source of truth.
+    var controlLayout: (() -> ControlLayout)?
+    var onControlLayoutChange: ((ControlLayout) -> Void)?
+    var performanceEnabled: (() -> Bool)?
+    var onTogglePerformance: (() -> Void)?
+    /// Doz Dock's live progress (or the honest refusal while the session still
+    /// runs). Nil when the session is not a dock session.
+    var dockStage: (() -> (text: String, failed: Bool)?)?
+
     private let titleLabel = UILabel()
     private let statusLabel = HUDInsetLabel()
+    private let dockLabel = HUDInsetLabel()
+    private let gearButton = UIButton(type: .system)
     private let launchPanel = UIStackView()
     private let launchHeader = UILabel()
     private let launchElapsed = UILabel()
     private let launchCancel = UIButton(type: .system)
     private let launchRows = UIStackView()
+    private let keyRow = UIStackView()
     private var stepRows: [(id: String, glyph: UILabel, detail: UILabel)] = []
     private var keyButtons: [HUDKeyButton] = []
     private var timer: Timer?
+    private var settingsMenuLayout: ControlLayout?
+    private var settingsMenuPerformance: Bool?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -395,6 +475,20 @@ final class SessionHUDView: UIView {
         menuButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(menuButton)
 
+        // The settings gear: control layout and the performance overlay,
+        // changeable while the game runs. It sits left of the Menu button.
+        var gearConfig = UIButton.Configuration.gray()
+        gearConfig.image = UIImage(systemName: "gearshape.fill")
+        gearConfig.baseForegroundColor = .white
+        gearConfig.cornerStyle = .fixed
+        gearConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        gearButton.configuration = gearConfig
+        gearButton.showsMenuAsPrimaryAction = true
+        gearButton.accessibilityLabel = "Session settings"
+        gearButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(gearButton)
+        refreshSettingsMenu()
+
         // Bottom key row: movement on the left, actions on the right.
         let arrows = UIStackView(arrangedSubviews: [
             keyButton("←", 0x25), keyButton("↑", 0x26), keyButton("↓", 0x28), keyButton("→", 0x27),
@@ -404,7 +498,8 @@ final class SessionHUDView: UIView {
             keyButton("ESC", 0x1B), keyButton("TAB", 0x09), keyButton("ENTER", 0x0D), keyButton("SPACE", 0x20),
         ])
         actions.spacing = 8
-        let keyRow = UIStackView(arrangedSubviews: [arrows, actions])
+        keyRow.addArrangedSubview(arrows)
+        keyRow.addArrangedSubview(actions)
         keyRow.spacing = 22
         keyRow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(keyRow)
@@ -416,12 +511,34 @@ final class SessionHUDView: UIView {
             menuButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
             menuButton.centerYAnchor.constraint(equalTo: textStack.centerYAnchor),
 
+            gearButton.trailingAnchor.constraint(equalTo: menuButton.leadingAnchor, constant: -8),
+            gearButton.centerYAnchor.constraint(equalTo: menuButton.centerYAnchor),
+
             keyRow.centerXAnchor.constraint(equalTo: centerXAnchor),
             keyRow.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -8),
             keyRow.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
             keyRow.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
         ])
+        setUpDockLabel(textStack: textStack)
         setUpLaunchPanel(textStack: textStack)
+    }
+
+    /// Doz Dock's live line: what Valve's client is doing, or the refusal the
+    /// host has already reported. Sits under the status chip, above the launch
+    /// checklist, and never takes touches.
+    private func setUpDockLabel(textStack: UIStackView) {
+        dockLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        dockLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        dockLabel.numberOfLines = 3
+        dockLabel.isHidden = true
+        dockLabel.isUserInteractionEnabled = false
+        dockLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dockLabel)
+        NSLayoutConstraint.activate([
+            dockLabel.leadingAnchor.constraint(equalTo: textStack.leadingAnchor),
+            dockLabel.topAnchor.constraint(equalTo: textStack.bottomAnchor, constant: 8),
+            dockLabel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -80),
+        ])
     }
 
     /// The start checklist. Built once; its rows are rebuilt only when a new
@@ -458,7 +575,7 @@ final class SessionHUDView: UIView {
 
         NSLayoutConstraint.activate([
             launchPanel.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            launchPanel.topAnchor.constraint(equalTo: textStack.bottomAnchor, constant: 10),
+            launchPanel.topAnchor.constraint(equalTo: dockLabel.bottomAnchor, constant: 8),
             launchPanel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
         ])
     }
@@ -501,7 +618,60 @@ final class SessionHUDView: UIView {
     private func refresh() {
         let text = line?() ?? ""
         if statusLabel.text != text { statusLabel.text = text }
+        // The on-screen pad replaces the key row in the gamepad layouts; the
+        // hardware keyboard keeps working regardless.
+        let gamepad = controlLayout?().isGamepad ?? false
+        if keyRow.isHidden != gamepad { keyRow.isHidden = gamepad }
+        refreshDock()
+        refreshSettingsMenu()
         refreshLaunchPanel()
+    }
+
+    /// Doz Dock's live line. The engine reads the host's report every half
+    /// second; this only renders it. A refusal is drawn as a red chip so it
+    /// cannot be mistaken for a healthy launch.
+    private func refreshDock() {
+        guard let state = dockStage?() else {
+            if !dockLabel.isHidden { dockLabel.isHidden = true }
+            return
+        }
+        if dockLabel.text != state.text { dockLabel.text = state.text }
+        dockLabel.textColor = state.failed ? UIColor.white : UIColor.white.withAlphaComponent(0.92)
+        dockLabel.backgroundColor = state.failed
+            ? UIColor(red: 0.60, green: 0.12, blue: 0.12, alpha: 0.82)
+            : UIColor.black.withAlphaComponent(0.45)
+        dockLabel.isHidden = false
+    }
+
+    /// The gear menu is rebuilt only when a choice actually changed, so an
+    /// open menu is never replaced under the user's finger.
+    private func refreshSettingsMenu() {
+        let layout = controlLayout?() ?? .keyboardMouse
+        let performance = performanceEnabled?() ?? false
+        guard layout != settingsMenuLayout || performance != settingsMenuPerformance else { return }
+        settingsMenuLayout = layout
+        settingsMenuPerformance = performance
+        gearButton.menu = makeSettingsMenu(layout: layout, performance: performance)
+    }
+
+    private func makeSettingsMenu(layout: ControlLayout, performance: Bool) -> UIMenu {
+        let layoutActions = ControlLayout.allCases.map { choice in
+            UIAction(title: choice.title, state: choice == layout ? .on : .off) { [weak self] _ in
+                self?.onControlLayoutChange?(choice)
+                self?.settingsMenuLayout = nil
+                self?.refreshSettingsMenu()
+            }
+        }
+        let controls = UIMenu(title: "Controls", image: UIImage(systemName: "gamecontroller"),
+                              options: .singleSelection, children: layoutActions)
+        let overlay = UIAction(title: "Performance stats", image: UIImage(systemName: "speedometer"),
+                               state: performance ? .on : .off) { [weak self] _ in
+            self?.onTogglePerformance?()
+            self?.settingsMenuPerformance = nil
+            self?.refreshSettingsMenu()
+        }
+        return UIMenu(title: "Session settings",
+                      children: [controls, UIMenu(options: .displayInline, children: [overlay])])
     }
 
     /// Live checklist while a launch is in flight; hidden otherwise. Runs on

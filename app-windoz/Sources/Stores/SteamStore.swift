@@ -553,7 +553,7 @@ final class SteamStore: ObservableObject, StoreProvider {
     }
 
     /// A bounded fallback walk: skip redistributables and crash handlers.
-    private static func scanForExecutable(in folder: URL) -> String? {
+    static func scanForExecutable(in folder: URL) -> String? {
         let fm = FileManager.default
         let skipNames: Set<String> = ["redist", "_commonredist", "directx", "support", "vcredist", "dotnet", "dxsetup", "engine"]
         guard let enumerator = fm.enumerator(

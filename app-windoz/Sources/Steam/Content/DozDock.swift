@@ -42,15 +42,24 @@ enum DozDock {
 
     static let executable = "C:\\windows\\system32\\dockhost.exe"
 
-    /// A game Steam's client has installed in the prefix, read from its
-    /// `steamapps/appmanifest_<appid>.acf`.
+    /// A game Steam's client has installed in one of its C: libraries, read
+    /// from `<library>/appmanifest_<appid>.acf`.
     struct Game: Identifiable, Equatable, Sendable {
         let id: Int                 // App ID
         let name: String
         let installDir: String      // one folder name under <library>/common
-        let windowsInstallPath: String
+        /// The library folder, drive-relative (e.g.
+        /// "Program Files (x86)/Steam/steamapps"). Steam titles can live in a
+        /// second library on C:; the install path follows the record's own
+        /// library instead of assuming the client's.
+        let library: String
         let installed: Bool         // StateFlags has "fully installed"
         let customExecutables: Bool // the install record lists per-user executables (CheckGuid)
+
+        /// The game's folder as Wine sees it.
+        var windowsInstallPath: String {
+            "C:\\" + library.replacingOccurrences(of: "/", with: "\\") + "\\common\\" + installDir
+        }
     }
 
     // MARK: Installed games
@@ -64,26 +73,101 @@ enum DozDock {
             !name.unicodeScalars.contains { $0.value < 32 } && !name.hasSuffix(" ") && !name.hasSuffix(".")
     }
 
+    /// Every Steam library on C: the client knows: its own folder plus the
+    /// ones its `libraryfolders.vdf` lists (ported from MadeiraDock). Valve's
+    /// client writes that file when the user adds a library; the dock follows
+    /// it instead of pretending every game lives in the client's own folder.
+    static func libraries(prefix: PrefixManager) -> [String] {
+        let clientLibrary = SteamInstallPaths.libraryRelative
+        var libraries = [clientLibrary]
+        let vdf = prefix.url.appendingPathComponent("drive_c/\(clientLibrary)/libraryfolders.vdf")
+        if let data = try? Data(contentsOf: vdf), data.count <= 1 << 20,
+           var parser = try? SteamKeyValues(data), let root = try? parser.read() {
+            for (_, entry) in (root["libraryfolders"]?.fields ?? [:]).sorted(by: { $0.key < $1.key }) {
+                guard let path = entry["path"]?.string?.replacingOccurrences(of: "\\\\", with: "\\"),
+                      let relative = libraryRelative(path) else { continue }
+                if !libraries.contains(where: { $0.caseInsensitiveCompare(relative) == .orderedSame }) {
+                    libraries.append(relative)
+                }
+            }
+        }
+        return Array(libraries.prefix(16))
+    }
+
+    /// "C:\\Games\\SteamLibrary" -> "Games/SteamLibrary/steamapps" (C: only —
+    /// the same restriction as the fork: the host is given a Windows path, and
+    /// a library outside C: is not one the client and Wine agree on).
+    static func libraryRelative(_ windowsPath: String) -> String? {
+        let path = windowsPath.replacingOccurrences(of: "\\", with: "/")
+        guard path.lowercased().hasPrefix("c:/") else { return nil }
+        let parts = path.dropFirst(3).split(separator: "/").map(String.init)
+        guard !parts.isEmpty, parts.count <= 16, parts.allSatisfy(validFolderName) else { return nil }
+        return (parts + ["steamapps"]).joined(separator: "/")
+    }
+
     /// The Dock game a Windoz library entry maps to, read from the install
-    /// record inside the active prefix. Nil when the record is missing or the
-    /// entry is not a Steam app.
+    /// record in any of Steam's C: libraries inside the active prefix. Nil when
+    /// no record names the app.
     static func game(for installed: InstalledGame, prefix: PrefixManager) -> Game? {
         guard let raw = installed.storeItemID, let appID = Int(raw), validAppID(appID) else { return nil }
-        let record = prefix.steamAppsURL.appendingPathComponent("appmanifest_\(appID).acf")
-        guard let data = try? Data(contentsOf: record) else { return nil }
-        return game(manifest: data)
+        for library in libraries(prefix: prefix) {
+            let record = prefix.url.appendingPathComponent("drive_c/\(library)/appmanifest_\(appID).acf")
+            guard let data = try? Data(contentsOf: record) else { continue }
+            if let game = game(manifest: data, library: library) { return game }
+        }
+        return nil
+    }
+
+    /// Every installed game across Steam's C: libraries (read-only). Records
+    /// that only lend depots to another install ("Shared Only", e.g. a
+    /// launcher's shared content) have nothing of their own to start and are
+    /// left out — the same test as Madeira Dock's.
+    static func games(prefix: PrefixManager) -> [Game] {
+        let fm = FileManager.default
+        var result: [Game] = []
+        var lent: [Int: Set<String>] = [:], installed: [Int: Set<String>] = [:]
+        for library in libraries(prefix: prefix) {
+            let folder = prefix.url.appendingPathComponent("drive_c/\(library)", isDirectory: true)
+            guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
+            for file in names.sorted().prefix(2000) where file.hasPrefix("appmanifest_") && file.hasSuffix(".acf") {
+                guard let data = try? Data(contentsOf: folder.appendingPathComponent(file)) else { continue }
+                let held = depots(manifest: data)
+                lent.merge(held.lent) { $0.union($1) }
+                guard let game = game(manifest: data, library: library),
+                      !result.contains(where: { $0.id == game.id }) else { continue }
+                installed[game.id] = held.installed
+                result.append(game)
+            }
+        }
+        result.removeAll { game in
+            guard let lenders = lent[game.id] else { return false }
+            return installed[game.id, default: []].isSubset(of: lenders)
+        }
+        return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// A record's depots: the ones it lends from each owner app (`SharedDepots`,
+    /// depot -> owner) and the ones installed for the app itself.
+    static func depots(manifest data: Data) -> (lent: [Int: Set<String>], installed: Set<String>) {
+        guard data.count <= 1 << 20, var parser = try? SteamKeyValues(data), let root = try? parser.read(),
+              let state = root["AppState"], let appID = state["appid"]?.string.flatMap({ Int($0) }) else { return ([:], []) }
+        var lent: [Int: Set<String>] = [:]
+        for (depot, owner) in (state["SharedDepots"]?.fields ?? [:]).prefix(64) {
+            guard let ownerID = owner.string.flatMap({ Int($0) }), validAppID(ownerID), ownerID != appID else { continue }
+            lent[ownerID, default: []].insert(depot)
+        }
+        return (lent, Set((state["InstalledDepots"]?.fields ?? [:]).keys.prefix(256)))
     }
 
     /// The game an app manifest describes, or nil when it is not one Dock can start.
-    static func game(manifest data: Data) -> Game? {
+    static func game(manifest data: Data, library: String = SteamInstallPaths.libraryRelative) -> Game? {
         guard data.count <= 1 << 20, var parser = try? SteamKeyValues(data), let root = try? parser.read(),
               let state = root["AppState"], let appID = state["appid"]?.string.flatMap({ Int($0) }), validAppID(appID),
               let folder = state["installdir"]?.string, validFolderName(folder) else { return nil }
         let flags = state["StateFlags"]?.string.flatMap { UInt32($0) } ?? 0
         let name = state["name"]?.string.map { String($0.prefix(200)) } ?? ""
         return Game(id: appID, name: name.isEmpty ? "App \(appID)" : name,
-                    installDir: folder,
-                    windowsInstallPath: "C:\\Program Files (x86)\\Steam\\steamapps\\common\\" + folder,
+                    installDir: folder, library: library,
                     installed: flags & 4 != 0,
                     customExecutables: !(state["CheckGuid"]?.fields.isEmpty ?? true))
     }
@@ -99,9 +183,9 @@ enum DozDock {
         }
         var isFolder: ObjCBool = false
         guard game.installed,
-              FileManager.default.fileExists(atPath: drive.appendingPathComponent(SteamInstallPaths.libraryRelative + "/common/" + game.installDir).path, isDirectory: &isFolder),
+              FileManager.default.fileExists(atPath: drive.appendingPathComponent(game.library + "/common/" + game.installDir).path, isDirectory: &isFolder),
               isFolder.boolValue else {
-            throw EngineError.dockNotReady("Steam does not list this game as fully installed inside the Windows drive. Steam installs Windoz makes land in Steam's own library (C:\\Program Files (x86)\\Steam\\steamapps); a copy that was downloaded when storage was refused may sit outside it — reinstall the game now that storage works, or use Direct.")
+            throw EngineError.dockNotReady("Steam does not list this game as fully installed inside the Windows drive (checked every library Steam's client lists). A copy that was downloaded when storage was refused may sit outside it — reinstall the game now that storage works, or use Direct.")
         }
     }
 
@@ -437,6 +521,44 @@ enum DozDock {
             return reason
         }
         return "Doz Dock could not complete the Steam launch (code \(result)). Export the log before trying again."
+    }
+
+    /// What the dock host is doing right now, in words, from the fields it has
+    /// written so far. The report is append-only, so the newest stage wins by
+    /// checking the late stages first. Nil when the host has not reported yet
+    /// or the launch already failed (that path goes through `humanFailure`).
+    static func progressStage(_ fields: [String: String]) -> String? {
+        guard !fields.isEmpty else { return nil }
+        if let result = fields["probe-result"].flatMap(Int.init), result != 0 { return nil }
+        if fields["shutdown-begin"] != nil || fields["shutdown-complete"] != nil { return nil }
+
+        if fields["launch-keep-alive"] != nil { return "Steam is running the game." }
+        if fields["game-scm-timeout"] != nil { return "Steam is taking longer than usual to start the game — it has not given up." }
+        if fields["game-scm"] != nil { return "Steam is starting the game…" }
+        if fields["ceg-finished-jobs"] != nil || fields["ceg-result"] != nil || fields["ceg-job-result"] != nil
+            || fields["ceg-server-result"] != nil {
+            return "Steam prepared the game's files."
+        }
+        if fields["ceg-scm"] != nil || fields["ceg-request-result"] != nil || fields["ceg-request"] != nil {
+            return "Steam is preparing the game's files…"
+        }
+        if fields["launch-session-wait"] != nil { return "Steam is loading the game's session…" }
+        if fields["launch-config-wait"] != nil { return "Steam is loading the game's settings…" }
+        if fields["launch-update-ready"] != nil { return "Steam is ready to start the game." }
+        if fields["launch-update-wait"] != nil { return "Steam is updating its components…" }
+        if fields["session-requested-app-listed"] != nil { return "Steam confirmed this game on your account." }
+        if fields["session-requested-app-entitled"] != nil { return "Steam is confirming your license for this game…" }
+        if fields["session-authenticated-online"] != nil || fields["session-offline-ready"] != nil {
+            return "Steam signed in."
+        }
+        if fields["session-logon-start-result"] != nil || fields["session-connection-result"] != nil
+            || fields["session-handoff-stage"] != nil {
+            return "Signing in to Steam…"
+        }
+        if fields["load-client-error"] != nil { return "Steam's client reported an error while loading." }
+        if fields["load-client-begin"] != nil { return "Loading Valve's Steam client — the first launch can take a few minutes." }
+        if fields["probe-start-bits"] != nil { return "Starting Doz Dock…" }
+        return nil
     }
 
     /// Valve's own launch refusal (EAppUpdateError) in words. Numbers only

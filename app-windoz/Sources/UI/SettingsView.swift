@@ -11,9 +11,14 @@ struct SettingsView: View {
     /// the pre-launch auto-attempt read the same coordinator.
     @ObservedObject private var jit = JITCoordinator.shared
 
+    @State private var swap = MadeiraConfig.readSwap()
+    @State private var swapMessage: String?
+    @State private var swapError: String?
+
     var body: some View {
         List {
             engineSection
+            memorySection
             accountsSection
             if AppEnvironment.isLiveContainer {
                 liveContainerSection
@@ -34,6 +39,7 @@ struct SettingsView: View {
         .onAppear {
             engine.refreshStatus()
             installer.refresh(prefix: engine.prefix)
+            swap = MadeiraConfig.readSwap()
         }
     }
 
@@ -89,6 +95,68 @@ struct SettingsView: View {
             if case .unavailable = engine.status.jit, !jit.busy {
                 Button("Enable JIT") { jit.enable { _ in } }
             }
+        }
+    }
+
+    /// Swap memory. The values and the cfg keys are Madeira's own Memory &
+    /// sync options; the engine side has read them since the pinned fork and
+    /// Windoz only needed to write the file.
+    private var memorySection: some View {
+        Section {
+            Picker("Swap memory", selection: swapSizeBinding) {
+                ForEach(MadeiraConfig.Swap.sizes, id: \.self) { size in
+                    Text(MadeiraConfig.Swap.title(for: size)).tag(size)
+                }
+            }
+            if swap.sizeMB > 0 {
+                Picker("Coverage", selection: swapCoverageBinding) {
+                    ForEach(MadeiraConfig.Coverage.allCases) { coverage in
+                        Text(coverage.title).tag(coverage)
+                    }
+                }
+                Text(swap.coverage.detail)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let swapError {
+                Text(swapError).font(.caption).foregroundStyle(Theme.bad)
+            } else if let swapMessage {
+                Text(swapMessage).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Memory")
+        } footer: {
+            Text("A file-backed tier for game memory: 1, 2 or 4 GB of the app's temporary storage, off by default. Windoz writes Documents/madeira.cfg and the engine arms the tier on the next launch. It is not iOS virtual memory and cannot exceed free storage.")
+        }
+    }
+
+    private var swapSizeBinding: Binding<Int> {
+        Binding(get: { swap.sizeMB }, set: { size in
+            var updated = swap
+            updated.sizeMB = size
+            saveSwap(updated)
+        })
+    }
+
+    private var swapCoverageBinding: Binding<MadeiraConfig.Coverage> {
+        Binding(get: { swap.coverage }, set: { coverage in
+            var updated = swap
+            updated.coverage = coverage
+            saveSwap(updated)
+        })
+    }
+
+    private func saveSwap(_ updated: MadeiraConfig.Swap) {
+        do {
+            try MadeiraConfig.writeSwap(updated)
+            swap = MadeiraConfig.readSwap()
+            swapError = nil
+            swapMessage = swap.isOff
+                ? "Swap memory is off."
+                : "Saved. The tier is armed the next time a game starts."
+        } catch {
+            swap = MadeiraConfig.readSwap()
+            swapMessage = nil
+            swapError = error.localizedDescription
         }
     }
 

@@ -923,21 +923,17 @@ struct GameSettingsSheet: View {
                             .font(.caption2).foregroundStyle(.white.opacity(0.45))
 
                         SectionHeader(title: "Controls")
-                        NavigationLink {
-                            TouchOverlayEditor(gameID: gameID, gameTitle: gameTitle)
-                        } label: {
-                            GlassCard {
-                                HStack {
-                                    Label("Touch control layout", systemImage: "hand.tap")
-                                        .foregroundStyle(.white)
-                                    Spacer()
-                                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.4))
+                        GlassCard {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Picker("Layout", selection: $settings.controlLayout) {
+                                    ForEach(ControlLayout.allCases) { Text($0.title).tag($0) }
                                 }
+                                .foregroundStyle(.white.opacity(0.9))
+                                Text(controlLayoutExplanation)
+                                    .font(.caption).foregroundStyle(.white.opacity(0.6))
+                                note("Applied — the session shows this layout's controls, and a connected controller reaches the game this way. Changeable while the game runs from the ⚙ menu in the session.", applied: true)
                             }
                         }
-                        .buttonStyle(.plain)
-                        Text("Saved per game. This build's session overlay does not read these controls yet — it shows a fixed key row, and touch maps 1:1 onto the game.")
-                            .font(.caption2).foregroundStyle(.white.opacity(0.45))
                     }
                     .padding(Metrics.pagePadding)
                 }
@@ -1064,6 +1060,19 @@ struct GameSettingsSheet: View {
             Text(text).font(.system(size: 10))
         }
         .foregroundStyle(applied ? Theme.ok.opacity(0.9) : Theme.warn.opacity(0.85))
+    }
+
+    /// One honest sentence per layout: what the session shows, and what the
+    /// game is told it has.
+    private var controlLayoutExplanation: String {
+        switch settings.controlLayout {
+        case .keyboardMouse:
+            return "The session shows the key row, and touch acts as the game's own pointer. A connected controller becomes keyboard and mouse (WASD, the mouse on the right stick, the template keys on the buttons) — the game is not told a controller exists."
+        case .xbox:
+            return "The session shows Xbox controls. A connected controller and the on-screen pad merge into one Xbox-style pad in slot 0."
+        case .playStation:
+            return "The session shows PlayStation 5 controls on the same pad the engine publishes: the game is told it has an Xbox-style controller, not a DualSense."
+        }
     }
 
     private func parseEnvironment(_ text: String) -> [String: String] {

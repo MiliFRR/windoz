@@ -219,6 +219,39 @@ enum LaunchMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How a session's controls behave, chosen per game (0.8.0). Two things follow
+/// one choice: what the on-screen controls look like, and how a physical
+/// controller reaches the game — as keys and mouse motion (`keyboardMouse`,
+/// the default), or as the virtual XInput pad (`xbox`, `playStation`). The
+/// PlayStation layout is the same XInput pad with DualSense glyphs; it does not
+/// claim to present a DualSense to the game.
+enum ControlLayout: String, Codable, CaseIterable, Identifiable {
+    case keyboardMouse
+    case xbox
+    case playStation
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .keyboardMouse: return "Keyboard & mouse"
+        case .xbox: return "Xbox controller"
+        case .playStation: return "PlayStation 5 controller"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .keyboardMouse: return "Keyboard & mouse"
+        case .xbox: return "Xbox"
+        case .playStation: return "PlayStation 5"
+        }
+    }
+
+    /// A connected controller is translated instead of published to XInput.
+    var isGamepad: Bool { self != .keyboardMouse }
+}
+
 /// Per-game options. These map onto the engine forks' documented switches
 /// (see `docs/ENGINE.md`); a key the pinned forks do not read is never written.
 ///
@@ -273,6 +306,9 @@ struct GameSettings: Codable, Equatable, Hashable {
     /// (`MADEIRA_DOCK_OFFLINE=1`) instead of attempting a network logon.
     /// Valve's client decides what it can do offline; this only asks.
     var steamOffline: Bool = false
+    /// The session's control layout: the on-screen controls and how a physical
+    /// controller reaches the game (see `ControlLayout`).
+    var controlLayout: ControlLayout = .keyboardMouse
 
     static let `default` = GameSettings()
 }
@@ -284,6 +320,7 @@ extension GameSettings {
         case fexAVX, reducedX87, cpuCount, dinputPad, anisotropyLimit
         case gameWindows, waitChildren, virtualModeSet
         case launchMode, steamOffline
+        case controlLayout
     }
 
     init(from decoder: Decoder) throws {
@@ -308,6 +345,7 @@ extension GameSettings {
         virtualModeSet = try c.decodeIfPresent(TriState.self, forKey: .virtualModeSet) ?? d.virtualModeSet
         launchMode = try c.decodeIfPresent(LaunchMode.self, forKey: .launchMode) ?? d.launchMode
         steamOffline = try c.decodeIfPresent(Bool.self, forKey: .steamOffline) ?? d.steamOffline
+        controlLayout = try c.decodeIfPresent(ControlLayout.self, forKey: .controlLayout) ?? d.controlLayout
     }
 
     func encode(to encoder: Encoder) throws {
@@ -331,6 +369,7 @@ extension GameSettings {
         try c.encode(virtualModeSet, forKey: .virtualModeSet)
         try c.encode(launchMode, forKey: .launchMode)
         try c.encode(steamOffline, forKey: .steamOffline)
+        try c.encode(controlLayout, forKey: .controlLayout)
     }
 }
 

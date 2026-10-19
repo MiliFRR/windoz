@@ -12,7 +12,45 @@ struct LibraryView: View {
     @ObservedObject private var steamStore = StoreRegistry.shared.steam
     @ObservedObject private var epicStore = StoreRegistry.shared.epic
 
+    @State private var query = ""
+    @State private var filter: LibraryFilter = .all
+
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 140), spacing: 12)]
+
+    /// One chip per shelf the library can be narrowed to. Everything else
+    /// (search, count) is computed from `library.games`.
+    private enum LibraryFilter: String, CaseIterable, Identifiable {
+        case all, imported, steam, epic
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .imported: return "Imported"
+            case .steam: return "Steam"
+            case .epic: return "Epic"
+            }
+        }
+        var store: StoreID? {
+            switch self {
+            case .all: return nil
+            case .imported: return .local
+            case .steam: return .steam
+            case .epic: return .epic
+            }
+        }
+    }
+
+    private var filteredGames: [InstalledGame] {
+        var games = library.games
+        if let store = filter.store {
+            games = games.filter { $0.storeID == store.rawValue }
+        }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            games = games.filter { $0.title.localizedCaseInsensitiveContains(trimmed) }
+        }
+        return games
+    }
 
     var body: some View {
         let _ = BootTrace.once("library body")
@@ -27,6 +65,7 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
+        .searchable(text: $query, prompt: "Search games")
         .navigationDestination(item: $selection) { GameDetailView(gameID: $0.id) }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -80,18 +119,43 @@ struct LibraryView: View {
                 }
             }
         } else {
-            LazyVGrid(columns: columns, spacing: 14) {
-                ForEach(library.games) { game in
-                    Button { open(game) } label: { tile(game) }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                library.remove(id: game.id)
-                            } label: { Label("Remove from library", systemImage: "trash") }
-                        }
+            filterRow
+            let shown = filteredGames
+            if shown.isEmpty {
+                GlassCard {
+                    Text("No games match. Clear the search or pick another filter.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } else {
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(shown) { game in
+                        Button { open(game) } label: { tile(game) }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    library.remove(id: game.id)
+                                } label: { Label("Remove from library", systemImage: "trash") }
+                            }
+                    }
                 }
             }
         }
+    }
+
+    private var filterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(LibraryFilter.allCases) { option in
+                    Button { filter = option } label: {
+                        Chip(title: option.title, selected: filter == option)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show \(option.title) games")
+                }
+            }
+            .padding(.vertical, 1)
+        }
+        .scrollClipDisabled()
     }
 
     private func tile(_ game: InstalledGame) -> some View {

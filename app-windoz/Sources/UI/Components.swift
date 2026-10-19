@@ -123,7 +123,8 @@ struct HealthDot: View {
     }
 }
 
-/// The app's primary action: a standard filled iOS button, not a console bar.
+/// The app's primary action: a standard filled iOS button with the app's one
+/// gradient, not a console bar.
 struct PrimaryButton: View {
     let title: String
     var systemImage: String = "play.fill"
@@ -146,12 +147,32 @@ struct PrimaryButton: View {
             .frame(maxWidth: .infinity, minHeight: 50)
             .background(
                 RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous)
-                    .fill(Theme.accent))
+                    .fill(Theme.actionGradient))
+            .shadow(color: Theme.accentDeep.opacity(0.28), radius: 8, y: 3)
             .opacity(enabled && !busy ? 1 : 0.45)
         }
         .buttonStyle(.plain)
         .disabled(!enabled || busy)
         .accessibilityLabel(title)
+    }
+}
+
+/// A small selectable pill, used for the Library's filter row: flat fill when
+/// idle, accent-tinted when chosen.
+struct Chip: View {
+    let title: String
+    var selected: Bool
+
+    var body: some View {
+        Text(title)
+            .font(.footnote.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(selected
+                    ? Theme.accent.opacity(0.22)
+                    : Color(uiColor: .secondarySystemFill)))
+            .foregroundStyle(selected ? Theme.accent : .primary)
     }
 }
 

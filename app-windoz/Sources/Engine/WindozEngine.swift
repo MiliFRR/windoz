@@ -29,6 +29,13 @@ final class WindozEngine: ObservableObject {
     @Published private(set) var sessionFrames: UInt64 = 0
     /// One plain-language line for the in-session overlay.
     @Published private(set) var sessionDetail = ""
+    /// Doz Dock's live progress while a dock session runs: what Valve's client
+    /// is doing right now, read from the host's report file. Nil when the
+    /// session is not a dock session or the host has not reported yet.
+    @Published private(set) var dockStage: String?
+    /// The honest failure reason while a dock session still runs (the host's
+    /// report carries it before the session ends). Nil when there is none.
+    @Published private(set) var dockFailure: String?
     /// The story of the last finished session, for the game page.
     @Published private(set) var lastSessionOutcome: SessionOutcome?
     /// Wine can host one session per app run here (its service process keeps
@@ -346,6 +353,8 @@ final class WindozEngine: ObservableObject {
                 self.sessionFrames = 0
                 self.sessionDetail = "Preparing the session…"
                 self.lastStageLine = "Preparing the session…"
+                self.dockStage = nil
+                self.dockFailure = nil
                 self.launchFPSLimit = game.settings.fpsLimit
                 self.fpsReapplied = false
                 self.noFrameWarned = false
@@ -897,6 +906,16 @@ final class WindozEngine: ObservableObject {
         let settings = game.settings
         let monitor = Self.guestMonitor(scale: settings.resolutionScale)
 
+        // Swap memory lives in the engine, not here: the bridge recreates the
+        // file-backed tier whenever madeira.cfg asks for it. Say what the next
+        // session will arm so the log answers "was swap on?" without a guess.
+        let swap = MadeiraConfig.readSwap()
+        if swap.isOff {
+            log.append("[launch] swap tier off (Documents/madeira.cfg has no swap-mb)")
+        } else {
+            log.append("[launch] swap tier requested: \(swap.sizeMB) MB, coverage \(swap.coverage.rawValue) — Documents/madeira.cfg")
+        }
+
         // Every launch starts from a clean slate: the dock variables are
         // always set *or* unset by the branch below, so a dock session and a
         // direct session can never leak into each other.
@@ -1096,6 +1115,7 @@ final class WindozEngine: ObservableObject {
             finishStep(LaunchStepID.frame,
                        detail: "First frame after " + String(format: "%.1f", sessionElapsed) + " s.")
         }
+        if dockSessionActive { updateDockProgress() }
         if wine_process_is_running() != 0 {
             sawWineProcess = true
             sessionDetail = sessionFrames > 0
@@ -1112,6 +1132,26 @@ final class WindozEngine: ObservableObject {
     }
 
     /// The single end-of-session path: playtime is recorded once, the engine's
+    /// Live Doz Dock progress. The host appends its numeric report to
+    /// `C:\madeira-dock.txt` while the session runs; read it every poll and
+    /// turn the newest stage into words. A refusal is shown the moment the
+    /// report names it, while the session still runs — a slow first launch
+    /// used to look like a stall until the session ended.
+    private func updateDockProgress() {
+        let fields = DozDock.readReport(prefix: prefix)
+        if fields.isEmpty, dockStage == nil { return }
+        if let failure = DozDock.humanFailure(fields) {
+            if dockFailure != failure {
+                dockFailure = failure
+                log.append("[dock] Valve's client refused the launch: \(failure)", level: .warning)
+            }
+        } else if dockFailure != nil {
+            dockFailure = nil
+        }
+        let stage = DozDock.progressStage(fields)
+        if dockStage != stage { dockStage = stage }
+    }
+
     /// Reads Doz Dock's report (once) when the session that just ended was a
     /// dock session: logs every field the host wrote, returns the honest
     /// failure reason when Valve's client reported one, and removes the
@@ -1158,6 +1198,8 @@ final class WindozEngine: ObservableObject {
         EngineLogFile.shared.appendEngineLogTail(reason: "the session ended")
         sessionGame = nil
         sessionDetail = ""
+        dockStage = nil
+        dockFailure = nil
         currentGameID = nil
         sessionStart = nil
         phase = .idle

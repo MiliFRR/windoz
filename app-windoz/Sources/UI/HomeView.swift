@@ -18,9 +18,13 @@ struct HomeView: View {
                 if library.games.isEmpty {
                     emptyState
                 } else {
-                    if !continueGames.isEmpty {
-                        shelf(title: "Continue playing", games: continueGames,
-                              width: Metrics.heroTileWidth, height: Metrics.heroTileHeight)
+                    if let game = continueGames.first {
+                        featured(game)
+                    }
+                    let rest = Array(continueGames.dropFirst())
+                    if !rest.isEmpty {
+                        shelf(title: "Recently played", games: rest,
+                              width: Metrics.shelfTileWidth, height: Metrics.shelfTileHeight)
                     }
                     if !recentGames.isEmpty {
                         shelf(title: "Recently added", games: recentGames,
@@ -49,6 +53,61 @@ struct HomeView: View {
     }
 
     // MARK: - Shelves
+
+    /// The top card: the game played most recently, drawn full-width with its
+    /// hero art and one clear play affordance. Tapping opens the game page,
+    /// where Play starts the session (and runs its preflight).
+    private func featured(_ game: InstalledGame) -> some View {
+        Button { open(game) } label: {
+            ZStack(alignment: .bottomLeading) {
+                HeroArtView(path: game.heroArtPath ?? game.coverArtPath)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Metrics.featuredHeight)
+                    .clipped()
+                LinearGradient(colors: [Color.black.opacity(0.02), Color.black.opacity(0.74)],
+                               startPoint: .top, endPoint: .bottom)
+                HStack(alignment: .bottom, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(game.title)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        Text(featuredSubtitle(game))
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "play.fill")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(Theme.actionGradient))
+                        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+                }
+                .padding(14)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: Metrics.featuredHeight)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous))
+            .overlay {
+                if isFocused(game) {
+                    RoundedRectangle(cornerRadius: Metrics.cardCorner, style: .continuous)
+                        .strokeBorder(Theme.accent, lineWidth: 2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Continue playing \(game.title)")
+    }
+
+    private func featuredSubtitle(_ game: InstalledGame) -> String {
+        var parts: [String] = []
+        if let last = game.lastPlayedAt { parts.append("Played \(Self.relativeText(last))") }
+        if game.playtimeSeconds > 0 { parts.append(game.playtimeSeconds.playtimeDescription) }
+        parts.append(game.compatibility.title)
+        return parts.joined(separator: " · ")
+    }
 
     private func shelf(title: String, games: [InstalledGame], width: CGFloat, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {

@@ -7,6 +7,15 @@ import SwiftUI
 struct SteamLibrarySheet: View {
     @ObservedObject var store: SteamStore
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var engine: WindozEngine
+
+    @State private var steamReady = false
+    @State private var installingClient = false
+    @State private var clientStage: String?
+    @State private var clientMessage: String?
+    @State private var startingSteam = false
+    @State private var scanning = false
+    @State private var scanMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -15,6 +24,7 @@ struct SteamLibrarySheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         accountCard
+                        clientCard
                         if store.authState.isSignedIn {
                             if let message = store.libraryMessage {
                                 messageCard(message)
@@ -37,6 +47,7 @@ struct SteamLibrarySheet: View {
             }
             .task {
                 store.start()
+                checkClient()
                 if store.authState.isSignedIn, store.games.isEmpty {
                     await refresh()
                 }
@@ -102,6 +113,57 @@ struct SteamLibrarySheet: View {
                 }
                 Text("Downloads go to C:\\Program Files (x86)\\Steam\\steamapps inside Windoz's Windows prefix — the same layout Valve's client writes. Installing also adds the game to My games, and starting it there runs it through the game session. Downloads, updates and verification work now.")
                     .font(.caption2).foregroundStyle(.white.opacity(0.4))
+            }
+        }
+    }
+
+    /// The Steam client itself: installed once from Valve's CDN, then opened
+    /// as a session. This is how a game whose manifests Windoz's downloader
+    /// cannot fetch still gets in: Valve's client installs it, and "Add
+    /// installed games" turns the result into a library entry that Doz Dock
+    /// can start.
+    private var clientCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "gamecontroller.fill")
+                        .foregroundStyle(Theme.accent)
+                    Text("Steam client").font(.headline).foregroundStyle(.white)
+                    Spacer()
+                    Badge(text: steamReady ? "Ready" : "Not downloaded",
+                          systemImage: steamReady ? "checkmark.seal.fill" : "arrow.down.circle",
+                          tint: steamReady ? Theme.ok : Theme.warn)
+                }
+                Text("Valve's own Windows client runs inside the game session: sign in, browse the store and install any game there. “Add installed games” then puts everything Steam installed into My games, ready to start through Doz Dock.")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.45))
+
+                if installingClient {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(clientStage ?? "Downloading…")
+                            .font(.caption2).foregroundStyle(.white.opacity(0.6))
+                    }
+                } else if steamReady {
+                    HStack(spacing: 14) {
+                        Button(startingSteam ? "Starting…" : "Open Steam") { openSteamClient() }
+                            .disabled(startingSteam)
+                        Button(scanning ? "Checking…" : "Add installed games") { scanInstalled() }
+                            .disabled(scanning)
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                } else {
+                    Button("Download Steam's components") { installClient() }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+
+                if let clientMessage {
+                    Text(clientMessage).font(.caption2).foregroundStyle(Theme.warn).lineLimit(4)
+                }
+                if let scanMessage {
+                    Text(scanMessage).font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(4)
+                }
             }
         }
     }
@@ -252,6 +314,81 @@ struct SteamLibrarySheet: View {
             _ = try await store.refreshLibrary()
         } catch {
             // refreshLibrary recorded the reason in libraryMessage
+        }
+    }
+
+    // MARK: - Steam client
+
+    private func checkClient() {
+        let root = engine.prefix.url.appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)")
+        steamReady = FileManager.default.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path)
+    }
+
+    private func installClient() {
+        installingClient = true
+        clientMessage = nil
+        clientStage = "Preparing…"
+        let prefix = engine.prefix
+        Task {
+            do {
+                try await SteamClientInstaller.shared.prepare(prefix: prefix) { stage in
+                    await MainActor.run { self.clientStage = stage }
+                }
+                await MainActor.run {
+                    self.installingClient = false
+                    self.clientStage = nil
+                    self.checkClient()
+                }
+            } catch {
+                await MainActor.run {
+                    self.installingClient = false
+                    self.clientStage = nil
+                    self.clientMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Opens Valve's client as a session of its own. The transient game is not
+    /// added to the library: it carries only the launch mode, so the engine's
+    /// Steam-desktop path (and its preflight) runs as it does for any game.
+    private func openSteamClient() {
+        guard !startingSteam else { return }
+        startingSteam = true
+        clientMessage = nil
+        var settings = GameSettings.default
+        settings.launchMode = .steamDesktop
+        let game = InstalledGame(
+            title: "Steam",
+            executablePath: engine.prefix.url
+                .appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)/steam.exe").path,
+            storeID: "steam-client",
+            settings: settings)
+        Task {
+            do {
+                try await engine.launch(game)
+                await MainActor.run { dismiss() }
+            } catch {
+                await MainActor.run {
+                    self.startingSteam = false
+                    self.clientMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Reads every installed record in every Steam library and puts the games
+    /// into My games (Doz Dock by default).
+    private func scanInstalled() {
+        scanning = true
+        scanMessage = nil
+        let prefix = engine.prefix
+        Task {
+            let summary = await SteamClientLibrary.importInstalled(prefix: prefix)
+            await MainActor.run {
+                self.scanning = false
+                self.scanMessage = summary.message
+            }
         }
     }
 
