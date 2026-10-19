@@ -561,10 +561,31 @@ round is a polish pass, not another rebuild:
 
 ### Verification in this round
 
-- One commit on `ci-080` carries the whole round; the four small helper
+- The round was built on `ci-080` (feature commit `0360a14`; the docs and the
+  compiler catches that followed ended at `891d549`). The four small helper
   scripts the round used (`check-build.*`, `watcher-*`) stay untracked.
-- The verification ledger (typecheck run, IPA run, release, keeper IPA) is
-  recorded in the README, as with every previous round.
+- The typecheck gate ended green on `891d549` — `typecheck.yml` run **#50**
+  (workflow 39302982508): the app's Swift, the Epic protocol host tests and the
+  XcodeGen validation all passed. Run #49 had already been green on `6367d83`;
+  the red runs in the round were the gate catching real compile errors, not
+  flakes.
+- `build-ipa.yml` **run #23** (workflow 39303590722, `main` = `891d549`,
+  success, 2026-10-19) built every stage — LLVM, Wine/FEX/DXMT/D3D12, the app,
+  the IPA — and the IPA gate passed. The round's first build, run **#22**
+  (39298248062, `6367d83`), failed only at that gate:
+  `AppContainer.displayVersion` still said `0.7.0` while `project.yml` said
+  `0.8.0`; `891d549` fixed it.
+- `release-ipa.yml` run #6 (39310254300) published **`v0.8.0` — "Windoz 0.8.0
+  (build 8)"** with `windoz-0.8.0-build8.ipa`, 78,511,877 bytes, SHA-256
+  `824070056B954F221444E4B4EC337BF55C4E7CEBDAD543E931C698BFC039FBBA`. The IPA
+  is kept as `windoz-ipa-keep/windoz-19.ipa` and was re-checked with
+  `check-ipa.py --require 0.8.0 --min-build 8`: app and helper both claim
+  `0.8.0` build 8, `MinimumOSVersion` 26.0, every subsystem marker present.
+- The shipped executable also carries the 0.8.0 feature strings:
+  `env.MADEIRA_SWAP_COVERAGE`, `madeira.cfg`, `swap-mb`, `MADEIRA_SWAP_MB`,
+  `libraryfolders.vdf`, `steamDesktop`, `winios_gamepad_set_state`,
+  `session-handoff-stage`, `madeira-dock.txt`, `Steam client`,
+  `Add installed games`, `Keyboard & mouse`, `PlayStation 5`.
 - **No device claims.** The owner's next run is the judge: the Settings →
   Memory page must write `Documents/madeira.cfg` (the log says which tier the
   launch found), a Doz Dock launch must show the stage chip advancing, Open

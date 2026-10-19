@@ -167,6 +167,28 @@ bundle and the helper both claim `0.7.0` build 7, `MinimumOSVersion` 26.0, the
 so the Madeira-pool launch code is in the shipped binary. **No device claims:**
 the owner's next run is the proof.
 
+**Build 0.8.0 shipped — `build-ipa.yml` run #23 (`main` = `891d549`, success,
+2026-10-19):** every stage built green (LLVM, the runtime, Wine/FEX/DXMT, the
+app, the IPA gate) and the unsigned IPA was published automatically as the
+GitHub Release
+[`v0.8.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.8.0) —
+`windoz-0.8.0-build8.ipa`, 78,511,877 bytes, SHA-256
+`824070056B954F221444E4B4EC337BF55C4E7CEBDAD543E931C698BFC039FBBA`
+(kept locally as `windoz-ipa-keep/windoz-19.ipa`, re-checked with
+`scripts/check-ipa.py --require 0.8.0 --min-build 8` — all checks passed).
+Verified inside: the app bundle and the helper both claim `0.8.0` build 8,
+`MinimumOSVersion` 26.0, every subsystem marker, the compiled-in version
+string, and the 0.8.0 markers (`env.MADEIRA_SWAP_COVERAGE`, `madeira.cfg`,
+`swap-mb`, `MADEIRA_SWAP_MB`, `libraryfolders.vdf`, `steamDesktop`,
+`winios_gamepad_set_state`, `session-handoff-stage`, `madeira-dock.txt`,
+`Steam client`, `Add installed games`, `Keyboard & mouse`, `PlayStation 5`),
+so the swap, all-library dock, Steam-client session, session-gamepad and
+layout code are in the shipped binary. The round's first build (run #22,
+`6367d83`) failed **only** the IPA gate: `AppContainer.displayVersion` still
+said `0.7.0`, exactly the mismatch the gate exists to catch; `891d549` fixed
+it and #23 went green. Typecheck ran green on both trees (#49, then #50 for
+the fix). **No device claims:** the owner's next run is the proof.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -1246,9 +1268,20 @@ the fix that is still in the tree.*
     page's Controls section is the new layout picker (the old custom
     touch-overlay editor stored layouts the session never read — its stale
     note said so — and is replaced).
-  - **Record:** the round was built on `ci-080`; the typecheck gate, the
-    `build-ipa.yml` run and the release/keeper are recorded here when they
-    complete.
+  - **Record:** built on `ci-080` (feature `0360a14`, then docs and the CI
+    catches through `891d549`); typecheck run **#50** (workflow 39302982508)
+    green on `891d549` (#49 had been green on `6367d83`); `build-ipa.yml`
+    **run #23** (workflow 39303590722) succeeded end to end. The round's first
+    build, run **#22** (39298248062, `6367d83`), failed only the IPA gate:
+    `AppContainer.displayVersion` still said `0.7.0` while `project.yml` said
+    `0.8.0` — exactly what that gate exists to catch. `release-ipa.yml` run #6
+    (39310254300) published
+    [`v0.8.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.8.0) —
+    `windoz-0.8.0-build8.ipa`, 78,511,877 bytes, SHA-256
+    `824070056B954F221444E4B4EC337BF55C4E7CEBDAD543E931C698BFC039FBBA`; kept
+    as `windoz-ipa-keep/windoz-19.ipa` and re-checked with
+    `check-ipa.py --require 0.8.0 --min-build 8` (all checks passed, including
+    the 0.8.0 feature markers listed at the top of this file).
   - **0.8.0 device checklist** (the proof that counts): set a swap size in
     Settings → Memory (or leave it off), then launch a game and confirm the
     log line naming the tier; on a Doz Dock launch, the session chip must
