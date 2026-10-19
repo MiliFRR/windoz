@@ -69,6 +69,36 @@ enum JITPool {
             log("[jit-pool] no debugger is attached; an unanswered request will fail the launch instead of crashing.", level: .warning)
         }
 
+        // FEX's dispatcher emit has a position-dependent bug below
+        // 0x119000000 (the literal-pool fixups silently break and execution
+        // branches to zero memory before the first compiled block). Madeira
+        // pushes the allocator's first-fit frontier past that floor by
+        // reserving 16 MB chunks with VM_FLAGS_ANYWHERE and keeping them for
+        // the process lifetime. A fixed count loses the ASLR lottery, so pin
+        // until the frontier crosses the floor (cap 512 MB of reservation;
+        // PROT_NONE/zero-fill chunks cost no resident memory).
+        let pinTarget: vm_address_t = 0x119000000
+        let pinChunkSize = 16 << 20
+        var pinChunks: [vm_address_t] = []
+        for index in 0..<32 {
+            var pinAddr: vm_address_t = 0
+            let kr = vm_allocate(mach_task_self_, &pinAddr, vm_size_t(pinChunkSize), VM_FLAGS_ANYWHERE)
+            guard kr == KERN_SUCCESS else {
+                log("[jit-pool] low-address pin chunk \(index) failed (kr=\(kr)).", level: .warning)
+                break
+            }
+            if pinAddr >= pinTarget {
+                vm_deallocate(mach_task_self_, pinAddr, vm_size_t(pinChunkSize))
+                log("[jit-pool] allocator frontier already at 0x\(String(UInt64(pinAddr), radix: 16)); no pin needed.")
+                break
+            }
+            pinChunks.append(pinAddr)
+            if pinAddr + vm_address_t(pinChunkSize) >= pinTarget { break }
+        }
+        if !pinChunks.isEmpty {
+            log("[jit-pool] pinned \(pinChunks.count * 16) MB below 0x119000000 so first-fit stays in the FEX-safe range.")
+        }
+
         // Hold the 0x140000000 window before asking for RX. JITAllocator.c's
         // constructor normally claimed it before main(); this covers a run
         // where something got there first.
