@@ -19,8 +19,10 @@ import Security
 enum AppContainer {
 
     /// Shown in Settings → About *and* printed in the first log line, so a
-    /// device session can always be matched to a build.
-    static let displayVersion = "0.7.0"
+    /// device session can always be matched to a build. Bump this together
+    /// with `project.yml`'s MARKETING_VERSION: `scripts/check-ipa.py` fails
+    /// the release build when the executable does not carry that literal.
+    static let displayVersion = "0.8.0"
 
     /// Guest home. Prefers `LC_HOME_PATH` (set by LiveContainer before jumping
     /// to the guest entry), then `HOME`, then `NSHomeDirectory()`.
