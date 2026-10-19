@@ -196,7 +196,11 @@ detection, downloads, the game session that runs a game (**ported in
 0.4.0** — the dock host bridge, handoff, report and offline mode), and the
 Steam/Epic clients (Steam depot downloads; Epic chunked downloads in 0.4.0)
 are real and testable today. Device verification of the newest layers is
-pending; the ledger says exactly which claim rests on which run.
+pending; the ledger says exactly which claim rests on which run. 0.8.0 added
+the engine's swap tier switch (Settings → Memory), all-library Doz Dock with
+its live stage in the session, Open Steam / Add installed games, the
+in-session ⚙ menu with the three control layouts and the performance overlay,
+and a modern pass on 0.7.0's compact native base.
 
 ## Decisions (recorded 2026-10-15)
 
