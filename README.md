@@ -137,6 +137,21 @@ sink is batched; and the UI is rebuilt phone-first. 0.6.0 is
 `4BB881B58149CA4C07306EA62A9D4BE1B499F584395D201482AC1DFB90653EA6`); the
 checklist below is the run that confirms it.
 
+**On-device status (LiveContainer, 2026-10-19 — build 0.6.0):** the owner ran
+0.6.0 and reported that the game **still froze on the launch screen** and the
+**UI was still oversized**, and asked, in effect, for Madeira's own engine to
+play the games. Build 0.7.0 stops using Windoz's launch pipeline: it grants the
+JIT pool from the attached debugger, publishes `WINE_IOS_JIT_RX/RW/SIZE`,
+detaches the debugger early, and then runs Madeira's exact order —
+`wineserver_start` → wait → `wine_process_start` — with **no app-side
+`fex_initialize` or `fex_shutdown` anywhere on the path**. The UI is rebuilt as
+a compact native iPhone app: system grouped backgrounds and cards, a
+large-title Home without the wordmark or hero carousel, a three-column
+library, an 82×110 game header with a standard Play button, and system-size
+text throughout. 0.7.0 is **device-verification pending**; its build run,
+release and keeper hash are recorded in **Known issues** below. The checklist
+is the run that confirms it.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -1113,11 +1128,44 @@ the fix that is still in the tree.*
     `4BB881B58149CA4C07306EA62A9D4BE1B499F584395D201482AC1DFB90653EA6`;
     the same file is kept locally as `windoz-ipa-keep/windoz-17.ipa` and
     re-checked with `scripts/check-ipa.py --require 0.6.0`.
+- **Owner round for 0.7.0 (LiveContainer, 2026-10-19 — build 0.6.0):** the
+  owner's report was that nothing had changed, with one instruction: use
+  Madeira's engine for playing games and fix the UI. Both are answered;
+  everything is device-verification pending.
+  - **(1) "Just use Madeira's engine for playing the games."** 0.6.0 had only
+    changed the failure handling around Windoz's own launch path. The path
+    itself still called `fex_initialize()` from Swift (Madeira never does on a
+    game launch) and **never allocated or published the JIT pool** the pinned
+    Wine fork's `virtual_ios.c` needs (`WINE_IOS_JIT_RX/RW/SIZE`), so guest
+    executable pages had nowhere to live — a black launch screen and a hot
+    phone. New `JITPool.swift` ports Madeira's `StikJITHelper.allocatePool`
+    (debugger BRK, hole census, placement rules, RW alias, no-footprint
+    ledger); `WindozEngine.startGuestProcess` now runs Madeira's exact order:
+    grant the pool → publish the variables → detach the debugger → start the
+    Wine service → `wine_process_start`. A refused pool is a named failure
+    with a Quit path, not a freeze; the launch checklist gained an
+    "Executable memory is ready" step.
+  - **(2) "Fix the UI."** The 0.6.0 rescue kept the console language (wordmark,
+    hero carousel, glass cards, tracked uppercase labels, oversized tiles).
+    It is now a normal iPhone app: system grouped backgrounds and cards,
+    standard type and section headers, Home with compact Continue-playing /
+    Recently-added shelves and a plain games list, a 3-column library grid,
+    an 82×110 game header and standard Play button, standard List Settings
+    and Setup. Dark mode is retained for the session overlays, but the
+    backgrounds are system dark colours, not gradients.
+  - **0.7.0 device checklist** (the proof that counts): launch a game and watch
+    the new "Executable memory is ready" step; the log must name the pool
+    before the Wine service starts, and the game must reach its own window
+    instead of the black launch screen. Judge Home, Library and the game page
+    at arm's length: covers, titles and buttons should read like a normal
+    iPhone app, not a television. If the pool step fails, the named message
+    says whether no debugger was attached or the placement was refused; use
+    Quit Windoz and reopen instead of waiting on a frozen screen.
 - Later failures will be recorded here as they are diagnosed and fixed.
 
 ## JIT
 
-What this build (0.6.0) actually offers, in order of what works:
+What this build (0.7.0) actually offers, in order of what works:
 
 - **The bundled helper extension** — added in 0.5.0. `WindozJITHelper.appex`
   (bundle id `com.milifrr.windoz.jit-helper`) runs inside the app and attaches

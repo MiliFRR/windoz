@@ -45,7 +45,8 @@ GPL-3.0-or-later with the Madeira Converter Exception and are attributed in
 |---|---|---|
 | Prefix create / repair / delete | **working** | `PrefixManager` → `madeira_seed_prefix_if_needed` |
 | Wine service process (wineserver as a thread) | **working** | `wineserver_start`, `wineserver_is_ready`, `wineserver_stop` |
-| CPU translator (FEX) init / shutdown | **working** | `fex_initialize`, `fex_shutdown` |
+| Executable-memory (JIT) pool for the guest | **ported from Madeira in 0.7.0 — device-verification pending** | `JITPool.ensure` → `jit26_prepare_region` (debugger BRK), RW alias via `vm_remap`, then `WINE_IOS_JIT_RX/RW/SIZE` |
+| In-process FEX init / shutdown | **not on the launch path** | Madeira's engine never initialises the app-side FEX bridge for a game; the Wine fork's own translator uses the pool above. The bridge remains only for its self-test. |
 | Engine logs (FEX + JIT) into the in-app log | **working** | `fex_set_log_callback`, `jit_set_log_callback` |
 | JIT readiness probe | **working** | `windoz_jit_probe` (own code): sticky `CS_DEBUGGED` **and** a live debugger (`P_TRACED`) — maps and executes nothing |
 | Increased-memory entitlement report | **working** | `task_info(TASK_VM_INFO)` + `jit_available_memory` |
@@ -62,11 +63,16 @@ root itself accepts writes, the executable stat'd, the launch mode prepared
 writes the handoff; Steam desktop checks the client components) — then hands
 the game to the session screen, which registers the presenting `CAMetalLayer`
 with the engine's display shim (`madeira_display_set_layer`, once per process,
-before the guest's first swapchain), and starts the guest process on the
-engine queue (wineserver if needed → `fex_initialize` → `wine_exit_status_reset`
-→ `wine_process_start`). The session ends when the guest process does; the
-engine's own exit report (`wine_crash_exit_status`) decides the message, and a
-session that never starts is closed with an honest note after 90 seconds.
+before the guest's first swapchain). The guest then starts through **Madeira's
+own sequence**, on the engine queue: the attached debugger grants the JIT pool
+(`jit26_prepare_region`) and the pool's three `WINE_IOS_JIT_*` variables are
+published → the debugger is detached (Madeira's early detach; every executable
+page comes from the pool) → `wineserver_start` if the service is not already up
+→ `wine_exit_status_reset` → `wine_process_start`. There is **no app-side
+`fex_initialize`** on this path. The session ends when the guest process does;
+the engine's own exit report (`wine_crash_exit_status`) decides the message, and
+a session that never starts is closed with an honest note by the 160-second
+stall budget.
 
 The honest limits of this first session host:
 

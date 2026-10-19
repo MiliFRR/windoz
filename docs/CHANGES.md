@@ -294,3 +294,109 @@ settings sheets.
   re-checked with the same checker).
 - **No device claims.** The freeze, heat, download-list and layout fixes are
   exactly what the owner's next run judges; the checklist is in the README.
+
+## 0.7.0 (2026-10-19) — use Madeira's engine, and a real iPhone UI
+
+Built on 0.6.0. The owner ran the 0.6.0 keeper and replied, verbatim:
+
+> NOTHING IS FIXED WITH THE WITH THE NEW VERSION JUST USE MADEIRAS ENGINE AND
+> EVERYTHING FOR PLAYING THE GAMES AND FIX THE UI YOU DIDNT DO SHIT ABOUT IT
+
+That report is the specification. 0.6.0 had changed the **failure handling**
+around the launch path; it had not changed the launch path itself. This round
+does both required things and nothing else: the game launch is Madeira's
+sequence, and the screens are rebuilt as a compact native iPhone app. Every
+item below is **compiled and type-checked, not verified on a device**.
+
+### The launch: stop driving the engine ourselves
+
+Observed (owner, 0.6.0 on device): launching a game still freezes on the
+launch screen.
+
+Root cause: 0.6.0's `WindozEngine.startGuestProcess` still ran Windoz's own
+pipeline, not Madeira's:
+
+1. **Wine never received its JIT pool.** The pinned Wine fork's
+   `build/ntdll-unix/virtual_ios.c` executes every PE code page from the pool
+   named by `WINE_IOS_JIT_RX` / `WINE_IOS_JIT_RW` / `WINE_IOS_JIT_SIZE`. Windoz
+   never allocated that pool and never set those variables. The guest's
+   executable mappings therefore had nowhere to live — the launch screen stayed
+   black and the app waited forever.
+2. **Windoz ran a second, unused translator.** Our code called
+   `fex_initialize()` from Swift before starting the guest. Madeira's whole
+   app never calls it on a game launch (a repository-wide grep leaves only its
+   self-test); initialization done inside the C bridge is not the launch path.
+   That call built an in-process FEXCore context and another large JIT pool —
+   memory and CPU spent for nothing while the phone heated up.
+3. **Teardown did the same.** Our stop paths called `fex_shutdown()` and
+   `wineserver_stop()`; upstream has no app-side FEX shutdown to pair with.
+
+Fix — Madeira's exact order now lives in
+`app-windoz/Sources/Engine/JITPool.swift` and `WindozEngine`:
+
+- Ask the attached debugger for the RX pool with `jit26_prepare_region`
+  (Madeira's BRK protocol), with the same placement rules: at or above
+  `0x119000000`, never inside the guest 64 GB window, never covering the
+  `0x140000000` executable window. The pool is sized to the largest hole that
+  actually fits (shrink to at least 256 MB), lower holes are plugged during the
+  request so first-fit lands above the window, and three attempts re-roll bad
+  placements.
+- Mirror the pool read/write with `vm_remap`, mark it jetsam-exempt with
+  `jit_make_region_no_footprint`, and publish exactly the three variables the
+  Wine fork reads.
+- Detach the debugger **before** Wine starts, as Madeira does, so StikDebug's
+  budget cannot stall the app mid-game (`MADEIRA_DETACHED=1`).
+- Start `wineserver_start`, wait for `wineserver_is_ready`, then
+  `wine_process_start` — and nothing else. No `fex_initialize`, no
+  `fex_shutdown`, no app-side translator lock on the launch path.
+- A pool that cannot be granted is a **named failure** ("JIT is switched on,
+  but no debugger is attached…") with the Quit path, not a frozen screen. The
+  launch checklist has a new "Executable memory is ready" step so the device
+  log says which half of the handshake failed.
+- JIT readiness after the early detach is decided by the live pool
+  (`JITPool.isReady`), not by a debugger staying attached, so the app does not
+  claim JIT is off once the pool is serving the run.
+
+### The UI: a native iPhone app, not a television
+
+Observed (owner, every round since 0.5.0): "stuff is too big looks like ipad
+os ui for iphone"; 0.6.0's smaller console was still a console.
+
+Root cause: the design language itself — gradient wallpaper, glowing wordmark,
+330 pt hero carousel, 176×238 tiles, 200 pt game banner, glass cards, tracked
+uppercase section labels, custom 22–30 pt rounded type. Rescaling those
+elements for a phone kept them oversized and kept the "10-foot" feel.
+
+Rebuilt:
+
+- **System chrome.** Grouped system backgrounds, flat inset-grouped cards
+  (12 pt radius, no glass, no stroke, no glow), standard iOS type, sentence-case
+  section headings, one accent colour.
+- **Home** no longer has a wordmark or hero carousel. It is a large-title
+  screen with a compact "Continue playing" shelf (124×166 covers), a "Recently
+  added" shelf (96×128), and a plain all-games list with 44×58 covers. Empty
+  state is the system `ContentUnavailableView`.
+- **Library** is a three-column grid (adaptive 100–140 pt, caption titles) and
+  store rows are ordinary grouped cards with small bordered buttons.
+- **Game page** lost its 200 pt hero banner. The header is an 82×110 cover plus
+  executable name, compatibility, anti-cheat and playtime; the primary action
+  is a standard full-width "Play" button. Everything else stays in compact
+  grouped cards.
+- **Settings and Setup** use the system grouped List and bordered/bordered-
+  prominent buttons; the Downloads tab keeps its aggregated rows in compact
+  cards. The in-session HUD was already 12–13 pt and is unchanged apart from
+  the new pool step.
+- The app still forces dark mode in 0.7.0 because the session and store
+  surfaces contain many intentional white-on-black overlays; the backgrounds
+  and cards are now system dark colours rather than hand-mixed gradients.
+
+### Verification in this round
+
+- One commit per area on `ci-070`: `abf1859` (engine) and `7fa218f` (UI).
+  Both are type-checked green by `typecheck.yml` run **#39** (2026-10-19).
+- The 0.7.0 version bump is the third commit; its typecheck gate and the full
+  `build-ipa.yml` run are recorded in the README ledger when they finish.
+- **No device claims.** The owner's next run is the judge: launch a game and
+  watch the new "Executable memory is ready" step; the pool must appear in the
+  log before Wine's service starts, and the game must reach its own window
+  instead of the black launch screen. The UI checklist is in the README.
