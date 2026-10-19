@@ -152,6 +152,21 @@ text throughout. 0.7.0 is **device-verification pending**; its build run,
 release and keeper hash are recorded in **Known issues** below. The checklist
 is the run that confirms it.
 
+**Build 0.7.0 shipped — `build-ipa.yml` run #21 (`main` = `7f5cf67`, success,
+2026-10-19):** the full chain built every stage green (LLVM, the runtime,
+Wine/FEX/DXMT, the app, the IPA gate) and the unsigned IPA was published
+automatically as the GitHub Release
+[`v0.7.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.7.0) —
+`windoz-0.7.0-build7.ipa`, 78,276,079 bytes, SHA-256
+`81ED949EFBCF016CD48B07E69E1F67C550F4004F9F8B026CFC14D6873621DF69`
+(kept locally as `windoz-ipa-keep/windoz-18.ipa`, re-checked with
+`scripts/check-ipa.py --require 0.7.0 --min-build 7`). Verified inside: the app
+bundle and the helper both claim `0.7.0` build 7, `MinimumOSVersion` 26.0, the
+`windoz://` scheme, every subsystem marker, and the new launch-path strings
+(`[jit-pool]`, `WINE_IOS_JIT_RX`, `jit26_prepare_region`, `MADEIRA_DETACHED`),
+so the Madeira-pool launch code is in the shipped binary. **No device claims:**
+the owner's next run is the proof.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
@@ -1153,6 +1168,18 @@ the fix that is still in the tree.*
     an 82×110 game header and standard Play button, standard List Settings
     and Setup. Dark mode is retained for the session overlays, but the
     backgrounds are system dark colours, not gradients.
+  - **Record:** the `ci-070` gates were green (#39 and #40, superseded by later
+    pushes on the same branch), and the final tree `b8b3fed` is green in
+    **#43**. Merged to `main` as `7f5cf67`. `build-ipa.yml` **run #21**
+    (2026-10-19) is green through the IPA gate, and `release-ipa.yml` run #4
+    published [`v0.7.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.7.0) —
+    `windoz-0.7.0-build7.ipa`, 78,276,079 bytes, SHA-256
+    `81ED949EFBCF016CD48B07E69E1F67C550F4004F9F8B026CFC14D6873621DF69`
+    (kept locally as `windoz-ipa-keep/windoz-18.ipa`, re-checked with
+    `scripts/check-ipa.py --require 0.7.0 --min-build 7`). The executable
+    contains `[jit-pool]`, `WINE_IOS_JIT_RX`, `jit26_prepare_region` and
+    `MADEIRA_DETACHED`, so the Madeira-pool launch path is in the shipped
+    binary.
   - **0.7.0 device checklist** (the proof that counts): launch a game and watch
     the new "Executable memory is ready" step; the log must name the pool
     before the Wine service starts, and the game must reach its own window

@@ -397,8 +397,17 @@ Rebuilt:
   final tree (`b8b3fed`) is type-checked green by `typecheck.yml` run **#43**
   (2026-10-19); earlier gates #39 and #40 were green too, and were cancelled
   or superseded only by later pushes on the same branch.
-- The 0.7.0 version bump is part of this tree; the full `build-ipa.yml` run and
-  the keeper IPA hash are recorded in the README ledger when they finish.
+- The 0.7.0 version bump is part of this tree. `build-ipa.yml` **run #21**
+  (2026-10-19, `main` = `7f5cf67`) is green through every stage — including
+  the IPA gate — and `release-ipa.yml` run #4 published the artifact as the
+  GitHub Release
+  [`v0.7.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.7.0)
+  (`windoz-0.7.0-build7.ipa`, 78,276,079 bytes, SHA-256
+  `81ED949EFBCF016CD48B07E69E1F67C550F4004F9F8B026CFC14D6873621DF69`).
+  The same file is kept locally as `windoz-ipa-keep/windoz-18.ipa` and
+  re-checked with `scripts/check-ipa.py --require 0.7.0 --min-build 7`; the
+  executable also carries the new launch-path strings (`[jit-pool]`,
+  `WINE_IOS_JIT_RX`, `jit26_prepare_region`, `MADEIRA_DETACHED`).
 - **No device claims.** The owner's next run is the judge: launch a game and
   watch the new "Executable memory is ready" step; the pool must appear in the
   log before Wine's service starts, and the game must reach its own window
