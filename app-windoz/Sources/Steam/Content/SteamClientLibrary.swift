@@ -58,7 +58,7 @@ enum SteamClientLibrary {
                 continue
             }
             let appID = UInt32(exactly: dockGame.id) ?? 0
-            let executable = SteamStore.scanForExecutable(in: folder)
+            let executable = await MainActor.run { SteamStore.scanForExecutable(in: folder) }
             if executable == nil { summary.missingExecutable += 1 }
 
             if let previous = byAppID[String(dockGame.id)] {
