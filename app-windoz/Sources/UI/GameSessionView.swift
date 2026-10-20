@@ -110,7 +110,6 @@ final class SessionSurfaceView: UIView {
     /// events instead of touches.
     private var pointerMode = SessionPreferences.pointerMode
     private var trackpadTouch: UITouch?
-    private var trackpadScrollTouch: UITouch?
     private var trackpadLastPoint = CGPoint.zero
     private var trackpadStartPoint = CGPoint.zero
     private var trackpadStartTime: CFTimeInterval = 0
@@ -461,7 +460,13 @@ final class SessionSurfaceView: UIView {
     // MARK: Touch → guest
 
     private func activeTouches(_ event: UIEvent?) -> [UITouch] {
-        (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
+        // `event.allTouches` also carries fingers held on the joystick, Space,
+        // Esc or Tab. Only touches delivered to this surface may count as a
+        // trackpad gesture; otherwise holding a control while looking around
+        // would be misread as a two-finger scroll.
+        (event?.allTouches ?? []).filter {
+            $0.view === self && $0.phase != .ended && $0.phase != .cancelled
+        }
     }
 
     /// Maps a view point to guest pixels. In a desktop session the engine's
@@ -537,7 +542,6 @@ final class SessionSurfaceView: UIView {
         trackpadTwoFingerMoved = false
         trackpadScrollAccum = 0
         trackpadTouch = nil
-        trackpadScrollTouch = nil
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -597,7 +601,6 @@ final class SessionSurfaceView: UIView {
             // stale anchor when the second one leaves.
             trackpadTouch = nil
             trackpadMoved = false
-            trackpadScrollTouch = touches.first(where: { $0 !== trackpadTouch }) ?? touches.first
             if trackpadDragging {
                 postPointer(F_LUP)
                 trackpadDragging = false
@@ -679,7 +682,6 @@ final class SessionSurfaceView: UIView {
                 trackpadTwoFinger = false
                 trackpadTwoFingerMoved = false
                 trackpadScrollAccum = 0
-                trackpadScrollTouch = nil
             }
             return
         }
