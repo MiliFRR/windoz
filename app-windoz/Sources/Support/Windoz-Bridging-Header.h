@@ -26,6 +26,13 @@
 #include <stdint.h>
 uint64_t madeira_get_present_count(void);
 
+// Madeira's low-QoS guest-thread switch, defined in the pinned engine's
+// ntdll/unix/sync.c. The library is built with hidden visibility, so dlsym
+// cannot see these; a direct reference makes the linker pull sync.o out of
+// libntdll_unix.a and resolves the call statically.
+void madeira_set_eco(int on);
+int madeira_get_eco(void);
+
 // The Steam depot downloader's C helpers (chunked-zip framing, an LZMA
 // decoder shim and an educational zstd decoder), ported with the SwiftSteam
 // client from Madeira (GPL-3.0-or-later + Madeira Converter Exception).

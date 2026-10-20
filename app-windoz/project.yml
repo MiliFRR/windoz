@@ -60,6 +60,15 @@ targets:
       # --- engine static libraries: linked explicitly via OTHER_LDFLAGS
       #     (XcodeGen's sources phase silently skips .a archives — CI run #31)
       # --- engine resources (DLL farm, prefix template, licences, certs)
+      # Both DLL farms are required. A direct x64 game selects arm64ec-windows;
+      # an explorer.exe desktop (Doz Dock and the Steam desktop) selects the
+      # native ARM64 farm, aarch64-windows. 0.9.0 bundled only the former, so
+      # every desktop session started an Explorer whose system DLLs were
+      # missing — the desktop and cursor appeared, but dockhost.exe and Valve's
+      # client could never start.
+      - path: ../madeira/app/Madeira/aarch64-windows
+        type: folder
+        buildPhase: resources
       - path: ../madeira/app/Madeira/arm64ec-windows
         type: folder
         buildPhase: resources

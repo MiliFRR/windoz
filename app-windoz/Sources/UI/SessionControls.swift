@@ -345,8 +345,12 @@ final class SessionGamepad {
         // Right stick → relative mouse motion. The guest's cursor is moved,
         // never warped, so this follows whatever pointer mode the session uses.
         let shaped = Self.shape(Double(state.rx) / 32767.0, Double(state.ry) / 32767.0)
-        let dx = shaped.x * Self.mouseSpeed * min(dt, 1.0 / 15.0)
-        let dy = -shaped.y * Self.mouseSpeed * min(dt, 1.0 / 15.0)
+        // The same persisted multiplier as the touch trackpad, so a player who
+        // slows the pointer down gets the same slower right stick.
+        let sensitivity = SessionPreferences.trackpadSensitivity
+        let step = Self.mouseSpeed * sensitivity * min(dt, 1.0 / 15.0)
+        let dx = shaped.x * step
+        let dy = -shaped.y * step
         mouseCarry.x += dx
         mouseCarry.y += dy
         let ix = Int32(mouseCarry.x.rounded(.towardZero))

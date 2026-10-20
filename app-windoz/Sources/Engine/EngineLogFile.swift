@@ -2,6 +2,7 @@
 // Windoz Converter Exception: see LICENSE-EXCEPTION.md
 
 import Foundation
+import Darwin
 
 /// The one on-disk log (Phase 3): every line the in-memory stream holds is
 /// appended to `windoz-logs/windoz.log` under the storage root, so a failure
@@ -24,6 +25,8 @@ final class EngineLogFile {
     private var pending = Data()
     /// True while a flush is scheduled, so a burst schedules one, not one per line.
     private var flushScheduled = false
+    /// The process-wide stderr/stdout pipe is installed once.
+    private var outputCaptureInstalled = false
 
     private init() {}
 
@@ -48,6 +51,9 @@ final class EngineLogFile {
     /// stream untouched and say why in it.
     func start() {
         queue.async {
+            // Install the pipe even if the file cannot be opened: the
+            // in-memory stream still receives the engine's diagnostics.
+            defer { self.installOutputCapture() }
             guard self.handle == nil else { return }
             let file = Self.fileURL
             do {
@@ -112,6 +118,78 @@ final class EngineLogFile {
         }
         handle.write(pending)
         pending.removeAll(keepingCapacity: true)
+    }
+
+    /// The pinned engine writes most diagnostics with `dprintf(2, ...)`; its
+    /// own file sink is `Documents/madeira-log.txt`, which this installation
+    /// cannot create. Duplicate the process's stdout/stderr into a pipe and
+    /// copy every line into the AppGroup log, so those lines survive the app
+    /// being restarted and appear in the one log the owner can share.
+    ///
+    /// Must run on `queue`; installs once. A blocking reader thread is
+    /// deliberate: the pipe lasts for the process, and a dispatch-queue
+    /// worker parked on read would starve the pool.
+    private func installOutputCapture() {
+        guard !outputCaptureInstalled else { return }
+        outputCaptureInstalled = true
+
+        var fds: [Int32] = [0, 0]
+        guard pipe(&fds) == 0 else {
+            EngineLogStream.shared.append("[log] engine output capture unavailable: pipe() failed (errno \(errno)).",
+                                          level: .warning)
+            return
+        }
+        let readFD = fds[0]
+        let writeFD = fds[1]
+        guard dup2(writeFD, STDOUT_FILENO) >= 0, dup2(writeFD, STDERR_FILENO) >= 0 else {
+            EngineLogStream.shared.append("[log] engine output capture unavailable: dup2() failed (errno \(errno)).",
+                                          level: .warning)
+            close(readFD)
+            close(writeFD)
+            return
+        }
+        if writeFD > STDERR_FILENO { close(writeFD) }
+
+        let thread = Thread { [weak self] in self?.pumpOutput(readFD) }
+        thread.name = "windoz.engine-output"
+        thread.stackSize = 256 * 1024
+        thread.start()
+        EngineLogStream.shared.append("[log] engine stdout/stderr captured into this log.")
+    }
+
+    private func pumpOutput(_ fd: Int32) {
+        defer { close(fd) }
+        var pending = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = chunk.withUnsafeMutableBufferPointer { buffer in
+                read(fd, buffer.baseAddress, buffer.count)
+            }
+            if count > 0 {
+                pending.append(contentsOf: chunk.prefix(count))
+                while let newline = pending.firstIndex(of: 10) {
+                    emitEngineOutput(pending[pending.startIndex..<newline])
+                    pending.removeSubrange(pending.startIndex...newline)
+                }
+                // A line far beyond any sane diagnostic should still surface.
+                if pending.count > 64 * 1024 {
+                    emitEngineOutput(pending[...])
+                    pending.removeAll(keepingCapacity: true)
+                }
+            } else if count == 0 {
+                break
+            } else if errno != EINTR {
+                break
+            }
+        }
+        if !pending.isEmpty { emitEngineOutput(pending[...]) }
+    }
+
+    private func emitEngineOutput(_ data: Data.SubSequence) {
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        EngineLogStream.shared.append("[engine] \(text)")
     }
 
     /// Append the tail of the engine's own Wine/guest output, with a reason

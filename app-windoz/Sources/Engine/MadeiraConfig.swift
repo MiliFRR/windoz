@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 125hz
 //
-// Documents/madeira.cfg — the one configuration file the pinned engine reads.
-// The app owns only the keys it writes; every other line is preserved so a
-// setting never erases the user's (or another build's) configuration.
+// The pinned engine's configuration, and Windoz's own durable copy of the
+// memory-tier choice.
+//
+// Device history (0.9.0): Documents is not writable in this installation, so
+// every write of Documents/madeira.cfg failed and the engine never saw a
+// swap-mb key — the log said "swap tier off" while the setting looked saved.
+// The app now owns the setting in UserDefaults, writes a per-launch cfg under
+// the writable storage root, and points MADEIRA_CFG_GAME at it. The engine
+// scans that file after madeira.cfg, so its keys win even when Documents is
+// read-only. A best-effort copy still goes to Documents/madeira.cfg for other
+// tools and for installations where Documents is writable.
 
 import Foundation
 
-/// Swap-memory settings, read from and written to `Documents/madeira.cfg`.
+/// Swap-memory settings, read from and written through the app.
 ///
 /// The engine's file-backed guest tier is armed by `wine_process_start` in
 /// WineProcessBridge.m: it looks for `swap-mb`, and when the value is at least
 /// 64 MB it recreates `NSTemporaryDirectory()/madeira-swap.bin` with
 /// `NSFileProtectionNone` and exports `MADEIRA_SWAP_FILE` / `MADEIRA_SWAP_MB`
-/// to the guest. Windoz does not allocate or map the tier itself — it only
-/// writes the same keys Madeira's Memory & sync page writes.
+/// to the guest. Windoz additionally prepares the same file and environment
+/// before the launch, so the tier still arms if the bridge misses the cfg.
 enum MadeiraConfig {
 
     /// `env.MADEIRA_SWAP_COVERAGE` — which allocations the tier backs. The
@@ -48,7 +56,10 @@ enum MadeiraConfig {
 
     struct Swap: Equatable {
         var sizeMB: Int = 0
-        var coverage: Coverage = .classic
+        /// New installations default to broad: the engine's classic coverage
+        /// backs only a narrow set of allocations, which is why a configured
+        /// tier could look armed while doing very little.
+        var coverage: Coverage = .broad
 
         var isOff: Bool { sizeMB <= 0 }
 
@@ -60,16 +71,53 @@ enum MadeiraConfig {
         }
     }
 
-    /// The engine reads this exact path: `wine_process_start` resolves the
-    /// docs folder through `NSDocumentDirectory`, which is this URL inside the
-    /// app container.
+    /// What a launch needs to arm the tier. `configURL` is the writable cfg
+    /// passed as MADEIRA_CFG_GAME; `swapFileURL` is the pre-created backing
+    /// file. Both are nil when the tier is off.
+    struct PreparedLaunch {
+        var swap: Swap
+        var configURL: URL?
+        var swapFileURL: URL?
+    }
+
+    /// The engine reads this path for the general config: `wine_process_start`
+    /// resolves the docs folder through `NSDocumentDirectory`.
     static var fileURL: URL {
         AppContainer.documents.appendingPathComponent("madeira.cfg")
     }
 
+    /// Windoz's per-launch config. It lives under the write-probed storage
+    /// root (Library or tmp when Documents is refused), so it exists even in
+    /// installations where Documents is read-only.
+    static var launchConfigURL: URL {
+        AppContainer.storageRoot.appendingPathComponent("windoz-engine.cfg")
+    }
+
+    private static let storedSizeKey = "windoz.swap.sizeMB"
+    private static let storedCoverageKey = "windoz.swap.coverage"
+
     // MARK: - Reading
 
+    /// The setting the user last saved in Windoz. On first use, migrate a
+    /// value that already exists in Documents/madeira.cfg.
     static func readSwap() -> Swap {
+        if let stored = storedSwap() { return stored }
+        let migrated = readDocumentsSwap()
+        if !migrated.isOff || FileManager.default.fileExists(atPath: fileURL.path) {
+            persist(migrated)
+        }
+        return migrated
+    }
+
+    private static func storedSwap() -> Swap? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: storedSizeKey) != nil else { return nil }
+        let size = defaults.integer(forKey: storedSizeKey)
+        let raw = defaults.string(forKey: storedCoverageKey) ?? Coverage.broad.rawValue
+        return Swap(sizeMB: normalize(size), coverage: Coverage(rawValue: raw) ?? .broad)
+    }
+
+    private static func readDocumentsSwap() -> Swap {
         guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return Swap() }
         var swap = Swap()
         for line in text.split(whereSeparator: \.isNewline) {
@@ -85,16 +133,96 @@ enum MadeiraConfig {
         }
         // The bridge ignores anything below 64 MB; show that as off rather
         // than a size the engine would silently discard.
-        if swap.sizeMB < 64 { swap.sizeMB = 0 }
+        swap.sizeMB = normalize(swap.sizeMB)
         return swap
     }
 
     // MARK: - Writing
 
-    /// Replaces only `swap-mb` and `env.MADEIRA_SWAP_COVERAGE`; comments and
-    /// every other key stay byte-for-byte in place. A swap size below 64 MB is
-    /// written as off, because the bridge will not arm it.
+    /// Saves the setting where the app can always read it, writes the
+    /// per-launch cfg the engine will actually scan, and mirrors it into
+    /// Documents/madeira.cfg when that folder allows a write.
+    ///
+    /// Only a failure to write the per-launch cfg is thrown: that is the one
+    /// file a launch depends on. A read-only Documents is reported, not fatal.
     static func writeSwap(_ swap: Swap) throws {
+        let normalized = Swap(sizeMB: normalize(swap.sizeMB), coverage: swap.coverage)
+        persist(normalized)
+
+        if normalized.isOff {
+            try? FileManager.default.removeItem(at: launchConfigURL)
+        } else {
+            try writeLaunchConfig(normalized)
+        }
+
+        var mirror = "Documents/madeira.cfg"
+        do {
+            try writeDocumentsConfig(normalized)
+        } catch {
+            mirror = "Documents/madeira.cfg is not writable (\(error.localizedDescription)); the launch cfg is authoritative"
+            EngineLogStream.shared.append(
+                "[swap] could not mirror the setting to Documents/madeira.cfg: \(error.localizedDescription). The engine reads \(launchConfigURL.path) instead.",
+                level: .warning)
+        }
+
+        EngineLogStream.shared.append(
+            normalized.isOff
+                ? "[swap] saved: tier off (\(mirror))."
+                : "[swap] saved: \(normalized.sizeMB) MB, coverage \(normalized.coverage.rawValue); launch cfg \(launchConfigURL.path); \(mirror).",
+            level: normalized.isOff ? .info : .success)
+    }
+
+    /// Prepares everything a launch needs. Called on the session queue before
+    /// `wine_process_start`. Never throws: a pre-arm failure is logged and the
+    /// bridge still gets the cfg and the normal environment.
+    static func prepareLaunch() -> PreparedLaunch {
+        let swap = readSwap()
+        guard !swap.isOff else {
+            try? FileManager.default.removeItem(at: launchConfigURL)
+            return PreparedLaunch(swap: swap, configURL: nil, swapFileURL: nil)
+        }
+
+        var configURL: URL?
+        do {
+            configURL = try writeLaunchConfig(swap)
+        } catch {
+            EngineLogStream.shared.append(
+                "[swap] the per-launch cfg could not be written at \(launchConfigURL.path): \(error.localizedDescription). The pre-armed environment is the fallback.",
+                level: .warning)
+        }
+
+        let fileURL = prearmSwapFile(sizeMB: swap.sizeMB)
+        return PreparedLaunch(swap: swap, configURL: configURL, swapFileURL: fileURL)
+    }
+
+    @discardableResult
+    private static func writeLaunchConfig(_ swap: Swap) throws -> URL {
+        var lines = [
+            "# Windoz per-launch engine configuration.",
+            "# Generated on every launch; edits here are replaced.",
+            "swap-mb = \(swap.sizeMB)",
+        ]
+        if swap.coverage != .classic {
+            lines.append("env.MADEIRA_SWAP_COVERAGE = \(swap.coverage.rawValue)")
+        }
+        // The block rule's default floor is 1 MB; naming it makes the log and
+        // the bridge's own min-kb branch agree.
+        if swap.coverage == .blocks {
+            lines.append("swap-min-kb = 1024")
+        }
+        let text = lines.joined(separator: "\n") + "\n"
+        do {
+            try FileManager.default.createDirectory(at: launchConfigURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: launchConfigURL, options: [.atomic])
+        } catch {
+            throw ConfigError.refused(error.localizedDescription)
+        }
+        return launchConfigURL
+    }
+
+    /// The Documents copy preserves every key Windoz does not own.
+    private static func writeDocumentsConfig(_ swap: Swap) throws {
         let existing = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
         var lines = existing.split(whereSeparator: \.isNewline).map { line -> String in
             var line = String(line)
@@ -102,17 +230,19 @@ enum MadeiraConfig {
             return line
         }
 
-        let managed: Set<String> = ["swap-mb", "env.madeira_swap_coverage"]
+        let managed: Set<String> = ["swap-mb", "env.madeira_swap_coverage", "swap-min-kb"]
         lines = lines.filter { line in
             guard let (key, _) = keyValue(Substring(line)) else { return true }
             return !managed.contains(key)
         }
 
-        let size = swap.sizeMB >= 64 ? swap.sizeMB : 0
-        if size > 0 {
-            lines.append("swap-mb = \(size)")
+        if !swap.isOff {
+            lines.append("swap-mb = \(swap.sizeMB)")
             if swap.coverage != .classic {
                 lines.append("env.MADEIRA_SWAP_COVERAGE = \(swap.coverage.rawValue)")
+            }
+            if swap.coverage == .blocks {
+                lines.append("swap-min-kb = 1024")
             }
         }
 
@@ -123,26 +253,50 @@ enum MadeiraConfig {
             return !trimmed.isEmpty && !trimmed.hasPrefix("#")
         }
         if !meaningful {
-            try? FileManager.default.removeItem(at: fileURL)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
             return
         }
 
         let text = lines.joined(separator: "\n") + "\n"
+        try Data(text.utf8).write(to: fileURL, options: [.atomic])
+    }
+
+    /// Creates the sparse backing file with no file protection, matching what
+    /// the bridge creates. If the bridge later finds `swap-mb` itself it
+    /// removes and recreates this same path — harmless. If it misses the cfg,
+    /// virtual_ios.c can still open this file (it does not pass O_CREAT).
+    private static func prearmSwapFile(sizeMB: Int) -> URL? {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("madeira-swap.bin")
+        let manager = FileManager.default
         do {
-            try Data(text.utf8).write(to: fileURL, options: [.atomic])
+            if !manager.fileExists(atPath: url.path) {
+                manager.createFile(atPath: url.path, contents: nil,
+                                   attributes: [.protectionKey: FileProtectionType.none])
+            }
+            try manager.setAttributes([.protectionKey: FileProtectionType.none],
+                                      ofItemAtPath: url.path)
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: UInt64(max(sizeMB, 64)) << 20)
+            try handle.close()
+            return url
         } catch {
-            throw ConfigError.refused(error.localizedDescription)
+            EngineLogStream.shared.append(
+                "[swap] could not pre-create \(url.path): \(error.localizedDescription). The bridge can still create it when its cfg branch runs.",
+                level: .warning)
+            return nil
         }
-        // Verify what the bridge will read, not what we meant to write.
-        let written = readSwap()
-        let expected = Swap(sizeMB: size, coverage: swap.coverage)
-        guard written == expected else {
-            throw ConfigError.verifyFailed
-        }
-        EngineLogStream.shared.append(
-            size > 0
-                ? "[swap] madeira.cfg: swap-mb=\(size), coverage=\(swap.coverage.rawValue)"
-                : "[swap] madeira.cfg: swap tier off")
+    }
+
+    private static func persist(_ swap: Swap) {
+        UserDefaults.standard.set(swap.sizeMB, forKey: storedSizeKey)
+        UserDefaults.standard.set(swap.coverage.rawValue, forKey: storedCoverageKey)
+    }
+
+    private static func normalize(_ sizeMB: Int) -> Int {
+        sizeMB >= 64 ? sizeMB : 0
     }
 
     // MARK: - Parsing
@@ -164,14 +318,11 @@ enum MadeiraConfig {
 
     enum ConfigError: LocalizedError {
         case refused(String)
-        case verifyFailed
 
         var errorDescription: String? {
             switch self {
             case .refused(let why):
-                return "Windoz could not save Documents/madeira.cfg (\(why)). The engine reads the swap tier from that file, so the setting will not take effect."
-            case .verifyFailed:
-                return "Documents/madeira.cfg did not read back the saved value, so the swap setting was not applied."
+                return "Windoz could not save its per-launch engine configuration (\(why)). The swap setting cannot reach the engine."
             }
         }
     }

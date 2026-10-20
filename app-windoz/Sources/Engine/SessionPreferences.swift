@@ -45,6 +45,28 @@ enum PointerMode: String, CaseIterable, Identifiable, Codable {
 enum SessionPreferences {
     static let pointerKey = "windoz.session.pointer"
     static let ecoKey = "windoz.session.eco"
+    static let sensitivityKey = "windoz.session.trackpadSensitivity"
+
+    /// Multiplier on the trackpad's finger-to-cursor travel and on the
+    /// controller right stick's mouse speed. 1.3 is the 0.9.0 trackpad scale;
+    /// the range reaches slow precision and fast full-screen movement.
+    static let sensitivityRange = 0.35...3.0
+    static let defaultSensitivity = 1.3
+
+    static var trackpadSensitivity: Double {
+        get {
+            let defaults = UserDefaults.standard
+            guard defaults.object(forKey: sensitivityKey) != nil else {
+                return defaultSensitivity
+            }
+            let value = defaults.double(forKey: sensitivityKey)
+            return min(max(value, sensitivityRange.lowerBound), sensitivityRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, sensitivityRange.lowerBound), sensitivityRange.upperBound)
+            UserDefaults.standard.set(clamped, forKey: sensitivityKey)
+        }
+    }
 
     static var pointerMode: PointerMode {
         get {

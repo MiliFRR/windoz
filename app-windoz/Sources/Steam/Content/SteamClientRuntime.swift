@@ -53,6 +53,21 @@ enum SteamClientRuntime {
         """
         let url = driveC.appendingPathComponent("steam-launch.bat")
         try Data(text.utf8).write(to: url, options: .atomic)
+
+        // The batch starts services.exe, then Valve's client. If the ARM64
+        // system farm is missing, services.exe cannot start and Steam's CEF
+        // UI never paints — precisely the 0.9.0 desktop-with-cursor symptom.
+        let roots = [Bundle.main.bundleURL, Bundle.main.resourceURL].compactMap { $0 }
+        let servicesPresent = roots.contains {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("aarch64-windows/services.exe").path)
+        }
+        let steamPresent = FileManager.default.fileExists(
+            atPath: driveC.appendingPathComponent(relativeRoot + "/steam.exe").path)
+        EngineLogStream.shared.append("[steam] desktop launcher written to \(url.path); services.exe bundled=\(servicesPresent); steam.exe in drive=\(steamPresent).")
+        if !servicesPresent {
+            EngineLogStream.shared.append("[steam] aarch64-windows/services.exe is missing from the app bundle — the SCM/rpcss chain and Valve's CEF UI cannot start. Rebuild with the aarch64-windows resource.",
+                                          level: .warning)
+        }
     }
 
     enum Failure: LocalizedError {

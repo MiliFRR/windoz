@@ -37,7 +37,16 @@ enum DozDock {
     /// by the pinned tree's build/madeira-dock/build.sh; the engine bridges
     /// every file of that folder into C:\windows\system32 at session start).
     static var bundled: Bool {
-        Bundle.main.url(forResource: "dockhost", withExtension: "exe", subdirectory: "arm64ec-windows") != nil
+        if Bundle.main.url(forResource: "dockhost", withExtension: "exe",
+                           subdirectory: "arm64ec-windows") != nil { return true }
+        // LiveContainer can re-parent Bundle.main; check the common roots too.
+        for root in [Bundle.main.bundleURL, Bundle.main.resourceURL].compactMap({ $0 }) {
+            if FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("arm64ec-windows/dockhost.exe").path) {
+                return true
+            }
+        }
+        return false
     }
 
     static let executable = "C:\\windows\\system32\\dockhost.exe"
@@ -330,6 +339,7 @@ enum DozDock {
         }
         // Never let a stale environment choose the PC cached-account test path.
         unsetenv("MADEIRA_STEAM_HOST_ACCOUNT"); unsetenv("MADEIRA_STEAM_HOST_STEAMID")
+        EngineLogStream.shared.append("[dock] host environment armed: app=\(game.id), client=\(SteamClientRuntime.windowsRoot), install=\(game.windowsInstallPath), ceg=\(game.customExecutables), report=C:\\madeira-dock.txt.")
     }
 
     /// Opposite of `configure`: every dock variable is removed before any

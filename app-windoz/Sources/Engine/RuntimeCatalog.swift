@@ -155,20 +155,211 @@ final class RuntimeInstaller: ObservableObject {
 
     private init() { loadManifest() }
 
+    /// Loads the manifest through every plausible bundle path, then falls
+    /// back to the copy compiled into the binary. 0.9.0 asked Bundle.main for
+    /// one URL, got one, and then Data(contentsOf:) said the file was missing
+    /// on the owner's device (LiveContainer's bundle redirection is the likely
+    /// cause), leaving every runtime row empty.
     private func loadManifest() {
-        guard let url = Bundle.main.url(forResource: "runtime-manifest", withExtension: "json") else {
-            manifestProblem = "This build has no runtime manifest (Resources/runtime-manifest.json is missing)."
-            return
+        let candidates = Self.manifestCandidates()
+        var attempts: [String] = []
+        for url in candidates {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                attempts.append("\(url.path): no file")
+                continue
+            }
+            do {
+                let data = try Data(contentsOf: url)
+                let manifest = try JSONDecoder().decode(RuntimeManifest.self, from: data)
+                specs = manifest.components
+                manifestProblem = nil
+                EngineLogStream.shared.append("[runtime] manifest loaded from \(url.path) (\(specs.count) components).")
+                return
+            } catch {
+                attempts.append("\(url.path): \(error.localizedDescription)")
+            }
         }
+
         do {
-            let data = try Data(contentsOf: url)
-            let manifest = try JSONDecoder().decode(RuntimeManifest.self, from: data)
+            let manifest = try JSONDecoder().decode(RuntimeManifest.self,
+                                                   from: Data(Self.builtInManifest.utf8))
             specs = manifest.components
             manifestProblem = nil
+            EngineLogStream.shared.append("[runtime] manifest loaded from the copy compiled into the app (\(specs.count) components).",
+                                          level: .warning)
+            return
         } catch {
-            manifestProblem = "The runtime manifest could not be read: \(error.localizedDescription)"
+            attempts.append("compiled-in copy: \(error.localizedDescription)")
         }
+
+        manifestProblem = "The runtime manifest could not be read. Paths tried: "
+            + attempts.joined(separator: "; ")
+        EngineLogStream.shared.append("[runtime] \(manifestProblem!)", level: .error)
     }
+
+    /// Bundle manifests can live at the bundle root, under Resources/, or in
+    /// a nested bundle when a host such as LiveContainer re-parents the guest.
+    private static func manifestCandidates() -> [URL] {
+        var urls: [URL] = []
+        func add(_ url: URL?) {
+            guard let url, !urls.contains(url) else { return }
+            urls.append(url)
+        }
+        let name = "runtime-manifest.json"
+
+        add(Bundle.main.url(forResource: "runtime-manifest", withExtension: "json"))
+        add(Bundle.main.url(forResource: "runtime-manifest", withExtension: "json",
+                            subdirectory: "Resources"))
+        if let resource = Bundle.main.resourceURL {
+            add(resource.appendingPathComponent(name))
+            add(resource.appendingPathComponent("Resources").appendingPathComponent(name))
+        }
+        add(Bundle.main.bundleURL.appendingPathComponent(name))
+        add(Bundle.main.bundleURL.appendingPathComponent("Resources").appendingPathComponent(name))
+
+        for bundle in Bundle.allBundles + Bundle.allFrameworks {
+            add(bundle.url(forResource: "runtime-manifest", withExtension: "json"))
+            add(bundle.url(forResource: "runtime-manifest", withExtension: "json",
+                           subdirectory: "Resources"))
+            add(bundle.bundleURL.appendingPathComponent(name))
+            add(bundle.bundleURL.appendingPathComponent("Resources").appendingPathComponent(name))
+        }
+        return urls
+    }
+
+    // MARK: - Compiled-in manifest
+    //
+    // Exact copy of Resources/runtime-manifest.json. It exists so a host that
+    // hides the bundle resource cannot break the runtime screen or a runtime
+    // install; the file remains the editable source. `scripts/check-ipa.py`
+    // compares this string with the packaged JSON.
+    private static let builtInManifest = #"""
+    {
+      "version": 1,
+      "note": "Every entry points at the vendor's own download. Windoz never ships Microsoft's binaries. A sha256 pin is verified exactly and a mismatch is refused (stale file). An entry without a pin freezes the first download's SHA-256 per prefix and refuses any later change unless the user accepts it explicitly.",
+      "components": [
+        {
+          "id": "winemono",
+          "title": "Wine Mono (.NET Framework)",
+          "detail": "Games built on Microsoft's .NET Framework run on Wine Mono, the Wine project's open-source runtime. Windoz downloads it from WineHQ and the engine links it into the prefix before each session.",
+          "kind": "mono",
+          "arch": "any",
+          "url": "https://dl.winehq.org/wine/wine-mono/11.0.0/wine-mono-11.0.0-x86.tar.xz",
+          "sha256": "0cd723aa28897f7d7d2702eed6c72e4262255980e212bc2b3c94bfa234abe5fd",
+          "bytes": 41643568,
+          "note": "Pinned to WineHQ's Wine Mono 11.0.0 and its SHA-256, exactly as Madeira's build pins it. About 42 MB to download, about 130 MB once installed."
+        },
+        {
+          "id": "vcrun2005",
+          "title": "Visual C++ 2005 runtime (VC80)",
+          "detail": "Loads automatically for 64-bit games that import msvcr80/msvcp80.",
+          "kind": "engine",
+          "arch": "x64",
+          "note": "Provided by the engine: Wine's built-in VC80 runtime, and the engine seeds the side-by-side assemblies into a new prefix, so games with activation contexts find it. Nothing to install."
+        },
+        {
+          "id": "vcrun2008",
+          "title": "Visual C++ 2008 runtime (VC90)",
+          "detail": "Loads automatically for 64-bit games that import msvcr90/msvcp90.",
+          "kind": "engine",
+          "arch": "x64",
+          "note": "Provided by the engine: Wine's built-in VC90 runtime, with side-by-side seeding like VC80. Nothing to install."
+        },
+        {
+          "id": "vcrun2010",
+          "title": "Visual C++ 2010 runtime (VC100)",
+          "detail": "Loads automatically for 64-bit games that import msvcr100/msvcp100.",
+          "kind": "engine",
+          "arch": "x64",
+          "note": "Provided by the engine: msvcr100/msvcp100 are Wine built-ins; 64-bit games load them without any install."
+        },
+        {
+          "id": "vcrun2012",
+          "title": "Visual C++ 2012 runtime (VC110)",
+          "detail": "Loads automatically for 64-bit games that import msvcr110/msvcp110.",
+          "kind": "engine",
+          "arch": "x64",
+          "note": "Provided by the engine: msvcr110/msvcp110 are Wine built-ins; 64-bit games load them without any install."
+        },
+        {
+          "id": "vcrun2013",
+          "title": "Visual C++ 2013 runtime (VC120)",
+          "detail": "Loads automatically for 64-bit games that import msvcr120/msvcp120.",
+          "kind": "engine",
+          "arch": "x64",
+          "note": "Provided by the engine: msvcr120/msvcp120 are Wine built-ins; 64-bit games load them without any install."
+        },
+        {
+          "id": "vcrun2015plus",
+          "title": "Visual C++ 2015–2022 runtime",
+          "detail": "The runtime most modern games need (vcruntime140 / msvcp140 / concrt140 and friends).",
+          "kind": "engine",
+          "arch": "x64",
+          "probeFiles": [
+            "drive_c/windows/system32/vcruntime140_1.dll",
+            "drive_c/windows/system32/msvcp140.dll",
+            "drive_c/windows/system32/concrt140.dll"
+          ],
+          "note": "Provided by the engine: every session overlays Microsoft's own x86-64 runtime DLLs, taken from the pinned, hash-checked vc-runtime-inputs copy the build already carries. The first session writes them into the prefix; until then this row says \"staged at session start\"."
+        },
+        {
+          "id": "win32-runtimes",
+          "title": "32-bit (x86) runtimes — VC++ 2005–2022, DirectX setup, .NET installers",
+          "detail": "32-bit installers and 32-bit games.",
+          "kind": "unavailable",
+          "arch": "x86",
+          "note": "Not available in this build: the engine is 64-bit only (no 32-bit support yet), so 32-bit programs cannot start and their installers cannot run. Games that ship both builds work through their 64-bit executable; pick that one when adding the game."
+        },
+        {
+          "id": "dotnet48",
+          "title": "Microsoft .NET Framework 4.8 (optional)",
+          "detail": "Microsoft's own .NET Framework installer.",
+          "kind": "unavailable",
+          "arch": "x86",
+          "url": "https://go.microsoft.com/fwlink/?linkid=2088631",
+          "note": "Not needed and not installable here: .NET Framework games run on Wine Mono (above). Microsoft's installer is a 32-bit bootstrapper that starts helper processes; this build can do neither."
+        },
+        {
+          "id": "dotnet-desktop-8",
+          "title": ".NET Desktop Runtime 8 (LTS)",
+          "detail": "Only for games built against .NET 5 or newer (rare; most Unity and .NET Framework titles need Wine Mono instead).",
+          "kind": "installer",
+          "arch": "x64",
+          "url": "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe",
+          "installArgs": "/install /quiet /norestart",
+          "probeFiles": [
+            "drive_c/Program Files/dotnet/host/fxr"
+          ],
+          "note": "No fixed hash: Microsoft's link follows the 8.0 servicing channel. Windoz records the exact file it first downloaded (SHA-256 and final URL) and refuses any later change unless you accept it. Microsoft's installer starts helper processes; if this session cannot finish it, Windoz reports the installer's own failure instead of pretending."
+        },
+        {
+          "id": "directx-jun2010",
+          "title": "DirectX June 2010 redist (legacy D3DX)",
+          "detail": "The last all-in-one DirectX package, for very old games that use the D3DX helper libraries.",
+          "kind": "unavailable",
+          "arch": "x86",
+          "url": "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe",
+          "note": "Not installable in this build: Microsoft's package is a 32-bit self-extracting setup (DXSETUP) and cannot run without 32-bit support. The engine's built-in D3DX / D3D compiler libraries cover most games that ask for it."
+        },
+        {
+          "id": "steam-components",
+          "title": "Steam client components",
+          "detail": "The Steam client files Valve's own client needs when Windoz starts a Steam game in Doz Dock.",
+          "kind": "provider",
+          "arch": "any",
+          "note": "Handled by the Steam sign-in flow: Windoz downloads Steam's components (about 72 MB from Valve's own CDN) as part of preparing a dock session — see the game's Steam card."
+        },
+        {
+          "id": "game-redists",
+          "title": "Game one-time installers (_CommonRedist)",
+          "detail": "The redistributables a game ships in its own folder.",
+          "kind": "provider",
+          "arch": "x64",
+          "note": "Listed per game: Windoz scans each game's folder (and Steam's shared redist folder) and shows the installers it finds on the game's page, with a Run button that starts them in a Windows session."
+        }
+      ]
+    }
+    """#
 
     // MARK: Probing
 

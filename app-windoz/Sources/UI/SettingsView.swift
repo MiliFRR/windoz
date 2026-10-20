@@ -16,6 +16,8 @@ struct SettingsView: View {
     @State private var swapError: String?
     @AppStorage(SessionPreferences.pointerKey) private var pointerRaw = PointerMode.touchscreen.rawValue
     @AppStorage(SessionPreferences.ecoKey) private var ecoDefault = false
+    @AppStorage(SessionPreferences.sensitivityKey)
+    private var pointerSensitivity = SessionPreferences.defaultSensitivity
 
     var body: some View {
         List {
@@ -128,7 +130,7 @@ struct SettingsView: View {
         } header: {
             Text("Memory")
         } footer: {
-            Text("A file-backed tier for game memory: 1, 2 or 4 GB of the app's temporary storage, off by default. Windoz writes Documents/madeira.cfg and the engine arms the tier on the next launch. It is not iOS virtual memory and cannot exceed free storage.")
+            Text("A file-backed tier for game memory: 1, 2 or 4 GB of the app's temporary storage, off by default. Windoz saves the choice app-side, writes a per-launch cfg under its writable storage root and passes it to the engine as MADEIRA_CFG_GAME, so it works even when Documents is read-only. It is not iOS virtual memory and cannot exceed free storage.")
         }
     }
 
@@ -143,6 +145,16 @@ struct SettingsView: View {
                 }
             }
             Text(pointerMode.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LabeledContent("Pointer sensitivity",
+                           value: String(format: "%.2f×", pointerSensitivity))
+            Slider(value: $pointerSensitivity,
+                   in: SessionPreferences.sensitivityRange,
+                   step: 0.05) {
+                Text("Pointer sensitivity")
+            }
+            Text("Scales one-finger trackpad movement and the controller's right-stick mouse. The session settings panel has the same control.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Eco mode for new sessions", isOn: ecoBinding)

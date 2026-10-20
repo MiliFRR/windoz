@@ -128,20 +128,13 @@ final class WindozEngine: ObservableObject {
     private var dockHandoffPath: String?
 
     /// `madeira_set_eco` / `madeira_get_eco` (Madeira's low-QoS guest-thread
-    /// mode). Resolved at runtime like the frame-pacing call, so a pinned
-    /// engine that does not export them degrades to an honest log line.
+    /// mode). The engine builds ntdll/unix with hidden visibility, so dlsym
+    /// never found the symbol even though it is linked in. The bridging header
+    /// now declares it and the call is direct: the linker pulls sync.o from
+    /// libntdll_unix.a, and the runtime state can be read back instead of
+    /// assumed.
     @Published private(set) var ecoEnabled = false
-    private typealias EcoSetFn = @convention(c) (Int32) -> Void
-    private typealias EcoGetFn = @convention(c) () -> Int32
-    private static let ecoSet: EcoSetFn? = {
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "madeira_set_eco") else { return nil }
-        return unsafeBitCast(symbol, to: EcoSetFn.self)
-    }()
-    private static let ecoGet: EcoGetFn? = {
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "madeira_get_eco") else { return nil }
-        return unsafeBitCast(symbol, to: EcoGetFn.self)
-    }()
-    var ecoIsAvailable: Bool { Self.ecoSet != nil }
+    var ecoIsAvailable: Bool { true }
 
 
     init(prefix: PrefixManager = PrefixManager()) {
@@ -746,42 +739,48 @@ final class WindozEngine: ObservableObject {
     /// session starts the same way.
     func setEco(_ enabled: Bool, persist: Bool = true) {
         if persist { SessionPreferences.ecoMode = enabled }
-        guard let set = Self.ecoSet else {
-            ecoEnabled = false
-            log.append("[session] eco mode: this engine build does not export madeira_set_eco — the switch is unavailable.",
+        madeira_set_eco(enabled ? 1 : 0)
+        // Read the engine's own state back: a call that was accepted but did
+        // nothing must not leave the HUD claiming eco is on.
+        let actual = madeira_get_eco() != 0
+        ecoEnabled = actual
+        if actual == enabled {
+            log.append("[session] eco mode \(actual ? "on" : "off") (madeira_set_eco(\(enabled ? 1 : 0)), engine reports eco=\(actual ? 1 : 0)).",
+                       level: enabled ? .success : .info)
+        } else {
+            log.append("[session] eco mode did not take: requested \(enabled ? "on" : "off"), the engine reports eco=\(actual ? 1 : 0).",
                        level: .warning)
-            return
         }
-        set(enabled ? 1 : 0)
-        ecoEnabled = enabled
-        log.append("[session] eco mode \(enabled ? "on" : "off") (madeira_set_eco(\(enabled ? 1 : 0))).",
-                   level: enabled ? .success : .info)
     }
 
     /// Called on the session queue right before the guest process exists, so
     /// the choice applies to the threads that start the game.
     private func applyEcoAtSessionStart() {
         let enabled = SessionPreferences.ecoMode
-        Self.ecoSet?(enabled ? 1 : 0)
-        DispatchQueue.main.async { self.ecoEnabled = Self.ecoSet == nil ? false : enabled }
-        if Self.ecoSet == nil {
-            log.append("[session] eco mode unavailable: this engine build does not export madeira_set_eco.", level: .warning)
-        } else {
-            log.append("[session] eco mode \(enabled ? "on" : "off") for this session (madeira_set_eco).")
-        }
+        madeira_set_eco(enabled ? 1 : 0)
+        let actual = madeira_get_eco() != 0
+        DispatchQueue.main.async { self.ecoEnabled = actual }
+        log.append("[session] eco mode \(actual ? "on" : "off") for this session (requested \(enabled ? "on" : "off"), engine reports eco=\(actual ? 1 : 0)).",
+                   level: actual == enabled ? .success : .warning)
     }
 
     /// Eco belongs to a running guest. Once the session is over, put the app's
     /// own threads back to normal even though the preference stays saved.
     private func disableEcoForIdle() {
-        guard Self.ecoSet != nil else { return }
-        if Self.ecoGet?() != 0 { Self.ecoSet?(0) }
+        if madeira_get_eco() != 0 {
+            madeira_set_eco(0)
+            log.append("[session] eco mode off after the session (madeira_set_eco(0)).")
+        }
         if ecoEnabled { ecoEnabled = false }
     }
 
     /// True while the running session was started through Doz Dock; the
     /// launch report is only read afterwards, and only then.
     private var dockSessionActive = false
+    /// One line, once, if a dock session runs with no host report at all:
+    /// the difference between "Valve's client is slow" and "dockhost.exe
+    /// never started" is otherwise invisible.
+    private var dockReportWaitWarned = false
 
     /// The launch mode's preflight, run before the session screen opens.
     /// Every refusal here is a named `EngineError` — nothing is left to a
@@ -988,6 +987,35 @@ final class WindozEngine: ObservableObject {
     /// step that can wait, and an unanswered request is a refusal, not a hang.
     private static let guestStartBudget: TimeInterval = 160
 
+    /// Desktop modes run `explorer.exe`, which the engine resolves from
+    /// `aarch64-windows` — a different DLL farm from a direct x64 game's
+    /// `arm64ec-windows`. 0.9.0 shipped only the latter, so Explorer appeared
+    /// but services.exe, rpcss.exe, cmd.exe and the dock host could not run.
+    /// Name what is present before every desktop launch so a missing farm is
+    /// a log line, not a silent desktop with a cursor.
+    private func logDesktopRuntime() {
+        let names = ["explorer.exe", "cmd.exe", "services.exe", "rpcss.exe", "conhost.exe", "dockhost.exe"]
+        let roots = [Bundle.main.bundleURL, Bundle.main.resourceURL].compactMap { $0 }
+        var present: [String] = []
+        var missing: [String] = []
+        for name in names {
+            let found = roots.contains { root in
+                ["aarch64-windows", "arm64ec-windows"].contains { folder in
+                    FileManager.default.fileExists(
+                        atPath: root.appendingPathComponent(folder).appendingPathComponent(name).path)
+                }
+            }
+            if found { present.append(name) } else { missing.append(name) }
+        }
+        log.append("[launch] desktop runtime: present=\(present.joined(separator: ",")); "
+                   + "missing=\(missing.isEmpty ? "none" : missing.joined(separator: ",")); "
+                   + "bundle=\(Bundle.main.bundleURL.path)")
+        if !missing.isEmpty {
+            log.append("[launch] desktop runtime is incomplete. Explorer may show a desktop and cursor while services/rpcss or dockhost.exe never start; this build needs aarch64-windows and arm64ec-windows/dockhost.exe.",
+                       level: .warning)
+        }
+    }
+
     /// Write the environment the engine's launcher (`wine_process_start`) reads.
     ///
     /// **Only switch names the pinned forks actually read are written** (see
@@ -1000,14 +1028,39 @@ final class WindozEngine: ObservableObject {
         let settings = game.settings
         let monitor = Self.guestMonitor(resolution: settings.resolution, scale: settings.resolutionScale)
 
-        // Swap memory lives in the engine, not here: the bridge recreates the
-        // file-backed tier whenever madeira.cfg asks for it. Say what the next
-        // session will arm so the log answers "was swap on?" without a guess.
-        let swap = MadeiraConfig.readSwap()
-        if swap.isOff {
-            log.append("[launch] swap tier off (Documents/madeira.cfg has no swap-mb)")
+        // Swap memory: persist the choice app-side, write a cfg under the
+        // writable storage root, and point the engine at it. Documents is not
+        // writable on this device, so a Documents-only cfg never armed the
+        // tier in 0.9.0. Pre-arm the environment and the backing file too:
+        // that is the fallback when the bridge misses the cfg.
+        let swapLaunch = MadeiraConfig.prepareLaunch()
+        if swapLaunch.swap.isOff {
+            unsetenv("MADEIRA_CFG_GAME")
+            unsetenv("MADEIRA_SWAP_FILE")
+            unsetenv("MADEIRA_SWAP_MB")
+            unsetenv("MADEIRA_SWAP_COVERAGE")
+            unsetenv("MADEIRA_SWAP_MIN_KB")
+            log.append("[launch] swap tier off (saved setting is Off).")
         } else {
-            log.append("[launch] swap tier requested: \(swap.sizeMB) MB, coverage \(swap.coverage.rawValue) — Documents/madeira.cfg")
+            if let cfg = swapLaunch.configURL {
+                setenv("MADEIRA_CFG_GAME", cfg.path, 1)
+            } else {
+                unsetenv("MADEIRA_CFG_GAME")
+            }
+            if let file = swapLaunch.swapFileURL {
+                setenv("MADEIRA_SWAP_FILE", file.path, 1)
+            }
+            setenv("MADEIRA_SWAP_MB", String(swapLaunch.swap.sizeMB), 1)
+            setenv("MADEIRA_SWAP_COVERAGE", swapLaunch.swap.coverage.rawValue, 1)
+            if swapLaunch.swap.coverage == .blocks {
+                setenv("MADEIRA_SWAP_MIN_KB", "1024", 1)
+            } else {
+                unsetenv("MADEIRA_SWAP_MIN_KB")
+            }
+            let cfgPath = swapLaunch.configURL?.path ?? "UNAVAILABLE (env fallback)"
+            let filePath = swapLaunch.swapFileURL?.path ?? "the bridge will create it"
+            log.append("[launch] swap tier armed: \(swapLaunch.swap.sizeMB) MB, coverage \(swapLaunch.swap.coverage.rawValue); "
+                       + "cfg \(cfgPath); file \(filePath); MADEIRA_SWAP_MB=\(swapLaunch.swap.sizeMB).")
         }
 
         // Every launch starts from a clean slate: the dock variables are
@@ -1026,6 +1079,8 @@ final class WindozEngine: ObservableObject {
         // MADEIRA_EXE / MADEIRA_ARGS / MADEIRA_WORKDIR, per launch mode.
         switch settings.launchMode {
         case .dock:
+            dockReportWaitWarned = false
+            logDesktopRuntime()
             // Doz Dock: Valve's client's host — an explorer virtual desktop
             // running C:\windows\system32\dockhost.exe — starts the game
             // through Steam itself. The sign-in transfer and the host's
@@ -1058,6 +1113,8 @@ final class WindozEngine: ObservableObject {
                        + (offline ? "Offline sign-in requested (MADEIRA_DOCK_OFFLINE=1) — Valve's client decides what it can do offline."
                                   : "Online sign-in (MADEIRA_DOCK_OFFLINE unset)."))
         case .steamDesktop:
+            dockReportWaitWarned = false
+            logDesktopRuntime()
             // The full Windows Steam client in a virtual desktop, for manual
             // sign-in and library use. No game is auto-started. The client is
             // a launcher that reloads and forks its own modules, so it needs
@@ -1298,7 +1355,14 @@ final class WindozEngine: ObservableObject {
     /// used to look like a stall until the session ended.
     private func updateDockProgress() {
         let fields = DozDock.readReport(prefix: prefix)
-        if fields.isEmpty, dockStage == nil { return }
+        if fields.isEmpty {
+            if !dockReportWaitWarned, sessionElapsed > 25 {
+                dockReportWaitWarned = true
+                log.append("[dock] no host report after 25 s — dockhost.exe did not start, or could not write C:\\madeira-dock.txt. The captured engine output above has the guest's last lines.",
+                           level: .warning)
+            }
+            if dockStage == nil { return }
+        }
         if let failure = DozDock.humanFailure(fields) {
             if dockFailure != failure {
                 dockFailure = failure

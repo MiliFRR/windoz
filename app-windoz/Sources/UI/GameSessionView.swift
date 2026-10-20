@@ -109,6 +109,7 @@ final class SessionSurfaceView: UIView {
     /// touch mapping; `.trackpad` owns a desktop-pixel cursor and posts mouse
     /// events instead of touches.
     private var pointerMode = SessionPreferences.pointerMode
+    private var pointerSensitivity = SessionPreferences.trackpadSensitivity
     private var trackpadTouch: UITouch?
     private var trackpadLastPoint = CGPoint.zero
     private var trackpadStartPoint = CGPoint.zero
@@ -121,6 +122,8 @@ final class SessionSurfaceView: UIView {
     private var trackpadTwoFingerStartTime: CFTimeInterval = 0
     private var trackpadLastTwoFingerY: CGFloat = 0
     private var trackpadScrollAccum: CGFloat = 0
+    private var lastTapTime: CFTimeInterval = 0
+    private var lastTapPoint = CGPoint.zero
     private var cursor = CGPoint.zero
     private var cursorReady = false
 
@@ -356,6 +359,12 @@ final class SessionSurfaceView: UIView {
         hud.onTogglePerformance = { [weak self] in self?.togglePerformance() }
         hud.pointerMode = { [weak self] in self?.pointerMode ?? SessionPreferences.pointerMode }
         hud.onPointerModeChange = { [weak self] mode in self?.applyPointerMode(mode) }
+        hud.pointerSensitivity = { [weak self] in
+            self?.pointerSensitivity ?? SessionPreferences.trackpadSensitivity
+        }
+        hud.onPointerSensitivityChange = { [weak self] value in
+            self?.applyPointerSensitivity(value)
+        }
         hud.ecoEnabled = { WindozEngine.shared.ecoEnabled }
         hud.ecoAvailable = { WindozEngine.shared.ecoIsAvailable }
         hud.onToggleEco = { WindozEngine.shared.setEco(!WindozEngine.shared.ecoEnabled) }
@@ -437,6 +446,13 @@ final class SessionSurfaceView: UIView {
         pointerMode = mode
         SessionPreferences.pointerMode = mode
         EngineLogStream.shared.append("[session] pointer mode: \(mode.title).")
+    }
+
+    private func applyPointerSensitivity(_ value: Double) {
+        SessionPreferences.trackpadSensitivity = value
+        pointerSensitivity = SessionPreferences.trackpadSensitivity
+        EngineLogStream.shared.append(
+            "[session] pointer sensitivity: \(String(format: "%.2f", pointerSensitivity))× (trackpad and right stick).")
     }
 
     private func togglePerformance() {
@@ -550,6 +566,7 @@ final class SessionSurfaceView: UIView {
         trackpadTwoFingerMoved = false
         trackpadScrollAccum = 0
         trackpadTouch = nil
+        lastTapTime = 0
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -672,10 +689,12 @@ final class SessionSurfaceView: UIView {
 
         // One finger moves the pointer relative to where it is, like a laptop
         // pad. Scale the view delta to guest pixels so the pointer tracks what
-        // is drawn under the finger, with a little extra travel.
+        // is drawn under the finger, then apply the persisted sensitivity.
+        // The cursor is a CGFloat, so sub-pixel movement accumulates instead
+        // of being dropped at slow speeds.
         let rect = gameRect
         guard rect.width > 0, rect.height > 0 else { return }
-        let scale = max(guestSize.width / rect.width, 0.5) * 1.3
+        let scale = CGFloat(max(guestSize.width / rect.width, 0.5) * pointerSensitivity)
         moveCursor(dx: dx * scale, dy: dy * scale)
     }
 
@@ -705,6 +724,20 @@ final class SessionSurfaceView: UIView {
         if !cancelled, !trackpadMoved, now - trackpadStartTime < 0.5 {
             postPointer(F_LDOWN)
             postPointer(F_LUP)
+            // A second tap close to the first is a double-click. The first tap
+            // has already produced one click; this one completes the pair,
+            // which is how Windows recognises a double-click.
+            let point = touch.location(in: self)
+            let doubled = now - lastTapTime < 0.35
+                && hypot(point.x - lastTapPoint.x, point.y - lastTapPoint.y) < 30
+            if doubled {
+                postPointer(F_LDOWN)
+                postPointer(F_LUP)
+                lastTapTime = 0
+            } else {
+                lastTapTime = now
+                lastTapPoint = point
+            }
         }
         trackpadTouch = nil
     }
@@ -834,6 +867,8 @@ final class SessionHUDView: UIView {
     var onTogglePerformance: (() -> Void)?
     var pointerMode: (() -> PointerMode)?
     var onPointerModeChange: ((PointerMode) -> Void)?
+    var pointerSensitivity: (() -> Double)?
+    var onPointerSensitivityChange: ((Double) -> Void)?
     var ecoEnabled: (() -> Bool)?
     var ecoAvailable: (() -> Bool)?
     var onToggleEco: (() -> Void)?
@@ -857,7 +892,22 @@ final class SessionHUDView: UIView {
     private let launchRows = UIStackView()
     private var stepRows: [(id: String, glyph: UILabel, detail: UILabel)] = []
     private var timer: Timer?
-    private var settingsMenuSignature = ""
+
+    /// The session menu and settings are an in-HUD panel built from controls
+    /// that live in this window, not UIMenu. 0.9.0 hung both buttons off
+    /// `showsMenuAsPrimaryAction`; the HUD is added directly to the UIWindow
+    /// and has no owning view controller, so UIKit had no presenter and both
+    /// buttons were dead on device. Target/action buttons have no such
+    /// requirement.
+    private enum PanelKind { case menu, settings }
+    private var panelKind: PanelKind?
+    private let panelBackdrop = UIControl()
+    private let panelContainer = UIView()
+    private let panelTitle = UILabel()
+    private let panelClose = UIButton(type: .system)
+    private let panelScroll = UIScrollView()
+    private let panelStack = UIStackView()
+    private var sensitivityLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -904,33 +954,14 @@ final class SessionHUDView: UIView {
         textStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(textStack)
 
-        // Two compact icon buttons. The old "Menu ˅" text button grew with
-        // the content inset and could not be relied on after a rotation; a
-        // fixed 38-point target with no title does not depend on the title's
-        // intrinsic size.
-        var menuConfig = UIButton.Configuration.gray()
-        menuConfig.image = UIImage(systemName: "line.3.horizontal")
-        menuConfig.baseForegroundColor = .white
-        menuConfig.cornerStyle = .capsule
-        menuConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        menuButton.configuration = menuConfig
-        menuButton.showsMenuAsPrimaryAction = true
-        menuButton.menu = makeMenu()
-        menuButton.accessibilityLabel = "Session menu"
-        menuButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(menuButton)
-
-        var gearConfig = UIButton.Configuration.gray()
-        gearConfig.image = UIImage(systemName: "gearshape.fill")
-        gearConfig.baseForegroundColor = .white
-        gearConfig.cornerStyle = .capsule
-        gearConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        gearButton.configuration = gearConfig
-        gearButton.showsMenuAsPrimaryAction = true
-        gearButton.accessibilityLabel = "Session settings"
-        gearButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(gearButton)
-        refreshSettingsMenu()
+        // Two compact icon buttons, plain target/action. The old "Menu ˅" text
+        // button grew with the content inset and could not be relied on after
+        // a rotation; a fixed 38-point target with no title does not depend on
+        // the title's intrinsic size.
+        configureIconButton(menuButton, image: "line.3.horizontal",
+                            label: "Session menu", action: #selector(openMenuPanel))
+        configureIconButton(gearButton, image: "gearshape.fill",
+                            label: "Session settings", action: #selector(openSettingsPanel))
 
         let textCenter = textStack.centerXAnchor.constraint(equalTo: centerXAnchor)
         textCenter.priority = .defaultHigh
@@ -953,6 +984,312 @@ final class SessionHUDView: UIView {
         ])
         setUpDockLabel(textStack: textStack)
         setUpLaunchPanel(textStack: textStack)
+        setUpPanel()
+    }
+
+    private func configureIconButton(_ button: UIButton, image: String, label: String, action: Selector) {
+        button.setImage(UIImage(systemName: image), for: .normal)
+        button.tintColor = .white
+        button.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        button.layer.cornerRadius = 19
+        button.accessibilityLabel = label
+        button.addTarget(self, action: action, for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(button)
+    }
+
+    /// The panel is a normal view hierarchy inside the HUD. It is deliberately
+    /// not a UIMenu and not a presented view controller: the HUD lives in the
+    /// UIWindow with no owning controller, and both of those presentations
+    /// need one.
+    private func setUpPanel() {
+        panelBackdrop.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        panelBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        panelBackdrop.isHidden = true
+        panelBackdrop.addTarget(self, action: #selector(dismissPanel), for: .touchUpInside)
+        addSubview(panelBackdrop)
+
+        panelContainer.backgroundColor = UIColor(white: 0.08, alpha: 0.97)
+        panelContainer.layer.cornerRadius = 18
+        panelContainer.layer.borderWidth = 1
+        panelContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.14).cgColor
+        panelContainer.translatesAutoresizingMaskIntoConstraints = false
+        panelContainer.isHidden = true
+        addSubview(panelContainer)
+
+        panelTitle.font = .systemFont(ofSize: 16, weight: .semibold)
+        panelTitle.textColor = .white
+        panelTitle.translatesAutoresizingMaskIntoConstraints = false
+        panelContainer.addSubview(panelTitle)
+
+        panelClose.setTitle("Done", for: .normal)
+        panelClose.setTitleColor(Theme.accent, for: .normal)
+        panelClose.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
+        panelClose.addTarget(self, action: #selector(dismissPanel), for: .touchUpInside)
+        panelClose.translatesAutoresizingMaskIntoConstraints = false
+        panelContainer.addSubview(panelClose)
+
+        panelScroll.alwaysBounceVertical = true
+        panelScroll.showsVerticalScrollIndicator = true
+        panelScroll.translatesAutoresizingMaskIntoConstraints = false
+        panelContainer.addSubview(panelScroll)
+
+        panelStack.axis = .vertical
+        panelStack.spacing = 6
+        panelStack.translatesAutoresizingMaskIntoConstraints = false
+        panelScroll.addSubview(panelStack)
+
+        let width = panelContainer.widthAnchor.constraint(equalToConstant: 360)
+        width.priority = .defaultHigh
+        let height = panelContainer.heightAnchor.constraint(equalToConstant: 500)
+        height.priority = .defaultHigh
+
+        NSLayoutConstraint.activate([
+            panelBackdrop.topAnchor.constraint(equalTo: topAnchor),
+            panelBackdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
+            panelBackdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            panelBackdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            panelContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
+            panelContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+            width,
+            panelContainer.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor,
+                                                     constant: 12),
+            panelContainer.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor,
+                                                      constant: -12),
+            height,
+            panelContainer.heightAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.heightAnchor,
+                                                    constant: -24),
+            panelContainer.topAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.topAnchor,
+                                                constant: 8),
+            panelContainer.bottomAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.bottomAnchor,
+                                                   constant: -8),
+
+            panelTitle.topAnchor.constraint(equalTo: panelContainer.topAnchor, constant: 16),
+            panelTitle.leadingAnchor.constraint(equalTo: panelContainer.leadingAnchor, constant: 16),
+            panelTitle.trailingAnchor.constraint(lessThanOrEqualTo: panelClose.leadingAnchor, constant: -8),
+            panelClose.centerYAnchor.constraint(equalTo: panelTitle.centerYAnchor),
+            panelClose.trailingAnchor.constraint(equalTo: panelContainer.trailingAnchor, constant: -16),
+
+            panelScroll.topAnchor.constraint(equalTo: panelTitle.bottomAnchor, constant: 10),
+            panelScroll.leadingAnchor.constraint(equalTo: panelContainer.leadingAnchor, constant: 12),
+            panelScroll.trailingAnchor.constraint(equalTo: panelContainer.trailingAnchor, constant: -12),
+            panelScroll.bottomAnchor.constraint(equalTo: panelContainer.bottomAnchor, constant: -12),
+
+            panelStack.topAnchor.constraint(equalTo: panelScroll.contentLayoutGuide.topAnchor, constant: 4),
+            panelStack.bottomAnchor.constraint(equalTo: panelScroll.contentLayoutGuide.bottomAnchor, constant: -4),
+            panelStack.leadingAnchor.constraint(equalTo: panelScroll.contentLayoutGuide.leadingAnchor),
+            panelStack.trailingAnchor.constraint(equalTo: panelScroll.contentLayoutGuide.trailingAnchor),
+            panelStack.widthAnchor.constraint(equalTo: panelScroll.frameLayoutGuide.widthAnchor),
+        ])
+    }
+
+    @objc private func openMenuPanel() {
+        EngineLogStream.shared.append("[session] menu button tapped.")
+        presentPanel(.menu)
+    }
+
+    @objc private func openSettingsPanel() {
+        EngineLogStream.shared.append("[session] settings button tapped.")
+        presentPanel(.settings)
+    }
+
+    private func presentPanel(_ kind: PanelKind) {
+        panelKind = kind
+        rebuildPanel()
+        panelBackdrop.isHidden = false
+        panelContainer.isHidden = false
+        bringSubviewToFront(panelBackdrop)
+        bringSubviewToFront(panelContainer)
+        EngineLogStream.shared.append("[session] \(kind == .menu ? "session menu" : "session settings") panel opened.")
+    }
+
+    @objc private func dismissPanel() {
+        guard panelKind != nil else { return }
+        EngineLogStream.shared.append("[session] \(panelKind == .menu ? "session menu" : "session settings") panel closed.")
+        panelKind = nil
+        panelBackdrop.isHidden = true
+        panelContainer.isHidden = true
+        clearPanelRows()
+    }
+
+    private func clearPanelRows() {
+        for view in panelStack.arrangedSubviews {
+            panelStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+    }
+
+    private func rebuildPanel(preservingOffset: Bool = false) {
+        guard let kind = panelKind else { return }
+        let offset = preservingOffset ? panelScroll.contentOffset : .zero
+        clearPanelRows()
+        panelTitle.text = kind == .settings ? "Session settings" : "Session"
+
+        switch kind {
+        case .menu:
+            addPanelHeader("THIS SESSION")
+            addPanelRow("Close the game (Alt+F4)",
+                        detail: "Asks Windows to close the running game.") { [weak self] in
+                self?.dismissPanel()
+                WindozEngine.shared.requestQuit()
+            }
+            addPanelRow("Leave the session screen",
+                        detail: "Keeps Windows running in the background.") { [weak self] in
+                self?.dismissPanel()
+                WindozEngine.shared.detachSession(reason: "You left the session screen.")
+            }
+            addPanelHeader("APP")
+            addPanelRow("Quit Windoz (restart the app)",
+                        detail: "Ends this app run; downloads and the library stay.",
+                        destructive: true) { [weak self] in
+                self?.dismissPanel()
+                AppContainer.quitNow(reason: "quitting from the session menu")
+            }
+
+        case .settings:
+            let layout = controlLayout?() ?? .keyboardMouse
+            addPanelHeader("CONTROLS")
+            for choice in ControlLayout.allCases {
+                addPanelRow(choice.title, selected: choice == layout) { [weak self] in
+                    EngineLogStream.shared.append("[session] settings: controls → \(choice.title).")
+                    self?.onControlLayoutChange?(choice)
+                    self?.rebuildPanel(preservingOffset: true)
+                }
+            }
+
+            let pointer = pointerMode?() ?? .touchscreen
+            addPanelHeader("POINTER")
+            for choice in PointerMode.allCases {
+                addPanelRow(choice.title,
+                            detail: choice == .trackpad
+                                ? "Relative pointer, tap to click, two-finger scroll."
+                                : "The finger is the pointer, directly on the game.",
+                            selected: choice == pointer) { [weak self] in
+                    EngineLogStream.shared.append("[session] settings: pointer → \(choice.title).")
+                    self?.onPointerModeChange?(choice)
+                    self?.rebuildPanel(preservingOffset: true)
+                }
+            }
+            addSensitivityRow()
+
+            addPanelHeader("DISPLAY")
+            addPanelRow("Performance stats",
+                        detail: "Frame pacing, FPS and memory in the corner.",
+                        selected: performanceEnabled?() ?? false) { [weak self] in
+                self?.onTogglePerformance?()
+                self?.rebuildPanel(preservingOffset: true)
+            }
+            let resolution = gameResolution?() ?? .scaled
+            for choice in GameResolution.allCases {
+                addPanelRow(choice.shortTitle,
+                            detail: "Resolution for the next launch.",
+                            selected: choice == resolution) { [weak self] in
+                    EngineLogStream.shared.append("[session] settings: resolution → \(choice.shortTitle).")
+                    self?.onResolutionChange?(choice)
+                    self?.rebuildPanel(preservingOffset: true)
+                }
+            }
+
+            addPanelHeader("PERFORMANCE")
+            let eco = ecoEnabled?() ?? false
+            let ecoReady = ecoAvailable?() ?? false
+            addPanelRow("Eco mode",
+                        detail: ecoReady
+                            ? (eco ? "On — guest threads use the low-power class."
+                                   : "Off — guest threads use the normal class.")
+                            : "Not available in this engine build.",
+                        selected: eco,
+                        enabled: ecoReady) { [weak self] in
+                self?.onToggleEco?()
+                self?.rebuildPanel(preservingOffset: true)
+            }
+            addPanelRow("DirectInput joystick",
+                        detail: "Applies to the next launch.",
+                        selected: directInput?() ?? false) { [weak self] in
+                self?.onToggleDirectInput?()
+                self?.rebuildPanel(preservingOffset: true)
+            }
+
+            addPanelHeader("SESSION")
+            addPanelRow("Close the game (Alt+F4)",
+                        detail: "Asks Windows to close the running game.",
+                        destructive: true) { [weak self] in
+                self?.dismissPanel()
+                WindozEngine.shared.requestQuit()
+            }
+            addPanelRow("Close settings") { [weak self] in
+                self?.dismissPanel()
+            }
+        }
+
+        if preservingOffset, offset != .zero {
+            panelScroll.layoutIfNeeded()
+            panelScroll.setContentOffset(offset, animated: false)
+        }
+    }
+
+    private func addPanelHeader(_ text: String) {
+        if let last = panelStack.arrangedSubviews.last {
+            panelStack.setCustomSpacing(14, after: last)
+        }
+        let label = UILabel()
+        label.font = .systemFont(ofSize: 10, weight: .semibold)
+        label.textColor = UIColor.white.withAlphaComponent(0.5)
+        label.text = text
+        label.accessibilityTraits = .header
+        panelStack.addArrangedSubview(label)
+        panelStack.setCustomSpacing(2, after: label)
+    }
+
+    private func addPanelRow(_ title: String,
+                             detail: String? = nil,
+                             selected: Bool = false,
+                             destructive: Bool = false,
+                             enabled: Bool = true,
+                             action: @escaping () -> Void) {
+        let row = HUDPanelRow(title: title, detail: detail, selected: selected,
+                              destructive: destructive, enabled: enabled)
+        row.action = action
+        panelStack.addArrangedSubview(row)
+    }
+
+    private func addSensitivityRow() {
+        let value = pointerSensitivity?() ?? SessionPreferences.trackpadSensitivity
+        sensitivityLabel = UILabel()
+        sensitivityLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        sensitivityLabel.textColor = UIColor.white.withAlphaComponent(0.9)
+        sensitivityLabel.text = Self.sensitivityTitle(value)
+
+        let slider = UISlider()
+        slider.minimumValue = Float(SessionPreferences.sensitivityRange.lowerBound)
+        slider.maximumValue = Float(SessionPreferences.sensitivityRange.upperBound)
+        slider.value = Float(value)
+        slider.addTarget(self, action: #selector(sensitivityChanged(_:)), for: .valueChanged)
+        slider.accessibilityLabel = "Trackpad sensitivity"
+
+        let note = UILabel()
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = UIColor.white.withAlphaComponent(0.55)
+        note.numberOfLines = 0
+        note.text = "Applies to one-finger trackpad movement and the controller's right stick."
+
+        if let last = panelStack.arrangedSubviews.last {
+            panelStack.setCustomSpacing(8, after: last)
+        }
+        panelStack.addArrangedSubview(sensitivityLabel)
+        panelStack.addArrangedSubview(slider)
+        panelStack.addArrangedSubview(note)
+    }
+
+    @objc private func sensitivityChanged(_ sender: UISlider) {
+        let value = Double(sender.value)
+        sensitivityLabel.text = Self.sensitivityTitle(value)
+        onPointerSensitivityChange?(value)
+    }
+
+    private static func sensitivityTitle(_ value: Double) -> String {
+        String(format: "Trackpad sensitivity — %.2f×", value)
     }
 
     /// Doz Dock's live line: what Valve's client is doing, or the refusal the
@@ -1020,22 +1357,6 @@ final class SessionHUDView: UIView {
         WindozEngine.shared.cancelLaunch()
     }
 
-    private func makeMenu() -> UIMenu {
-        UIMenu(title: "Session", children: [
-            UIAction(title: "Close the game (Alt+F4)", image: UIImage(systemName: "escape")) { _ in
-                WindozEngine.shared.requestQuit()
-            },
-            UIAction(title: "Leave the session screen",
-                     image: UIImage(systemName: "rectangle.portrait.and.arrow.right")) { _ in
-                WindozEngine.shared.detachSession(reason: "You left the session screen.")
-            },
-            UIAction(title: "Quit Windoz (restart the app)", image: UIImage(systemName: "power"),
-                     attributes: .destructive) { _ in
-                AppContainer.quitNow(reason: "quitting from the session menu")
-            },
-        ])
-    }
-
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -1049,7 +1370,6 @@ final class SessionHUDView: UIView {
         let text = line?() ?? ""
         if statusLabel.text != text { statusLabel.text = text }
         refreshDock()
-        refreshSettingsMenu()
         refreshLaunchPanel()
     }
 
@@ -1067,82 +1387,6 @@ final class SessionHUDView: UIView {
             ? UIColor(red: 0.60, green: 0.12, blue: 0.12, alpha: 0.82)
             : UIColor.black.withAlphaComponent(0.45)
         dockLabel.isHidden = false
-    }
-
-    /// The gear menu is rebuilt only when a choice actually changed, so an
-    /// open menu is never replaced under the user's finger.
-    private func refreshSettingsMenu() {
-        let layout = controlLayout?() ?? .keyboardMouse
-        let performance = performanceEnabled?() ?? false
-        let pointer = pointerMode?() ?? .touchscreen
-        let eco = ecoEnabled?() ?? false
-        let ecoAvailable = ecoAvailable?() ?? false
-        let dinput = directInput?() ?? false
-        let resolution = gameResolution?() ?? .scaled
-        let signature = "\(layout.rawValue)|\(performance)|\(pointer.rawValue)|\(eco)|\(ecoAvailable)|\(dinput)|\(resolution.rawValue)"
-        guard signature != settingsMenuSignature else { return }
-        settingsMenuSignature = signature
-        gearButton.menu = makeSettingsMenu(layout: layout, performance: performance, pointer: pointer,
-                                          eco: eco, ecoAvailable: ecoAvailable, dinput: dinput,
-                                          resolution: resolution)
-    }
-
-    private func makeSettingsMenu(layout: ControlLayout, performance: Bool, pointer: PointerMode,
-                                  eco: Bool, ecoAvailable: Bool, dinput: Bool,
-                                  resolution: GameResolution) -> UIMenu {
-        let layoutActions = ControlLayout.allCases.map { choice in
-            UIAction(title: choice.title, state: choice == layout ? .on : .off) { [weak self] _ in
-                self?.onControlLayoutChange?(choice)
-                self?.settingsMenuSignature = ""
-                self?.refreshSettingsMenu()
-            }
-        }
-        let controls = UIMenu(title: "Controls", image: UIImage(systemName: "gamecontroller"),
-                              options: .singleSelection, children: layoutActions)
-
-        let pointerActions = PointerMode.allCases.map { choice in
-            UIAction(title: choice.title, state: choice == pointer ? .on : .off) { [weak self] _ in
-                self?.onPointerModeChange?(choice)
-                self?.settingsMenuSignature = ""
-                self?.refreshSettingsMenu()
-            }
-        }
-        let pointerMenu = UIMenu(title: "Pointer", image: UIImage(systemName: "hand.point.up.left"),
-                                 options: .singleSelection, children: pointerActions)
-
-        let resolutionActions = GameResolution.allCases.map { choice in
-            UIAction(title: choice.shortTitle, state: choice == resolution ? .on : .off) { [weak self] _ in
-                self?.onResolutionChange?(choice)
-                self?.settingsMenuSignature = ""
-                self?.refreshSettingsMenu()
-            }
-        }
-        let resolutionMenu = UIMenu(title: "Resolution (next launch)", image: UIImage(systemName: "display"),
-                                    options: .singleSelection, children: resolutionActions)
-
-        let overlay = UIAction(title: "Performance stats", image: UIImage(systemName: "speedometer"),
-                               state: performance ? .on : .off) { [weak self] _ in
-            self?.onTogglePerformance?()
-            self?.settingsMenuSignature = ""
-            self?.refreshSettingsMenu()
-        }
-        let ecoAction = UIAction(title: "Eco mode", image: UIImage(systemName: "leaf"),
-                                 attributes: ecoAvailable ? [] : .disabled,
-                                 state: eco ? .on : .off) { [weak self] _ in
-            self?.onToggleEco?()
-            self?.settingsMenuSignature = ""
-            self?.refreshSettingsMenu()
-        }
-        let dinputAction = UIAction(title: "DirectInput joystick (next launch)",
-                                    image: UIImage(systemName: "gamecontroller.badge.plus"),
-                                    state: dinput ? .on : .off) { [weak self] _ in
-            self?.onToggleDirectInput?()
-            self?.settingsMenuSignature = ""
-            self?.refreshSettingsMenu()
-        }
-        return UIMenu(title: "Session settings",
-                      children: [controls, pointerMenu, resolutionMenu,
-                                 UIMenu(options: .displayInline, children: [overlay, ecoAction, dinputAction])])
     }
 
     /// Live checklist while a launch is in flight; hidden otherwise. Runs on
@@ -1243,6 +1487,83 @@ final class HUDInsetLabel: UILabel {
         let size = super.intrinsicContentSize
         return CGSize(width: size.width + insets.left + insets.right,
                       height: size.height + insets.top + insets.bottom)
+    }
+}
+
+/// One tappable line in the in-HUD panel. UIControl + target/action, for the
+/// same reason the panel exists: it works without a view controller.
+private final class HUDPanelRow: UIControl {
+    var action: (() -> Void)?
+
+    private let rowBackground = UIColor.white.withAlphaComponent(0.06)
+    private let rowHighlight = UIColor.white.withAlphaComponent(0.16)
+
+    init(title: String, detail: String?, selected: Bool,
+         destructive: Bool, enabled: Bool) {
+        super.init(frame: .zero)
+        backgroundColor = rowBackground
+        layer.cornerRadius = 10
+        isUserInteractionEnabled = enabled
+        alpha = enabled ? 1 : 0.45
+        isAccessibilityElement = true
+        accessibilityLabel = title
+        accessibilityTraits = .button
+        if selected { accessibilityTraits.insert(.selected) }
+
+        let titleLabel = UILabel()
+        titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        titleLabel.textColor = destructive
+            ? UIColor(red: 1.0, green: 0.45, blue: 0.42, alpha: 1)
+            : .white
+        titleLabel.numberOfLines = 0
+        titleLabel.text = title
+
+        let labels = UIStackView(arrangedSubviews: [titleLabel])
+        labels.axis = .vertical
+        labels.spacing = 2
+        if let detail, !detail.isEmpty {
+            let detailLabel = UILabel()
+            detailLabel.font = .systemFont(ofSize: 11)
+            detailLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+            detailLabel.numberOfLines = 0
+            detailLabel.text = detail
+            labels.addArrangedSubview(detailLabel)
+        }
+
+        let check = UILabel()
+        check.font = .systemFont(ofSize: 16, weight: .semibold)
+        check.textColor = UIColor(red: 0.35, green: 0.85, blue: 0.5, alpha: 1)
+        check.text = selected ? "✓" : ""
+        check.textAlignment = .center
+        check.widthAnchor.constraint(equalToConstant: 20).isActive = true
+
+        let content = UIStackView(arrangedSubviews: [labels, check])
+        content.axis = .horizontal
+        content.alignment = .center
+        content.spacing = 8
+        content.isUserInteractionEnabled = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+        ])
+
+        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var isHighlighted: Bool {
+        didSet { backgroundColor = isHighlighted ? rowHighlight : rowBackground }
+    }
+
+    @objc private func tapped() {
+        action?()
     }
 }
 
