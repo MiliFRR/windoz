@@ -278,7 +278,7 @@ final class SessionSurfaceView: UIView {
                                                    object: nil, queue: .main) { [weak self] _ in
             self?.refreshDisplay(reason: "rotation")
         })
-        displayObservers.append(center.addObserver(forName: MadeiraDisplayModeChangedNotification,
+        displayObservers.append(center.addObserver(forName: Notification.Name.MadeiraDisplayModeChanged,
                                                    object: nil, queue: .main) { [weak self] _ in
             self?.refreshDisplay(reason: "guest display mode")
         })
