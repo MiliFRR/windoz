@@ -31,6 +31,30 @@ enum SteamClientRuntime {
     static let relativeRoot = "Program Files (x86)/Steam"
     static let windowsRoot = "C:\\Program Files (x86)\\Steam"
 
+    /// Valve's client under Wine needs its Chromium/CEF UI sandbox and GPU
+    /// paths disabled. These are the flags Madeira's working desktop launch
+    /// uses; without them steam.exe can start but never paint the sign-in
+    /// window. Kept as one string because MADEIRA_ARGS is split on spaces.
+    static let desktopArguments = "-no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints"
+
+    /// The guest batch Madeira generates for its working Steam desktop launch:
+    /// start the service manager first (Steam's CEF UI needs the SCM/rpcss
+    /// chain), change into Valve's folder, then run steam.exe with the CEF
+    /// flags. cmd stays alive for the session because steam.exe is not started
+    /// in the background.
+    static let desktopLauncherPath = "C:\\steam-launch.bat"
+
+    static func writeDesktopLauncher(driveC: URL) throws {
+        let text = """
+        @echo off\r
+        start "" "C:\\windows\\system32\\services.exe"\r
+        cd /d "\(windowsRoot)"\r
+        "\(windowsRoot)\\steam.exe" \(desktopArguments)\r
+        """
+        let url = driveC.appendingPathComponent("steam-launch.bat")
+        try Data(text.utf8).write(to: url, options: .atomic)
+    }
+
     enum Failure: LocalizedError {
         case invalidPackage, conflict, activeSession, prefixMissing
         var errorDescription: String? {

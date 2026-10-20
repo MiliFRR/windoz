@@ -819,6 +819,11 @@ final class WindozEngine: ObservableObject {
             guard missing.isEmpty else {
                 throw EngineError.steamDesktopNotReady("Valve's Steam client files are incomplete in the Windows drive (missing: \(missing.joined(separator: ", "))). In this game's settings, under “Steam launch”, download Steam's components first (about 72 MB from Valve's own CDN).")
             }
+            do {
+                try SteamClientRuntime.writeDesktopLauncher(driveC: prefix.url.appendingPathComponent("drive_c"))
+            } catch {
+                throw EngineError.steamDesktopNotReady("The Steam desktop launcher could not be written into the Windows drive (\(error.localizedDescription)). Check the prefix's free space and permissions, then try again.")
+            }
             log.append("[launch] Steam desktop preflight passed — steam.exe and both client DLLs are present.")
         }
     }
@@ -1061,18 +1066,22 @@ final class WindozEngine: ObservableObject {
             // map guard, and child processes kept in-session. It must not be
             // given the fixed Steam identity either — Valve's own client is
             // the identity here.
-            setenv("MADEIRA_EXE", SteamClientRuntime.windowsRoot + "\\steam.exe", 1)
-            setenv("MADEIRA_WORKDIR", SteamClientRuntime.windowsRoot, 1)
+            // Madeira's proven Steam desktop path: explorer starts a command on
+            // the shell desktop; the command runs a batch that starts the SCM
+            // first and then Valve's client with the CEF flags. Starting
+            // steam.exe directly left its Chromium UI without services/rpcss.
+            setenv("MADEIRA_EXE", "explorer.exe", 1)
+            setenv("MADEIRA_ARGS", "/desktop=shell,\(monitor.width)x\(monitor.height) cmd /c \(SteamClientRuntime.desktopLauncherPath)", 1)
+            unsetenv("MADEIRA_WORKDIR")
             setenv("MADEIRA_DESKTOP", "1", 1)
             setenv("MADEIRA_DOCK_SESSION", "1", 1)
             setenv("MADEIRA_GDI_SHARED_SECTION", "1", 1)
             setenv("MADEIRA_JIT_IMAGE_RETIRE", "1", 1)
             setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)
             setenv("MADEIRA_DESKTOP_FIT", "1", 1)
-            unsetenv("MADEIRA_ARGS")
             unsetenv("MADEIRA_STEAM_APPID")
             unsetenv("MADEIRA_STEAM_APPPATH")
-            log.append("[launch] Steam desktop session: MADEIRA_EXE=\(SteamClientRuntime.windowsRoot)\\steam.exe on a virtual desktop, with the dock desktop switches armed (GDI shared section, image-map guard, JIT image retire). Sign in inside the session — the password never passes through Windoz.")
+            log.append("[launch] Steam desktop session: explorer.exe runs /desktop=shell,\(monitor.width)x\(monitor.height) cmd /c \(SteamClientRuntime.desktopLauncherPath); the batch starts services.exe, then steam.exe with the CEF sandbox/GPU flags, on the dock desktop switches. Sign in inside the session — the password never passes through Windoz.")
         case .direct:
             // MADEIRA_EXE: the program to run. The forks resolve both the PE
             // path and the working folder from it, so it must be a Windows
