@@ -185,9 +185,11 @@ final class SessionSurfaceView: UIView {
             window.addSubview(host)
         }
         host.isHidden = false
-        // Re-show the compositor only for a desktop session. A direct game
-        // must not inherit a previous desktop session's compositor view.
-        winios_compositor_set_hidden(isDesktopSession ? 0 : 1)
+        // Show the desktop compositor only for a desktop session. A direct
+        // game's game-mode compositor is created later; hiding it here (or on
+        // a SwiftUI reattach) would be read as "session ended" and drop its
+        // windows. Teardown, not attach, owns hiding.
+        if isDesktopSession { winios_compositor_set_hidden(0) }
         attachControls(to: window)
         attachHUD(to: window)
         applyLayout()
@@ -303,9 +305,10 @@ final class SessionSurfaceView: UIView {
         displayObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                    object: nil, queue: .main) { [weak self] _ in
             guard let self, self.window != nil else { return }
-            // Only a desktop session owns the compositor; a direct game must
-            // not inherit the previous session's stale desktop above it.
-            winios_compositor_set_hidden(self.isDesktopSession ? 0 : 1)
+            // Only a desktop session owns the compositor. For a direct game,
+            // `winios_compositor_set_hidden(1)` means "session ended" to a
+            // game-mode compositor and would drop its windows; do not touch it.
+            if self.isDesktopSession { winios_compositor_set_hidden(0) }
             self.refreshDisplay(reason: "foreground")
         })
         displayObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
