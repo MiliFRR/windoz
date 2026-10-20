@@ -724,15 +724,14 @@ final class SessionSurfaceView: UIView {
         if !cancelled, !trackpadMoved, now - trackpadStartTime < 0.5 {
             postPointer(F_LDOWN)
             postPointer(F_LUP)
-            // A second tap close to the first is a double-click. The first tap
-            // has already produced one click; this one completes the pair,
-            // which is how Windows recognises a double-click.
+            // A second tap close to the first is a double-click. This tap
+            // already posted the second down/up pair above; Windows turns the
+            // two clicks into a double-click. Posting a third pair here would
+            // be a triple-click.
             let point = touch.location(in: self)
             let doubled = now - lastTapTime < 0.35
                 && hypot(point.x - lastTapPoint.x, point.y - lastTapPoint.y) < 30
             if doubled {
-                postPointer(F_LDOWN)
-                postPointer(F_LUP)
                 lastTapTime = 0
             } else {
                 lastTapTime = now

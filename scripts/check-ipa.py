@@ -12,9 +12,13 @@ CI gates on it (build-ipa runs it right after assembling the IPA) and the
 release workflow can record what it found.
 """
 import argparse
+import json
 import plistlib
+import re
 import sys
+import textwrap
 import zipfile
+from pathlib import Path
 
 # Subsystem strings that must be inside the app's main executable: Steam
 # depot chunk formats, Doz Dock, Steam auth, Epic downloader, runtime
@@ -25,6 +29,35 @@ FIXED_MARKERS = [
     b"windoz-runtimes", b"WindozJITHelper", b"windoz_rppairing",
     b"localdevvpn", b"stikdebug",
 ]
+
+# A desktop session is explorer.exe from the native ARM64 farm. 0.9.0
+# shipped only arm64ec-windows, so Explorer, dockhost.exe and Steam's batch
+# could not resolve their system DLLs. Gate the files that make that path
+# real, not just the folder name.
+NATIVE_DESKTOP_FILES = [
+    "aarch64-windows/explorer.exe",
+    "aarch64-windows/cmd.exe",
+    "aarch64-windows/conhost.exe",
+    "aarch64-windows/services.exe",
+    "aarch64-windows/rpcss.exe",
+]
+
+MANIFEST_PATH = "Payload/Windoz.app/runtime-manifest.json"
+SOURCE_MANIFEST = Path(__file__).resolve().parent.parent / "app-windoz/Sources/Engine/RuntimeCatalog.swift"
+
+
+def built_in_manifest(source: Path):
+    """The raw-string JSON compiled into RuntimeCatalog.swift.
+
+    It is the fallback when a host hides the bundled manifest. If it drifts
+    from Resources/runtime-manifest.json, a device with the bundle path bug
+    silently shows a different component list than the release notes claim.
+    """
+    text = source.read_text(encoding="utf-8")
+    match = re.search(r'private static let builtInManifest = #"""(.*?)"""#', text, re.S)
+    if not match:
+        raise ValueError("builtInManifest raw string not found in RuntimeCatalog.swift")
+    return json.loads(textwrap.dedent(match.group(1)))
 
 
 def main() -> int:
@@ -87,6 +120,42 @@ def main() -> int:
         print("FOUND  " if found else "MISSING", marker.decode())
         if not found:
             failures.append(f"marker {marker.decode()} not in the executable")
+
+    # The native ARM64 Windows farm is the difference between a desktop and a
+    # desktop whose client cannot start. Check the actual executables, not a
+    # build log line.
+    for relative in NATIVE_DESKTOP_FILES:
+        entry = "Payload/Windoz.app/" + relative
+        found = entry in names
+        print("FOUND  " if found else "MISSING", relative)
+        if not found:
+            failures.append(f"{relative} is missing from the app bundle")
+
+    # The editable resource and the compiled-in fallback must say the same
+    # thing. check-ipa runs in the checkout during CI, so the Swift source is
+    # available even though it is not packaged into the IPA.
+    if MANIFEST_PATH not in names:
+        failures.append("runtime-manifest.json is missing from the app bundle")
+    else:
+        try:
+            packaged = json.loads(z.read(MANIFEST_PATH))
+        except Exception as exc:
+            failures.append(f"packaged runtime-manifest.json is invalid: {exc}")
+        else:
+            print("runtime manifest:", len(packaged.get("components", [])), "components")
+            if SOURCE_MANIFEST.exists():
+                try:
+                    built_in = built_in_manifest(SOURCE_MANIFEST)
+                except Exception as exc:
+                    failures.append(f"built-in runtime manifest could not be read: {exc}")
+                else:
+                    if built_in != packaged:
+                        failures.append("the compiled-in runtime manifest differs from "
+                                        "Resources/runtime-manifest.json")
+                    else:
+                        print("FOUND   compiled-in manifest matches the packaged copy")
+            else:
+                print("SKIP    compiled-in manifest comparison (source checkout not found)")
 
     # The version the app claims must also be compiled in somewhere
     # (AppContainer.displayVersion feeds every log header, so a mismatch

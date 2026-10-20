@@ -346,8 +346,11 @@ final class SessionGamepad {
         // never warped, so this follows whatever pointer mode the session uses.
         let shaped = Self.shape(Double(state.rx) / 32767.0, Double(state.ry) / 32767.0)
         // The same persisted multiplier as the touch trackpad, so a player who
-        // slows the pointer down gets the same slower right stick.
+        // slows the pointer down gets the same slower right stick. Normalise
+        // against the default so the 0.9.0 controller speed is unchanged
+        // until the slider is actually moved.
         let sensitivity = SessionPreferences.trackpadSensitivity
+            / SessionPreferences.defaultSensitivity
         let step = Self.mouseSpeed * sensitivity * min(dt, 1.0 / 15.0)
         let dx = shaped.x * step
         let dy = -shaped.y * step
