@@ -512,7 +512,10 @@ final class SessionSurfaceView: UIView {
         let guest = guestSize
         cursor = CGPoint(x: guest.width / 2, y: guest.height / 2)
         cursorReady = true
+        // `winios_cursor_move` only moves the drawn arrow (a no-op on iOS);
+        // Wine learns the position from an absolute pointer event.
         winios_cursor_move(Int32(cursor.x), Int32(cursor.y))
+        postPointer(F_MOVE | F_ABS)
     }
 
     private func postPointer(_ flags: UInt32, data: Int32 = 0) {
