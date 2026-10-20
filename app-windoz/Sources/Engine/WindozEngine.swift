@@ -755,7 +755,7 @@ final class WindozEngine: ObservableObject {
         set(enabled ? 1 : 0)
         ecoEnabled = enabled
         log.append("[session] eco mode \(enabled ? "on" : "off") (madeira_set_eco(\(enabled ? 1 : 0))).",
-                   enabled ? .success : .info)
+                   level: enabled ? .success : .info)
     }
 
     /// Called on the session queue right before the guest process exists, so

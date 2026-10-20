@@ -147,7 +147,23 @@ final class SessionSurfaceView: UIView {
         return CGSize(width: 1024, height: 768)   // engine default until it publishes a mode
     }
 
-    private var gameRect: CGRect { SessionSurfaceLayout.fittingRect(guest: guestSize, in: bounds) }
+    private var gameRect: CGRect {
+        guard let window else { return .zero }
+        return convert(gameRectInWindow, from: window)
+    }
+
+    /// The aspect-fit guest rectangle in window coordinates. Using the window,
+    /// not this view's own bounds, keeps the host and compositor geometry
+    /// correct even while SwiftUI is still settling a rotation.
+    private var gameRectInWindow: CGRect {
+        guard let window else { return .zero }
+        return SessionSurfaceLayout.fittingRect(guest: guestSize, in: window.bounds)
+    }
+
+    private func containsInGame(_ point: CGPoint) -> Bool {
+        guard let window else { return false }
+        return gameRectInWindow.contains(convert(point, to: window))
+    }
 
     /// True when the engine is hosting a Windows desktop (Doz Dock or the full
     /// Steam client). The compositor owns the mapping there, and a trackpad
@@ -215,14 +231,13 @@ final class SessionSurfaceView: UIView {
     private func applyLayout() {
         guard let window else { return }
         let host = WindozMetalHostView.shared
-        let rect = gameRect
-        let hostRect = convert(rect, to: window)
-        if host.frame != hostRect { host.frame = hostRect }
+        let rect = gameRectInWindow
+        if host.frame != rect { host.frame = rect }
 
-        let frame = convert(bounds, to: window)
+        let frame = window.bounds
         winios_set_compositor_frame(Double(frame.minX), Double(frame.minY),
                                     Double(frame.width), Double(frame.height))
-        let local = rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
+        let local = rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
         winios_set_desktop_rect(Double(local.minX), Double(local.minY),
                                 Double(local.width), Double(local.height), 1)
     }
@@ -454,12 +469,16 @@ final class SessionSurfaceView: UIView {
     /// so ask it first; direct sessions use the same aspect-fit rectangle the
     /// Metal host presents in.
     private func guestPoint(for point: CGPoint) -> (Int32, Int32) {
-        if isDesktopSession, let window {
+        if let window {
             let windowPoint = convert(point, to: window)
-            var x: Int32 = 0, y: Int32 = 0
-            if winios_desktop_point_from_window(Double(windowPoint.x), Double(windowPoint.y), &x, &y) != 0 {
-                return (x, y)
+            if isDesktopSession {
+                var x: Int32 = 0, y: Int32 = 0
+                if winios_desktop_point_from_window(Double(windowPoint.x), Double(windowPoint.y), &x, &y) != 0 {
+                    return (x, y)
+                }
             }
+            let rect = SessionSurfaceLayout.fittingRect(guest: guestSize, in: window.bounds)
+            return SessionSurfaceLayout.guestPoint(windowPoint, rect: rect, guest: guestSize)
         }
         return SessionSurfaceLayout.guestPoint(point, rect: gameRect, guest: guestSize)
     }
@@ -498,8 +517,11 @@ final class SessionSurfaceView: UIView {
     private func moveCursor(dx: CGFloat, dy: CGFloat) {
         var width: Int32 = 0, height: Int32 = 0
         winios_screen_size(&width, &height)
-        let maxX = CGFloat(max(Int(width), 1) - 1)
-        let maxY = CGFloat(max(Int(height), 1) - 1)
+        let size = (width > 0 && height > 0)
+            ? CGSize(width: CGFloat(width), height: CGFloat(height))
+            : guestSize
+        let maxX = CGFloat(max(Int(size.width), 1) - 1)
+        let maxY = CGFloat(max(Int(size.height), 1) - 1)
         cursor.x = min(max(cursor.x + dx, 0), maxX)
         cursor.y = min(max(cursor.y + dy, 0), maxY)
         postPointer(F_MOVE | F_ABS)
@@ -571,11 +593,14 @@ final class SessionSurfaceView: UIView {
             trackpadLastTwoFingerY = averagePoint(active).y
             trackpadScrollAccum = 0
             trackpadGeneration += 1
+            // The first finger must not resume as a one-finger pan with a
+            // stale anchor when the second one leaves.
+            trackpadTouch = nil
+            trackpadMoved = false
             trackpadScrollTouch = touches.first(where: { $0 !== trackpadTouch }) ?? touches.first
             if trackpadDragging {
                 postPointer(F_LUP)
                 trackpadDragging = false
-                trackpadTouch = nil
             }
             return
         }
