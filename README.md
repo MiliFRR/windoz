@@ -189,6 +189,30 @@ said `0.7.0`, exactly the mismatch the gate exists to catch; `891d549` fixed
 it and #23 went green. Typecheck ran green on both trees (#49, then #50 for
 the fix). **No device claims:** the owner's next run is the proof.
 
+**Build 0.9.0 shipped — `build-ipa.yml` run #27 (`main` = `e1508e5`, success,
+2026-10-20):** every stage built green (LLVM, the runtime, Wine/FEX/DXMT, the
+app, the IPA gate) and the unsigned IPA was published automatically as the
+GitHub Release
+[`v0.9.0`](https://github.com/MiliFRR/windoz/releases/tag/v0.9.0) —
+`windoz-0.9.0-build9.ipa`, 78,599,059 bytes, SHA-256
+`D5AFB2D51CCB955509FBB1269838520BD0A0ADC02CDB37B5F439A2AF003753CB`
+(kept locally as `windoz-ipa-keep/windoz-20.ipa`, re-checked with
+`scripts/check-ipa.py --require 0.9.0 --min-build 9` — all checks passed).
+Verified inside: the app bundle and the helper both claim `0.9.0` build 9,
+`MinimumOSVersion` 26.0, every subsystem marker, and the 0.9.0 strings
+(`winios_set_compositor_frame`, `winios_set_desktop_rect`,
+`winios_compositor_set_hidden`, `windoz.session.pointer`,
+`windoz.session.eco`, `madeira_set_eco`, `MADEIRA_DINPUT_PAD`,
+`steam-launch.bat`, `-no-cef-sandbox`, `cef-disable-gpu`,
+`MADEIRA_DOCK_AUTH_FILE`, `MADEIRA_DESKTOP_FIT`, `WASD`, `Touchscreen`,
+`Trackpad`, `Session settings`, `Eco mode`, `DirectInput joystick`), so the
+display-geometry, compositor, pointer-mode, eco, DirectInput, Steam-desktop
+and keyboard-mouse layout code is in the shipped binary. Typecheck ran green
+on the released tree (#60). The automatic keeper release is
+`release-ipa.yml` run #10. **No device claims:** the owner's next run is the
+proof; `docs/CHANGES.md` carries the case-by-case checklist and the reasons
+each change is expected to matter.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
