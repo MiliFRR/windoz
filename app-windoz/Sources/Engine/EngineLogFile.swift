@@ -157,7 +157,6 @@ final class EngineLogFile {
 
         let thread = Thread { [weak self] in self?.pumpOutput(readFD) }
         thread.name = "windoz.engine-output"
-        thread.stackSize = 256 * 1024
         thread.start()
         EngineLogStream.shared.append("[log] engine stdout/stderr captured into this log.")
     }
