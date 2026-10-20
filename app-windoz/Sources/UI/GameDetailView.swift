@@ -930,7 +930,6 @@ struct GameSettingsSheet: View {
                                     .foregroundStyle(.white.opacity(0.9))
                                 note("XInput is always available to controller layouts. This adds Wine's DirectInput joystick beside it for older games (MADEIRA_DINPUT_PAD=1). Applied at the next launch; a running session cannot change it.", applied: true)
                                     .foregroundStyle(.white.opacity(0.9))
-                                note("Applied — MADEIRA_DINPUT_PAD at launch. Needs a controller the engine can see.", applied: true)
                                 Picker("Graphics backend", selection: $settings.graphicsBackend) {
                                     ForEach(GraphicsBackend.allCases) { Text($0.title).tag($0) }
                                 }
