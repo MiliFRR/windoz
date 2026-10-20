@@ -186,17 +186,32 @@ final class LauncherInWineStore: ObservableObject, StoreProvider {
         self.id = id
         self.launcherName = launcherName
         self.installerURL = installerURL
+        let isEA = id == .ea
+        // EA's official bootstrapper is a 32-bit PE, and this engine is
+        // 64-bit-only (there is deliberately no i386 farm in the bundle).
+        // Offering "Sign in" would only produce a dead end, so the EA row
+        // instead points at the import path that does work: an EA game that
+        // ships its own 64-bit .exe can be added with Add EA game. Titles
+        // that require EA Desktop cannot start, and nothing here bypasses
+        // that requirement.
+        let summary = isEA
+            ? "EA games that ship a self-contained 64-bit .exe can be added from their folder with Add EA game. EA's own client cannot be installed yet: its official bootstrapper is a 32-bit program and this Windows layer runs 64-bit guests only. Games that require EA Desktop therefore do not start - Windoz does not bypass that requirement."
+            : "\(launcherName) has no usable public API. The launcher pipeline (install the official launcher into its own environment, then start it in a session) is not in this build yet."
         self.capability = StoreCapability(
-            signIn: .externalApp,
+            signIn: isEA ? .none : .externalApp,
             downloads: .launcher,
-            library: true,
-            updateAndVerify: true,
-            cloudSaves: true,
-            runtimeLauncherNeeded: true,
-            summary: "\(launcherName) has no usable public API, so Windoz is meant to run the official launcher inside Wine. You sign in there; the native UI just starts your games through it. The launcher pipeline (install the official launcher into its own environment, then start it in a session) is not in this build yet.")
+            library: !isEA,
+            updateAndVerify: !isEA,
+            cloudSaves: !isEA,
+            runtimeLauncherNeeded: !isEA,
+            summary: summary)
     }
 
     func signIn() async {
+        if id == .ea {
+            authState = .error("EA Desktop cannot be installed by this build: its official bootstrapper is 32-bit and the engine runs 64-bit guests only. Use Add EA game for a self-contained EA title.")
+            return
+        }
         authState = .signingIn("Starting \(launcherName)…")
         authState = .error("Launching \(launcherName) needs the launcher pipeline (install the official launcher into its own environment, then start it in a session). The session host exists in this build; the launcher pipeline is the next piece.")
     }

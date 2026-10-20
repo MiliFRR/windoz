@@ -182,19 +182,25 @@ struct LibraryView: View {
             StoreRow(summary: summary, registry: registry,
                      extraAction: extraAction(for: summary))
         }
-        Text("Steam signs in natively, installs owned games into the Windows environment, and shows each game's achievements and friends on its page. Epic signs in with a device code you approve on Epic's own site — no password ever touches the app — and its library uses the launcher sign-in. The other stores will run their official launcher in Wine once that is ported; until then they say so.")
+        Text("Steam signs in natively, installs owned games into the Windows environment, and shows each game's achievements and friends on its page. Epic signs in with a device code you approve on Epic's own site - no password ever touches the app - and its library uses the launcher sign-in. EA games that ship their own 64-bit executable can be added with Add EA game; EA Desktop itself cannot be installed because its official installer is 32-bit and this Windows layer is 64-bit-only. Rockstar's launcher pipeline is not in this build yet; the row says so.")
             .font(.caption2).foregroundStyle(.secondary)
     }
 
     /// The per-store row button that opens the store's own sheet, when signing
     /// in bought one. Everything else keeps the plain Sign in / Sign out row.
-    private func extraAction(for summary: StoreSummary) -> (title: String, handler: () -> Void)? {
+    private func extraAction(for summary: StoreSummary) -> (title: String, symbol: String, handler: () -> Void)? {
+        // EA's client is not installable here, but an EA game that ships its
+        // own 64-bit executable is a normal local import. Give it a named
+        // button instead of leaving the store row as a dead end.
+        if summary.id == .ea {
+            return ("Add EA game", "plus.circle.fill", { importing = true })
+        }
         guard summary.authState.isSignedIn else { return nil }
         switch summary.id {
         case .steam:
-            return (title: "Steam library", handler: { steamStore.showingLibrary = true })
+            return ("Steam library", "books.vertical.fill", { steamStore.showingLibrary = true })
         case .epic:
-            return (title: "Epic library", handler: { epicStore.showingLibrary = true })
+            return ("Epic library", "books.vertical.fill", { epicStore.showingLibrary = true })
         default:
             return nil
         }
@@ -286,7 +292,7 @@ struct StoreRow: View {
     let summary: StoreSummary
     let registry: StoreRegistry
     /// A store-specific action (e.g. "Steam library") shown next to sign-in.
-    var extraAction: (title: String, handler: () -> Void)? = nil
+    var extraAction: (title: String, symbol: String, handler: () -> Void)? = nil
 
     var body: some View {
         GlassCard {
@@ -302,9 +308,9 @@ struct StoreRow: View {
                 Text(capabilityLine)
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
-                    if summary.authState.isSignedIn, let extraAction {
+                    if let extraAction, summary.authState.isSignedIn || summary.id == .ea {
                         Button(action: extraAction.handler) {
-                            Label(extraAction.title, systemImage: "books.vertical.fill")
+                            Label(extraAction.title, systemImage: extraAction.symbol)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -335,6 +341,9 @@ struct StoreRow: View {
     }
 
     private var capabilityLine: String {
+        if summary.id == .ea {
+            return "Local import only - EA Desktop is not installable in this 64-bit engine"
+        }
         var parts = [summary.capability.library ? "Library" : "No library"]
         parts.append("Downloads: \(summary.capability.downloads.title)")
         if summary.capability.runtimeLauncherNeeded { parts.append("Launcher in Wine") }
@@ -342,11 +351,15 @@ struct StoreRow: View {
     }
 
     @ViewBuilder private var authBadge: some View {
-        switch summary.authState {
-        case .signedOut: Badge(text: "Signed out", tint: .gray)
-        case .signingIn(let what): Badge(text: what, tint: Theme.accent)
-        case .signedIn(let who): Badge(text: who, systemImage: "person.crop.circle", tint: Theme.ok)
-        case .error(let why): Text(why).font(.caption2).foregroundStyle(Theme.warn).lineLimit(3)
+        if summary.id == .ea {
+            Badge(text: "Import only", tint: .gray)
+        } else {
+            switch summary.authState {
+            case .signedOut: Badge(text: "Signed out", tint: .gray)
+            case .signingIn(let what): Badge(text: what, tint: Theme.accent)
+            case .signedIn(let who): Badge(text: who, systemImage: "person.crop.circle", tint: Theme.ok)
+            case .error(let why): Text(why).font(.caption2).foregroundStyle(Theme.warn).lineLimit(3)
+            }
         }
     }
 }

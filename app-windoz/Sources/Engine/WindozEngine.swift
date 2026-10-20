@@ -1049,6 +1049,11 @@ final class WindozEngine: ObservableObject {
             }
             if let file = swapLaunch.swapFileURL {
                 setenv("MADEIRA_SWAP_FILE", file.path, 1)
+            } else {
+                // Never leave a previous session's path armed: the bridge may
+                // remove and recreate the file, and a stale path would point
+                // at a file that no longer exists.
+                unsetenv("MADEIRA_SWAP_FILE")
             }
             setenv("MADEIRA_SWAP_MB", String(swapLaunch.swap.sizeMB), 1)
             setenv("MADEIRA_SWAP_COVERAGE", swapLaunch.swap.coverage.rawValue, 1)

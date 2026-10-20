@@ -133,6 +133,11 @@ final class EngineLogFile {
         guard !outputCaptureInstalled else { return }
         outputCaptureInstalled = true
 
+        // The guest and the engine write to fd 1/2 from many threads. If the
+        // reader ever closes, a write to the pipe must return EPIPE instead of
+        // terminating the app with SIGPIPE.
+        _ = signal(SIGPIPE, SIG_IGN)
+
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else {
             EngineLogStream.shared.append("[log] engine output capture unavailable: pipe() failed (errno \(errno)).",
