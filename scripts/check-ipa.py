@@ -34,12 +34,15 @@ FIXED_MARKERS = [
 # shipped only arm64ec-windows, so Explorer, dockhost.exe and Steam's batch
 # could not resolve their system DLLs. Gate the files that make that path
 # real, not just the folder name.
-NATIVE_DESKTOP_FILES = [
+DESKTOP_FILES = [
     "aarch64-windows/explorer.exe",
     "aarch64-windows/cmd.exe",
     "aarch64-windows/conhost.exe",
     "aarch64-windows/services.exe",
     "aarch64-windows/rpcss.exe",
+    # Built by build/madeira-dock/build.sh in CI. Without it Doz Dock refuses
+    # to launch, so a release must not silently omit it again.
+    "arm64ec-windows/dockhost.exe",
 ]
 
 MANIFEST_PATH = "Payload/Windoz.app/runtime-manifest.json"
@@ -124,7 +127,7 @@ def main() -> int:
     # The native ARM64 Windows farm is the difference between a desktop and a
     # desktop whose client cannot start. Check the actual executables, not a
     # build log line.
-    for relative in NATIVE_DESKTOP_FILES:
+    for relative in DESKTOP_FILES:
         entry = "Payload/Windoz.app/" + relative
         found = entry in names
         print("FOUND  " if found else "MISSING", relative)
