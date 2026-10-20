@@ -61,14 +61,26 @@ Doz Dock still refuses before the session opens when the Steam install record,
 the verified client, or the saved Steam sign-in is missing; each refusal says
 which one.
 
-### The full Steam client: the dock switches, not only `MADEIRA_DESKTOP=1`
+### The full Steam client: the launch Madeira proved, not only `MADEIRA_DESKTOP=1`
 
-The Steam desktop path now arms the same virtual-desktop switches the validated
-Dock path uses: `MADEIRA_GDI_SHARED_SECTION`, `MADEIRA_JIT_IMAGE_RETIRE`,
-`MADEIRA_IMAGE_MAP_GUARD`, `MADEIRA_DESKTOP_FIT`, and the dock-session identity
-suppression, with `MADEIRA_STEAM_APPID`/`MADEIRA_STEAM_APPPATH` cleared. It
-forces `MADEIRA_WAIT_CHILDREN=1` because Valve's client relaunches and forks
-helper modules.
+The 0.8 path ran `steam.exe` directly with no arguments. Valve's client is a
+Chromium UI plus a Windows service client, so under Wine that path can start
+without its SCM/rpcss chain and without the CEF flags that make its sign-in
+window paint. The Steam desktop mode now mirrors Madeira's working launch:
+
+- Windoz writes `C:\steam-launch.bat` into the prefix. The batch starts
+  `services.exe` first, changes to Valve's folder, and runs `steam.exe` with
+  `-no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor
+  -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints`.
+- `MADEIRA_EXE=explorer.exe` and `MADEIRA_ARGS` tell Wine to run
+  `/desktop=shell,<W>x<H> cmd /c C:\steam-launch.bat`, so the client's windows
+  live on the session's shell desktop; `cmd` stays alive with the client.
+- The path also arms the same virtual-desktop switches the validated Dock path
+  uses: `MADEIRA_GDI_SHARED_SECTION`, `MADEIRA_JIT_IMAGE_RETIRE`,
+  `MADEIRA_IMAGE_MAP_GUARD`, and `MADEIRA_DESKTOP_FIT`. It suppresses the fixed
+  Steam identity (`MADEIRA_DOCK_SESSION=1`, `MADEIRA_STEAM_APPID`/`APPPATH`
+  cleared) and forces `MADEIRA_WAIT_CHILDREN=1`, because Valve's client
+  relaunches and forks helper modules.
 
 Preflight and the Steam library sheet now require all three files the client
 needs — `steam.exe`, `steamclient64.dll`, and `steamclient.dll` — instead of
