@@ -76,6 +76,10 @@ only the 64-bit DLL. A partially unpacked client is reported with the missing
 names, and the installer's "already prepared" fast path uses the same three
 files so it can repair an old incomplete install.
 
+The engine's desktop compositor is now revealed only for a desktop session.
+A Direct launch after a dock or Steam-desktop session cannot inherit the
+previous session's compositor view above the game.
+
 ### Pointer modes: direct touchscreen, or a real trackpad
 
 `SessionPreferences` persists a session-wide choice; touchscreen remains the
@@ -90,6 +94,10 @@ default.
   notch), and a two-finger tap posts right-click. Touch-down never teleports
   the cursor. The cursor is clamped to the guest monitor and clamped again
   after a mode change, backgrounding, or teardown, so no button is left down.
+  Only touches that begin on the game surface count as a trackpad gesture: a
+  finger held on the on-screen joystick or Space no longer turns the next
+  finger into a two-finger scroll. Entering the mode posts one absolute move
+  at the centre, so the first click cannot land on a stale cursor.
 
 The mode is available live in the session's gear menu and as a default in
 Settings → Session.
