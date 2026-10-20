@@ -1,5 +1,158 @@
 # windoz — changes
 
+## 0.9.0 (2026-10-20) — the owner round: picture, both Steam paths, pointer, power, display and input
+
+Built on 0.8.0 (`main` = `2a63552`). Everything below is compiled and
+typechecked; the IPA gate checks the version and the binary's feature strings.
+**No device behaviour is claimed here.** The owner's iPhone run is the proof,
+and the checklist at the end says exactly what to try.
+
+### The session picture: rotation, its bar, and the post-boot freeze
+
+Three separate causes were in the tree at once:
+
+1. Windoz never called the engine's display-geometry contract. Madeira calls
+   `winios_set_compositor_frame` (window points) and `winios_set_desktop_rect`
+   (the compositor's own points) whenever the session's aspect rect changes.
+   Without them the guest's desktop and its launcher/dialog windows kept the
+   geometry they were given at attach, which is the small top-left picture and
+   the cropped "frozen" window after a rotation.
+2. The app wrote `CAMetalLayer.drawableSize` on the main thread during every
+   layout. DXMT sizes that layer from the guest's swapchain off the main
+   thread. The two writers raced, and a stale surface could keep presenting
+   after the game had booted. The app no longer writes the drawable size; it
+   seeds it once before registration and watches it thereafter.
+3. The in-session HUD was pinned only when it was attached. After a rotation
+   its old frame could leave the gear and Menu buttons outside the window.
+
+The session host now:
+
+- computes the aspect-fit guest rectangle from the **window**, not from
+  SwiftUI's possibly stale surface bounds, and publishes both geometry calls;
+- re-applies the layout after a 0.3 s settle on rotation, a guest display-mode
+  change, a safe-area change, returning to the foreground, and a DXMT drawable
+  size change;
+- keeps the Metal host in the window and lets DXMT own the drawable;
+- resets the HUD, pad, keyboard-and-mouse overlay and performance panel to the
+  window's bounds on every layout pass;
+- hides the engine's desktop compositor on teardown and shows it again on
+  attach;
+- logs a frame stall after 12 s with no new presented frame and re-publishes
+  the display geometry once. It never kills the game; the log says when frames
+  stopped and the process is still running.
+
+The HUD keeps its compact status line and now uses two fixed 38-point icon
+buttons (gear and Menu) with explicit width/height constraints, so their
+hit targets do not depend on a title's intrinsic size after rotation. The
+performance panel moved to the top right, below them.
+
+### Doz Dock: the sign-in handoff was being cleared
+
+`prepareLaunchMode` wrote the one-use sign-in transfer and set
+`MADEIRA_DOCK_AUTH_FILE`, then `applyLaunchEnvironment` called
+`DozDock.clearEnvironment()` and never put the path back. The dock host
+therefore started without a sign-in and failed inside the session. The
+validated game and handoff path are now kept for the launch, the environment
+is restored after the deliberate clear, and the token is removed on every
+successful or abandoned launch path. The preflight log no longer prints the
+transfer path.
+
+Doz Dock still refuses before the session opens when the Steam install record,
+the verified client, or the saved Steam sign-in is missing; each refusal says
+which one.
+
+### The full Steam client: the dock switches, not only `MADEIRA_DESKTOP=1`
+
+The Steam desktop path now arms the same virtual-desktop switches the validated
+Dock path uses: `MADEIRA_GDI_SHARED_SECTION`, `MADEIRA_JIT_IMAGE_RETIRE`,
+`MADEIRA_IMAGE_MAP_GUARD`, `MADEIRA_DESKTOP_FIT`, and the dock-session identity
+suppression, with `MADEIRA_STEAM_APPID`/`MADEIRA_STEAM_APPPATH` cleared. It
+forces `MADEIRA_WAIT_CHILDREN=1` because Valve's client relaunches and forks
+helper modules.
+
+Preflight and the Steam library sheet now require all three files the client
+needs — `steam.exe`, `steamclient64.dll`, and `steamclient.dll` — instead of
+only the 64-bit DLL. A partially unpacked client is reported with the missing
+names, and the installer's "already prepared" fast path uses the same three
+files so it can repair an old incomplete install.
+
+### Pointer modes: direct touchscreen, or a real trackpad
+
+`SessionPreferences` persists a session-wide choice; touchscreen remains the
+default.
+
+- **Touchscreen** is the original direct contract: the finger is the pointer,
+  and the guest receives touch/mouse events at the aspect-fit or compositor
+  mapped position.
+- **Trackpad** is relative, not a touch mouse: one finger moves an owned
+  desktop-pixel cursor, a tap posts left-click at that cursor, a still
+  long-press arms a left-button drag, two fingers scroll (14 pt per wheel
+  notch), and a two-finger tap posts right-click. Touch-down never teleports
+  the cursor. The cursor is clamped to the guest monitor and clamped again
+  after a mode change, backgrounding, or teardown, so no button is left down.
+
+The mode is available live in the session's gear menu and as a default in
+Settings → Session.
+
+### Eco mode
+
+Eco is the engine's own low-QoS guest-thread mode (`madeira_set_eco`), resolved
+with `dlsym` so the app still launches if the pinned engine lacks it. The
+session menu toggles it live, Settings → Session stores the default, and every
+successful or abandoned session turns it off again while keeping the saved
+choice. If the symbol is absent, the menu item is disabled and the log says
+so instead of pretending.
+
+### Resolution before launch, and DirectInput
+
+- `GameResolution` adds exact presets — 1280 × 720, 1600 × 900, 1920 × 1080,
+  2560 × 1440 — backed by `MADEIRA_SCREEN_W/H`. The old `resolutionScale`
+  remains the `.scaled` fallback, so existing settings decode unchanged. The
+  game page and the settings sheet show the preset and the text says it
+  applies at the next launch; the session menu also exposes it.
+- XInput remains always available to controller layouts. The per-game
+  "Also expose a DirectInput joystick" setting sets `MADEIRA_DINPUT_PAD=1` for
+  the next launch and is called out as launch-time only; the session menu
+  toggles the same stored choice.
+
+### The default keyboard-and-mouse controls
+
+The old arrow/ESC-TAB-ENTER-SPACE row is replaced by the Madeira-style layout
+the owner asked for:
+
+- an on-screen thumb stick on the left that emits **real W/A/S/D key events**
+  (not a virtual gamepad), with per-45°-sector press/release;
+- a wide **Space** bar along the bottom centre;
+- **Esc** at the top left with **Tab** directly beneath it.
+
+Empty areas still pass touches to the game. The Xbox and PlayStation layouts,
+their on-screen pads, and the DualSense glyphs are unchanged; PS5 continues to
+use the XInput pad.
+
+### What still needs the owner's iPhone
+
+This build cannot prove device behaviour from a Windows host. Please test, in
+this order, and send `windoz-logs/windoz.log` (Settings → Log) after any
+failure:
+
+1. Rotate a running game to landscape and back; open the gear and Menu after
+   each rotation. The controls should stay on-screen and the game should stay
+   centred, not shrink into the top-left.
+2. Boot a game that previously froze after its first frame. If it freezes,
+   attach the log: the stall line names the presented-frame count and whether
+   the display refresh was re-published.
+3. Launch a Doz Dock game with a saved Steam sign-in. If it refuses, send the
+   log; the dock report fields are in it.
+4. Install the full Steam client from the library and open it. Sign in inside
+   the session; confirm the client paints and stays running.
+5. Try both pointer modes, including tap, hold-drag, two-finger scroll and
+   two-finger right-click in trackpad mode.
+6. Toggle eco in the session gear menu, and compare a launch with it on/off.
+7. Try 1280 × 720 and 1920 × 1080 from the game page (next launch), and a
+   DirectInput-only game with the DirectInput toggle on (next launch).
+8. Play with the default keyboard-and-mouse layout: joystick → WASD, Space,
+   Esc and Tab.
+
 ## 0.5.0 (2026-10-18) — the six-phase owner round
 
 Built on 0.4.0. Six commits, one per phase, on `ci-050` (1/6 … 6/6); each
