@@ -45,6 +45,7 @@ struct GameDetailView: View {
                         header(game)
                         playButton(game)
                         launchModeRow(game)
+                        resolutionRow(game)
                         achievementsSummary(game)
                         sessionNotes(game)
                         if let failure = engine.lastFailedLaunch, failure.gameID == gameID {
@@ -224,6 +225,15 @@ struct GameDetailView: View {
                 })
     }
 
+    private var resolutionBinding: Binding<GameResolution> {
+        Binding(get: { library.game(withID: gameID)?.settings.resolution ?? .scaled },
+                set: { resolution in
+                    guard var game = library.game(withID: gameID) else { return }
+                    game.settings.resolution = resolution
+                    library.setSettings(game.settings, for: gameID)
+                })
+    }
+
     private var offlineBinding: Binding<Bool> {
         Binding(get: { library.game(withID: gameID)?.settings.steamOffline ?? false },
                 set: { value in
@@ -267,6 +277,28 @@ struct GameDetailView: View {
             return "Direct runs the game's own program with its own Steam identity published (SteamAppPath \(exePath)); the Steam client does not run. Games that insist on the client should use Doz Dock."
         }
         return "Direct runs the game's own program. Steam games that insist on the running client can refuse — switch Launch to Doz Dock for those."
+    }
+
+    /// The game's Windows monitor, right where the game starts. Changing it
+    /// here is a next-launch setting, because the engine reads
+    /// MADEIRA_SCREEN_W/H once while it brings the session up.
+    @ViewBuilder private func resolutionRow(_ game: InstalledGame) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Resolution", systemImage: "display")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                Picker("Resolution", selection: resolutionBinding) {
+                    ForEach(GameResolution.allCases) { Text($0.shortTitle).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .tint(Theme.accent)
+            }
+            Text(game.settings.resolution.detail + " Takes effect at the next launch.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+        }
     }
 
     /// Achievements, right below Play (the owner's ask): one honest summary
@@ -817,10 +849,19 @@ struct GameSettingsSheet: View {
                         GlassCard {
                             VStack(alignment: .leading, spacing: 12) {
                                 SectionHeader(title: "Display")
-                                labeled("Resolution scale", "\(Int(settings.resolutionScale * 100)) %") {
-                                    Slider(value: $settings.resolutionScale, in: 0.5...1.5, step: 0.05)
+                                Picker("Game resolution", selection: $settings.resolution) {
+                                    ForEach(GameResolution.allCases) { Text($0.title).tag($0) }
                                 }
-                                note("Applied — the guest monitor is sized from this at launch.", applied: true)
+                                .foregroundStyle(.white.opacity(0.9))
+                                note(settings.resolution.detail, applied: true)
+                                if settings.resolution == .scaled {
+                                    labeled("Render scale", "\(Int(settings.resolutionScale * 100)) %") {
+                                        Slider(value: $settings.resolutionScale, in: 0.5...1.5, step: 0.05)
+                                    }
+                                    note("Applied — the guest monitor is 1280 × 720 times this at launch.", applied: true)
+                                }
+                                Text("The Windows monitor the game renders into. It is aspect-fitted to the phone at the next launch.")
+                                    .font(.caption2).foregroundStyle(.white.opacity(0.5))
                                 Picker("Frame pacing", selection: $settings.fpsLimit) {
                                     ForEach(FPSLimit.allCases) { Text($0.title).tag($0) }
                                 }
@@ -885,7 +926,9 @@ struct GameSettingsSheet: View {
                         GlassCard {
                             VStack(alignment: .leading, spacing: 12) {
                                 SectionHeader(title: "Input & graphics backend")
-                                Toggle("DirectInput joystick from a connected controller", isOn: $settings.dinputPad)
+                                Toggle("Also expose a DirectInput joystick", isOn: $settings.dinputPad)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                note("XInput is always available to controller layouts. This adds Wine's DirectInput joystick beside it for older games (MADEIRA_DINPUT_PAD=1). Applied at the next launch; a running session cannot change it.", applied: true)
                                     .foregroundStyle(.white.opacity(0.9))
                                 note("Applied — MADEIRA_DINPUT_PAD at launch. Needs a controller the engine can see.", applied: true)
                                 Picker("Graphics backend", selection: $settings.graphicsBackend) {

@@ -108,6 +108,68 @@ enum SyncMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// The Windows monitor a game renders into. The engine reads
+/// `MADEIRA_SCREEN_W/H` once at launch; the session then aspect-fits that guest
+/// monitor onto the phone. `scaled` keeps the pre-0.9 behaviour (1280×720 times
+/// the per-game render scale); the named presets are exact sizes, applied at
+/// the next launch. They are monitor sizes, not the phone's pixels: the game
+/// still sees a normal Windows display.
+enum GameResolution: String, Codable, CaseIterable, Identifiable {
+    case scaled
+    case hd720
+    case hd900
+    case fullHD
+    case qhd
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .scaled: return "Automatic (720p × scale)"
+        case .hd720: return "1280 × 720 (HD)"
+        case .hd900: return "1600 × 900 (HD+)"
+        case .fullHD: return "1920 × 1080 (Full HD)"
+        case .qhd: return "2560 × 1440 (QHD)"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .scaled: return "Automatic"
+        case .hd720: return "1280 × 720"
+        case .hd900: return "1600 × 900"
+        case .fullHD: return "1920 × 1080"
+        case .qhd: return "2560 × 1440"
+        }
+    }
+
+    /// Exact guest-monitor pixels, or nil for the scale-driven default.
+    var size: (width: Int, height: Int)? {
+        switch self {
+        case .scaled: return nil
+        case .hd720: return (1280, 720)
+        case .hd900: return (1600, 900)
+        case .fullHD: return (1920, 1080)
+        case .qhd: return (2560, 1440)
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .scaled:
+            return "The session monitor is 1280 × 720 times the render scale below. This is the long-standing default."
+        case .hd720:
+            return "A 1280 × 720 Windows monitor. The lightest option and the same as 100% automatic."
+        case .hd900:
+            return "A 1600 × 900 monitor: sharper than 720p with a little more GPU load."
+        case .fullHD:
+            return "A 1920 × 1080 monitor. Sharper on a large phone; heavier for the GPU."
+        case .qhd:
+            return "A 2560 × 1440 monitor. The sharpest preset and the heaviest; use it only for light games."
+        }
+    }
+}
+
 /// Frame pacing, mapped onto the engine's own `madeira_set_vsync_locked`
 /// values. The pinned engine's front end documents them as
 /// `1 = 60, 3 = 30, 4 = 40, 0 = display maximum, 2 = uncapped`
@@ -259,7 +321,10 @@ enum ControlLayout: String, Codable, CaseIterable, Identifiable {
 /// build that adds an option must not wipe the settings — or the library —
 /// written by the build before it.
 struct GameSettings: Codable, Equatable, Hashable {
+    /// The Windows monitor size the game renders into, applied at launch.
+    var resolution: GameResolution = .scaled
     /// Render scale relative to the session's logical resolution. 1.0 = native.
+    /// Used only when `resolution` is `.scaled`.
     var resolutionScale: Double = 1.0
     /// Frame pacing. Applied through the engine's own call
     /// `madeira_set_vsync_locked` — not stored-and-ignored.
@@ -315,7 +380,7 @@ struct GameSettings: Codable, Equatable, Hashable {
 
 extension GameSettings {
     enum CodingKeys: String, CodingKey {
-        case resolutionScale, fpsLimit, metalFXUpscaling, syncMode, syncEngine
+        case resolution, resolutionScale, fpsLimit, metalFXUpscaling, syncMode, syncEngine
         case graphicsBackend, environment, launchArguments, workingDirectory
         case fexAVX, reducedX87, cpuCount, dinputPad, anisotropyLimit
         case gameWindows, waitChildren, virtualModeSet
@@ -326,6 +391,7 @@ extension GameSettings {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = GameSettings()
+        resolution = try c.decodeIfPresent(GameResolution.self, forKey: .resolution) ?? d.resolution
         resolutionScale = try c.decodeIfPresent(Double.self, forKey: .resolutionScale) ?? d.resolutionScale
         fpsLimit = try c.decodeIfPresent(FPSLimit.self, forKey: .fpsLimit) ?? d.fpsLimit
         metalFXUpscaling = try c.decodeIfPresent(Bool.self, forKey: .metalFXUpscaling) ?? d.metalFXUpscaling
@@ -350,6 +416,7 @@ extension GameSettings {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(resolution, forKey: .resolution)
         try c.encode(resolutionScale, forKey: .resolutionScale)
         try c.encode(fpsLimit, forKey: .fpsLimit)
         try c.encode(metalFXUpscaling, forKey: .metalFXUpscaling)
@@ -507,6 +574,14 @@ struct EngineStatus: Equatable {
 }
 
 // MARK: - Session state
+
+/// Posted on the main queue when the session host should re-publish its
+/// presentation geometry (rotation settle, a frame stall after a resize, or
+/// returning from the background). The host owns the calls; the engine only
+/// asks it to run them again.
+extension Notification.Name {
+    static let windozSessionDisplayRefresh = Notification.Name("windoz.session.display.refresh")
+}
 
 enum SessionPhase: Equatable {
     case idle

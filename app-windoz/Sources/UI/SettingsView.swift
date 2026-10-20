@@ -14,11 +14,14 @@ struct SettingsView: View {
     @State private var swap = MadeiraConfig.readSwap()
     @State private var swapMessage: String?
     @State private var swapError: String?
+    @AppStorage(SessionPreferences.pointerKey) private var pointerRaw = PointerMode.touchscreen.rawValue
+    @AppStorage(SessionPreferences.ecoKey) private var ecoDefault = false
 
     var body: some View {
         List {
             engineSection
             memorySection
+            sessionSection
             accountsSection
             if AppEnvironment.isLiveContainer {
                 liveContainerSection
@@ -127,6 +130,47 @@ struct SettingsView: View {
         } footer: {
             Text("A file-backed tier for game memory: 1, 2 or 4 GB of the app's temporary storage, off by default. Windoz writes Documents/madeira.cfg and the engine arms the tier on the next launch. It is not iOS virtual memory and cannot exceed free storage.")
         }
+    }
+
+    /// How a finger drives the guest pointer and the engine's low-power thread
+    /// class. Both are session-wide; a game's own layout and resolution stay on
+    /// its page.
+    private var sessionSection: some View {
+        Section {
+            Picker("Pointer", selection: pointerBinding) {
+                ForEach(PointerMode.allCases) { mode in
+                    Text(mode.title).tag(mode.rawValue)
+                }
+            }
+            Text(pointerMode.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Eco mode for new sessions", isOn: ecoBinding)
+            Text("Runs the game's threads at the engine's low-power QoS class. Loading is slower, but the phone keeps more of its thermal budget for gameplay. The session menu can change it live; this is the default.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Session")
+        }
+    }
+
+    private var pointerMode: PointerMode {
+        PointerMode(rawValue: pointerRaw) ?? .touchscreen
+    }
+
+    private var pointerBinding: Binding<String> {
+        Binding(get: { pointerRaw }, set: { value in
+            pointerRaw = value
+            SessionPreferences.pointerMode = PointerMode(rawValue: value) ?? .touchscreen
+        })
+    }
+
+    private var ecoBinding: Binding<Bool> {
+        Binding(get: { ecoDefault }, set: { value in
+            ecoDefault = value
+            SessionPreferences.ecoMode = value
+            if engine.phase.isActive { engine.setEco(value) }
+        })
     }
 
     private var swapSizeBinding: Binding<Int> {

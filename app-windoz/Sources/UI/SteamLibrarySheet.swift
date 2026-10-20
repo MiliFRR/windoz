@@ -321,7 +321,8 @@ struct SteamLibrarySheet: View {
 
     private func checkClient() {
         let root = engine.prefix.url.appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)")
-        steamReady = FileManager.default.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path)
+        let required = ["steam.exe", "steamclient64.dll", "steamclient.dll"]
+        steamReady = required.allSatisfy { FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) }
     }
 
     private func installClient() {

@@ -110,6 +110,40 @@ final class WindozEngine: ObservableObject {
     /// owner decides.
     private var noFrameWarned = false
 
+    /// The frame-stall detector: after the first frame, a guest that stops
+    /// presenting is worth one honest log line and one geometry re-publish
+    /// (a rotation can leave DXMT's swapchain sized for the old surface). It
+    /// never closes the game: a paused title or a long load is not a failure.
+    private var lastPresentedFrames: UInt64 = 0
+    private var lastFrameAdvanceAt: Date?
+    private var frameStallWarned = false
+
+    /// Doz Dock's validated game and its one-use hand-in path. `prepareLaunchMode`
+    /// writes the transfer and sets `MADEIRA_DOCK_AUTH_FILE`; the environment
+    /// builder clears every dock variable before re-arming the mode, so the
+    /// hand-in path must be put back explicitly. Without it the host has no
+    /// sign-in to give Valve's client — the launch looked healthy and then
+    /// failed inside the session.
+    private var dockGameForLaunch: DozDock.Game?
+    private var dockHandoffPath: String?
+
+    /// `madeira_set_eco` / `madeira_get_eco` (Madeira's low-QoS guest-thread
+    /// mode). Resolved at runtime like the frame-pacing call, so a pinned
+    /// engine that does not export them degrades to an honest log line.
+    @Published private(set) var ecoEnabled = false
+    private typealias EcoSetFn = @convention(c) (Int32) -> Void
+    private typealias EcoGetFn = @convention(c) () -> Int32
+    private static let ecoSet: EcoSetFn? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "madeira_set_eco") else { return nil }
+        return unsafeBitCast(symbol, to: EcoSetFn.self)
+    }()
+    private static let ecoGet: EcoGetFn? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "madeira_get_eco") else { return nil }
+        return unsafeBitCast(symbol, to: EcoGetFn.self)
+    }()
+    var ecoIsAvailable: Bool { Self.ecoSet != nil }
+
+
     init(prefix: PrefixManager = PrefixManager()) {
         self.prefix = prefix
         installCallbacks()
@@ -655,6 +689,9 @@ final class WindozEngine: ObservableObject {
         // An abandoned attempt (stall budget or Cancel) must not quietly
         // start the guest when the pool finally answers.
         guard !sessionAbandoned else { throw EngineError.sessionCancelled }
+        // Eco belongs to the guest threads; apply it after the service is up
+        // and before the game's process exists.
+        applyEcoAtSessionStart()
         setStage("Launching the game…")
         startStep(LaunchStepID.guest, detail: "Starting the game's process thread…")
         // The engine reports the exit of the process Windoz hands it through
@@ -701,6 +738,47 @@ final class WindozEngine: ObservableObject {
                    level: .success)
     }
 
+    // MARK: - Eco mode
+
+    /// Apply the engine's low-QoS guest-thread mode live. Eco trades speed for
+    /// power: loading screens finish later but the SoC keeps its thermal
+    /// budget for gameplay. The choice is an app preference, so the next
+    /// session starts the same way.
+    func setEco(_ enabled: Bool, persist: Bool = true) {
+        if persist { SessionPreferences.ecoMode = enabled }
+        guard let set = Self.ecoSet else {
+            ecoEnabled = false
+            log.append("[session] eco mode: this engine build does not export madeira_set_eco — the switch is unavailable.",
+                       level: .warning)
+            return
+        }
+        set(enabled ? 1 : 0)
+        ecoEnabled = enabled
+        log.append("[session] eco mode \(enabled ? "on" : "off") (madeira_set_eco(\(enabled ? 1 : 0))).",
+                   enabled ? .success : .info)
+    }
+
+    /// Called on the session queue right before the guest process exists, so
+    /// the choice applies to the threads that start the game.
+    private func applyEcoAtSessionStart() {
+        let enabled = SessionPreferences.ecoMode
+        Self.ecoSet?(enabled ? 1 : 0)
+        DispatchQueue.main.async { self.ecoEnabled = Self.ecoSet == nil ? false : enabled }
+        if Self.ecoSet == nil {
+            log.append("[session] eco mode unavailable: this engine build does not export madeira_set_eco.", level: .warning)
+        } else {
+            log.append("[session] eco mode \(enabled ? "on" : "off") for this session (madeira_set_eco).")
+        }
+    }
+
+    /// Eco belongs to a running guest. Once the session is over, put the app's
+    /// own threads back to normal even though the preference stays saved.
+    private func disableEcoForIdle() {
+        guard Self.ecoSet != nil else { return }
+        if Self.ecoGet?() != 0 { Self.ecoSet?(0) }
+        if ecoEnabled { ecoEnabled = false }
+    }
+
     /// True while the running session was started through Doz Dock; the
     /// launch report is only read afterwards, and only then.
     private var dockSessionActive = false
@@ -712,6 +790,8 @@ final class WindozEngine: ObservableObject {
         switch game.settings.launchMode {
         case .direct:
             dockSessionActive = false
+            dockGameForLaunch = nil
+            dockHandoffPath = nil
             DozDock.cleanup()
         case .dock:
             guard let dockGame = DozDock.game(for: game, prefix: prefix) else {
@@ -724,17 +804,22 @@ final class WindozEngine: ObservableObject {
                 throw EngineError.dockNotReady("Windoz has no Steam sign-in to hand to Valve's client. Sign in to Steam in Windoz first (Steam library → sign-in), then start the game.")
             }
             let handoff = try DozDock.writeHandoff(account: account, token: token, appID: dockGame.id, prefix: prefix)
+            dockGameForLaunch = dockGame
+            dockHandoffPath = handoff
             dockSessionActive = true
-            log.append("[dock] preflight passed for app \(dockGame.id) — sign-in transfer ready (\(handoff)), host bundled")
+            log.append("[dock] preflight passed for app \(dockGame.id) — sign-in transfer ready (protected file), host bundled")
         case .steamDesktop:
             dockSessionActive = false
+            dockGameForLaunch = nil
+            dockHandoffPath = nil
             DozDock.cleanup()
             let root = prefix.url.appendingPathComponent("drive_c/\(SteamClientRuntime.relativeRoot)")
-            guard FileManager.default.fileExists(atPath: root.appendingPathComponent("steam.exe").path),
-                  FileManager.default.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path) else {
-                throw EngineError.steamDesktopNotReady("Valve's Steam client files are not in the Windows drive yet. In this game's settings, under “Steam launch”, download Steam's components first (about 72 MB from Valve's own CDN).")
+            let required = ["steam.exe", "steamclient64.dll", "steamclient.dll"]
+            let missing = required.filter { !FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) }
+            guard missing.isEmpty else {
+                throw EngineError.steamDesktopNotReady("Valve's Steam client files are incomplete in the Windows drive (missing: \(missing.joined(separator: ", "))). In this game's settings, under “Steam launch”, download Steam's components first (about 72 MB from Valve's own CDN).")
             }
-            log.append("[launch] Steam desktop session — the full Windows Steam client runs in the session; sign in inside it. No game is auto-started.")
+            log.append("[launch] Steam desktop preflight passed — steam.exe and both client DLLs are present.")
         }
     }
 
@@ -842,6 +927,8 @@ final class WindozEngine: ObservableObject {
     /// screen down and leave the message where the game page shows it.
     private func failStartingSession(_ error: Error) {
         sessionAbandoned = true
+        disableEcoForIdle()
+        clearDockLaunchState()
         sessionTimer?.invalidate(); sessionTimer = nil
         launchWatchdog?.invalidate(); launchWatchdog = nil
         let message = (error as? EngineError)?.localizedDescription ?? error.localizedDescription
@@ -860,6 +947,7 @@ final class WindozEngine: ObservableObject {
     /// than abandoned silently.
     private func cancelStartingSession() {
         sessionAbandoned = true
+        disableEcoForIdle()
         // Unwind the guest-start continuation if that is the stuck piece —
         // without this, Cancel during a wedged start-up would leave the Play
         // button busy forever.
@@ -875,6 +963,7 @@ final class WindozEngine: ObservableObject {
                 if self.phase.isActive || self.sessionGame != nil {
                     self.log.append("[session] launch cancelled before the process started.")
                 }
+                self.clearDockLaunchState()
                 self.phase = .idle
                 self.sessionGame = nil
                 self.sessionDetail = ""
@@ -904,7 +993,7 @@ final class WindozEngine: ObservableObject {
     /// backend choice — is stored and *said to be stored*. Nothing is invented.
     private func applyLaunchEnvironment(for game: InstalledGame) {
         let settings = game.settings
-        let monitor = Self.guestMonitor(scale: settings.resolutionScale)
+        let monitor = Self.guestMonitor(resolution: settings.resolution, scale: settings.resolutionScale)
 
         // Swap memory lives in the engine, not here: the bridge recreates the
         // file-backed tier whenever madeira.cfg asks for it. Say what the next
@@ -943,22 +1032,47 @@ final class WindozEngine: ObservableObject {
             setenv("MADEIRA_GDI_SHARED_SECTION", "1", 1)
             setenv("MADEIRA_JIT_IMAGE_RETIRE", "1", 1)
             setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)
-            if let dockGame = DozDock.game(for: game, prefix: prefix) {
+            setenv("MADEIRA_DESKTOP_FIT", "1", 1)
+            unsetenv("MADEIRA_STEAM_APPID")
+            unsetenv("MADEIRA_STEAM_APPPATH")
+            // `DozDock.clearEnvironment()` above deliberately clears every
+            // dock variable, including the one-use sign-in path. Put the
+            // validated hand-in back: without it the host starts, Valve's
+            // client asks for a sign-in, and the launch fails inside the
+            // session with no useful message.
+            if let dockGame = dockGameForLaunch {
                 DozDock.configure(dockGame)
             }
+            if let dockHandoffPath {
+                setenv("MADEIRA_DOCK_AUTH_FILE", dockHandoffPath, 1)
+            }
             let offline = DozDock.Offline.apply(requested: settings.steamOffline)
-            log.append("[launch] Doz Dock session: MADEIRA_DOCK_SESSION=1, Valve's client starts app "
-                       + "\(game.storeItemID ?? "?") itself. "
+            log.append("[launch] Doz Dock session: MADEIRA_DOCK_SESSION=1, sign-in transfer "
+                       + (dockHandoffPath == nil ? "MISSING" : "armed")
+                       + ", Valve's client starts app \(game.storeItemID ?? "?") itself. "
                        + (offline ? "Offline sign-in requested (MADEIRA_DOCK_OFFLINE=1) — Valve's client decides what it can do offline."
                                   : "Online sign-in (MADEIRA_DOCK_OFFLINE unset)."))
         case .steamDesktop:
             // The full Windows Steam client in a virtual desktop, for manual
-            // sign-in and library use. No game is auto-started.
+            // sign-in and library use. No game is auto-started. The client is
+            // a launcher that reloads and forks its own modules, so it needs
+            // the same desktop-session switches Doz Dock uses: parked module
+            // images that can be retired, the shared GDI section, the image
+            // map guard, and child processes kept in-session. It must not be
+            // given the fixed Steam identity either — Valve's own client is
+            // the identity here.
             setenv("MADEIRA_EXE", SteamClientRuntime.windowsRoot + "\\steam.exe", 1)
             setenv("MADEIRA_WORKDIR", SteamClientRuntime.windowsRoot, 1)
             setenv("MADEIRA_DESKTOP", "1", 1)
+            setenv("MADEIRA_DOCK_SESSION", "1", 1)
+            setenv("MADEIRA_GDI_SHARED_SECTION", "1", 1)
+            setenv("MADEIRA_JIT_IMAGE_RETIRE", "1", 1)
+            setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)
+            setenv("MADEIRA_DESKTOP_FIT", "1", 1)
             unsetenv("MADEIRA_ARGS")
-            log.append("[launch] Steam desktop session: MADEIRA_EXE=\(SteamClientRuntime.windowsRoot)\\steam.exe on a virtual desktop. Sign in inside the session — the password never passes through Windoz.")
+            unsetenv("MADEIRA_STEAM_APPID")
+            unsetenv("MADEIRA_STEAM_APPPATH")
+            log.append("[launch] Steam desktop session: MADEIRA_EXE=\(SteamClientRuntime.windowsRoot)\\steam.exe on a virtual desktop, with the dock desktop switches armed (GDI shared section, image-map guard, JIT image retire). Sign in inside the session — the password never passes through Windoz.")
         case .direct:
             // MADEIRA_EXE: the program to run. The forks resolve both the PE
             // path and the working folder from it, so it must be a Windows
@@ -1022,6 +1136,14 @@ final class WindozEngine: ObservableObject {
         switchVar("MADEIRA_WAIT_CHILDREN", settings.waitChildren ? "1" : nil)
         switchVar("MADEIRA_VIRTUAL_MODE_SET", settings.virtualModeSet.environmentValue)
 
+        // Valve's own client is a launcher: it forks helper processes and
+        // relaunches parts of itself. Keeping children alive is not optional
+        // there, so the full Steam desktop forces it on. A user environment
+        // entry can still override this below, as with every other switch.
+        if settings.launchMode == .steamDesktop {
+            setenv("MADEIRA_WAIT_CHILDREN", "1", 1)
+        }
+
         // The user's own forks switches, named as the forks name them
         // (FEX_X87REDUCEDPRECISION, MADEIRA_CPU_COUNT, DXMT_D9_ANISO_LIMIT, ...).
         // Windoz never invents a key of its own; these apply last so an expert
@@ -1031,6 +1153,9 @@ final class WindozEngine: ObservableObject {
         }
 
         // Reported, with the truth about where each one stands this build.
+        log.append("[launch] guest monitor \(monitor.width)×\(monitor.height) (\(monitor.source)); "
+                   + "keyboard-and-mouse joystick: on-screen WASD keys")
+        log.append("[launch] controller API: XInput always; DirectInput joystick \(settings.dinputPad ? "on (MADEIRA_DINPUT_PAD=1)" : "off")")
         log.append("[launch] frame pacing \(settings.fpsLimit.title) → the engine's own call at session start; "
                    + "sync engine \(settings.syncEngine.title), x87 \(settings.reducedX87 ? "reduced" : "default"), "
                    + "AVX \(settings.fexAVX ? "on" : "default"), CPUs \(settings.cpuCount == 0 ? "auto" : String(settings.cpuCount)), "
@@ -1067,17 +1192,23 @@ final class WindozEngine: ObservableObject {
         "Z:" + host.replacingOccurrences(of: "/", with: "\\")
     }
 
-    /// The guest monitor size the render scale asks for. The scale is relative
-    /// to `guestBaseResolution`; the result is clamped to the range the engine
+    /// The guest monitor size a session asks for. A named preset uses its exact
+    /// pixels; `.scaled` keeps the pre-0.9 behaviour (1280×720 times the
+    /// per-game render scale). Every result is clamped to the range the engine
     /// accepts and kept even-numbered.
-    static func guestMonitor(scale: Double) -> (width: Int, height: Int, source: String) {
-        let clamped = min(max(scale, 0.25), 4.0)
-        func dimension(_ base: Int) -> Int {
-            let scaled = Int((Double(base) * clamped).rounded())
-            let even = scaled - (scaled % 2)
+    static func guestMonitor(resolution: GameResolution, scale: Double) -> (width: Int, height: Int, source: String) {
+        func dimension(_ value: Int) -> Int {
+            let even = value - (value % 2)
             return min(max(even, 320), 4096)
         }
-        return (dimension(guestBaseResolution.width), dimension(guestBaseResolution.height),
+        if let size = resolution.size {
+            return (dimension(size.width), dimension(size.height), "preset:\(resolution.rawValue)")
+        }
+        let clamped = min(max(scale, 0.25), 4.0)
+        func scaledDimension(_ base: Int) -> Int {
+            dimension(Int((Double(base) * clamped).rounded()))
+        }
+        return (scaledDimension(guestBaseResolution.width), scaledDimension(guestBaseResolution.height),
                 "windoz:\(String(format: "%.2f", clamped))")
     }
 
@@ -1090,6 +1221,9 @@ final class WindozEngine: ObservableObject {
     private func startSessionPolling() {
         sessionTimer?.invalidate()
         sawWineProcess = false
+        lastPresentedFrames = 0
+        lastFrameAdvanceAt = nil
+        frameStallWarned = false
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.pollSession()
         }
@@ -1103,6 +1237,21 @@ final class WindozEngine: ObservableObject {
         }
         let raw = madeira_get_present_count()
         sessionFrames = raw >= sessionBaselineFrames ? raw - sessionBaselineFrames : raw
+        let now = Date()
+        if sessionFrames != lastPresentedFrames {
+            lastPresentedFrames = sessionFrames
+            lastFrameAdvanceAt = now
+            frameStallWarned = false
+        } else if sessionFrames > 0, !frameStallWarned,
+                  let last = lastFrameAdvanceAt, now.timeIntervalSince(last) > 12 {
+            // A rotation can leave the swapchain sized for the old surface.
+            // Ask the session host to publish its geometry once more; if that
+            // is not the cause, the log still says exactly when frames
+            // stopped. The game is never killed here.
+            frameStallWarned = true
+            log.append("[session] no new frame for 12 s at \(sessionFrames) presented — re-publishing the display geometry. The process is still running.", level: .warning)
+            NotificationCenter.default.post(name: .windozSessionDisplayRefresh, object: nil)
+        }
         if sessionFrames > 0 && !fpsReapplied {
             // Re-apply now that the guest's swapchain exists — the same call
             // the pinned front end makes from its FPS menu.
@@ -1118,11 +1267,13 @@ final class WindozEngine: ObservableObject {
         if dockSessionActive { updateDockProgress() }
         if wine_process_is_running() != 0 {
             sawWineProcess = true
-            sessionDetail = sessionFrames > 0
-                ? "Rendering — \(sessionFrames) frame\(sessionFrames == 1 ? "" : "s") presented."
-                : (noFrameWarned
-                   ? "No frame in five minutes — the game may still be loading. It keeps running if you leave; the log has the startup stages."
-                   : "The game is starting (no frame yet).")
+            sessionDetail = frameStallWarned && sessionFrames > 0
+                ? "No new frame for 12 s (still running). The display was refreshed once; if it stays frozen, the log has the exact stage."
+                : (sessionFrames > 0
+                   ? "Rendering — \(sessionFrames) frame\(sessionFrames == 1 ? "" : "s") presented."
+                   : (noFrameWarned
+                      ? "No frame in five minutes — the game may still be loading. It keeps running if you leave; the log has the startup stages."
+                      : "The game is starting (no frame yet)."))
         } else if sawWineProcess && wineserver_is_running() == 0 {
             finishSession()
         } else if !sawWineProcess, let start = sessionStart,
@@ -1159,8 +1310,18 @@ final class WindozEngine: ObservableObject {
         guard dockSessionActive else { return nil }
         let fields = DozDock.readReport(prefix: prefix)
         dockSessionActive = false
-        DozDock.cleanup()
+        clearDockLaunchState()
         return DozDock.humanFailure(fields)
+    }
+
+    /// Remove the one-use sign-in transfer and forget the validated dock game.
+    /// Called on every path that ends or abandons a launch, so a token is
+    /// never left in the prefix for a session that did not use it.
+    private func clearDockLaunchState() {
+        dockSessionActive = false
+        dockGameForLaunch = nil
+        dockHandoffPath = nil
+        DozDock.cleanup()
     }
 
     /// The single end-of-session path: playtime is recorded once, the engine's
@@ -1169,6 +1330,7 @@ final class WindozEngine: ObservableObject {
     private func finishSession(early: Bool = false) {
         sessionTimer?.invalidate(); sessionTimer = nil
         launchWatchdog?.invalidate(); launchWatchdog = nil
+        disableEcoForIdle()
         var status: UInt32 = 0
         let crashed = wine_crash_exit_status(&status) == 1
         let title = sessionGame?.title ?? "The game"
@@ -1227,6 +1389,7 @@ final class WindozEngine: ObservableObject {
     /// is not safe.
     func detachSession(reason: String? = nil) {
         guard sessionGame != nil || phase.isActive else { return }
+        disableEcoForIdle()
         sessionTimer?.invalidate(); sessionTimer = nil
         launchWatchdog?.invalidate(); launchWatchdog = nil
         let title = sessionGame?.title ?? "The game"

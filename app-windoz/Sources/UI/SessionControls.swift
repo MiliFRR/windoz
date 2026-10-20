@@ -378,14 +378,14 @@ final class SessionGamepad {
     }
 
     /// 0 = up, clockwise in 45° steps; -1 inside the dead zone.
-    private static func sector(_ x: Double, _ y: Double) -> Int {
+    static func sector(_ x: Double, _ y: Double) -> Int {
         guard (x * x + y * y).squareRoot() >= stickDeadzone else { return -1 }
         var angle = atan2(x, y) * 180 / .pi
         if angle < 0 { angle += 360 }
         return Int((angle + 22.5) / 45.0) % 8
     }
 
-    private static func sectorKeys(_ sector: Int, _ keys: [Int32]) -> [Int32] {
+    static func sectorKeys(_ sector: Int, _ keys: [Int32]) -> [Int32] {
         switch sector {
         case 0: return [keys[0]]
         case 1: return [keys[0], keys[1]]
@@ -620,6 +620,109 @@ final class SessionPadOverlayView: UIView {
     private func place(_ view: PadButtonView?, at center: CGPoint, size: CGFloat) {
         view?.frame = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
         view?.layer.cornerRadius = size / 2
+    }
+}
+
+// MARK: - The keyboard-and-mouse overlay
+
+/// The default keyboard-and-mouse session controls: a thumb stick that emits
+/// W/A/S/D (real key events, not a virtual pad), a wide Space bar along the
+/// bottom, and Escape with Tab directly beneath it at the top left. Empty
+/// areas pass through, so touch and the trackpad still reach the game.
+final class SessionKeyboardMouseOverlayView: UIView {
+    var layout: ControlLayout = .keyboardMouse {
+        didSet {
+            guard layout != oldValue else { return }
+            isHidden = layout != .keyboardMouse
+            if isHidden { releaseAllKeys() }
+        }
+    }
+
+    private let stick = PadStickView(label: "WASD")
+    private let esc = HUDKeyButton(label: "ESC", vk: 0x1B, height: 32, autoLayout: false)
+    private let tab = HUDKeyButton(label: "TAB", vk: 0x09, height: 32, autoLayout: false)
+    private let space: HUDKeyButton
+    private var heldKeys: [Int32] = []
+    private var heldSector = -1
+    private static let wasd: [Int32] = [0x57, 0x44, 0x53, 0x41]
+
+    override init(frame: CGRect) {
+        space = HUDKeyButton(label: "SPACE", vk: 0x20, height: 46, autoLayout: false)
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isMultipleTouchEnabled = true
+        isHidden = true
+
+        stick.onChange = { [weak self] x, y in self?.steer(x: x, y: y) }
+        addSubview(stick)
+        addSubview(space)
+        addSubview(esc)
+        addSubview(tab)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { releaseAllKeys() }
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let safe = safeAreaInsets
+        let margin: CGFloat = 16
+        let minSide = min(bounds.width, bounds.height)
+        let stickSize = min(max(minSide * 0.26, 88), 136)
+        let bottom = bounds.height - safe.bottom - margin
+
+        stick.frame = CGRect(x: safe.left + margin, y: bottom - stickSize,
+                             width: stickSize, height: stickSize)
+
+        let spaceWidth = min(max(bounds.width * 0.30, 132), 220)
+        space.frame = CGRect(x: bounds.midX - spaceWidth / 2,
+                             y: bottom - 46,
+                             width: spaceWidth, height: 46)
+
+        // Escape at the top left with Tab directly beneath it. The HUD's title
+        // stack starts 56 points in, so the two never overlap.
+        let top = safe.top + 8
+        esc.frame = CGRect(x: safe.left + margin, y: top, width: 46, height: 32)
+        tab.frame = CGRect(x: safe.left + margin, y: esc.frame.maxY + 6, width: 46, height: 32)
+    }
+
+    /// Stick → real W/A/S/D key events. Released and re-pressed per 45° sector,
+    /// so a diagonal holds both keys and a thumb wandering inside one sector
+    /// does not stutter.
+    private func steer(x: Double, y: Double) {
+        let sector = SessionGamepad.sector(x, y)
+        guard sector != heldSector else { return }
+        let old = Set(heldKeys)
+        let new = Set(sector < 0 ? [] : SessionGamepad.sectorKeys(sector, Self.wasd))
+        for vk in old.subtracting(new) { winios_post_key(vk, 0) }
+        for vk in new.subtracting(old) { winios_post_key(vk, 1) }
+        heldKeys = Array(new)
+        heldSector = sector
+    }
+
+    func releaseAllKeys() {
+        for vk in heldKeys { winios_post_key(vk, 0) }
+        heldKeys.removeAll()
+        heldSector = -1
+        stick.reset()
+        esc.releaseIfDown()
+        tab.releaseIfDown()
+        space.releaseIfDown()
     }
 }
 

@@ -16,6 +16,7 @@ import SwiftUI
 import UIKit
 import QuartzCore
 import Metal
+import Darwin
 
 // MARK: - The window-level Metal host
 
@@ -45,20 +46,15 @@ final class WindozMetalHostView: UIView {
         if metalLayer.responds(to: syncSelector) {
             metalLayer.perform(syncSelector, with: NSNumber(value: false))
         }
-        // Seed the drawable before any layout is known; the session view
-        // replaces it on every layout pass.
+        // The drawable belongs to DXMT: it sizes the layer from the guest's
+        // swapchain, off the main thread. The app must not write this after
+        // registration — doing so raced DXMT and could leave a stale surface
+        // presenting (the freeze-after-boot finding). The seed below only
+        // exists so a layer created before the first guest frame is valid.
         metalLayer.drawableSize = CGSize(width: 800, height: 600)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    /// Match the layer's backing resolution to the frame it is presenting in.
-    func applyDrawableSize(_ size: CGSize) {
-        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
-        metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: max(size.width * scale, 1),
-                                         height: max(size.height * scale, 1))
-    }
 }
 
 // MARK: - Guest surface layout
@@ -100,7 +96,38 @@ final class SessionSurfaceView: UIView {
     private var primaryTouch: UITouch?
     private lazy var hud = SessionHUDView()
     private lazy var controls = SessionPadOverlayView()
+    private lazy var keyboard = SessionKeyboardMouseOverlayView()
     private lazy var stats = SessionPerformanceView()
+
+    /// Rotation and guest-display observers. Re-installed per presentation and
+    /// removed on teardown; one session at a time.
+    private var displayObservers: [NSObjectProtocol] = []
+    private var drawableObservation: NSKeyValueObservation?
+    private var settleWork: DispatchWorkItem?
+
+    /// The session's pointer contract. `.touchscreen` keeps the original direct
+    /// touch mapping; `.trackpad` owns a desktop-pixel cursor and posts mouse
+    /// events instead of touches.
+    private var pointerMode = SessionPreferences.pointerMode
+    private var trackpadTouch: UITouch?
+    private var trackpadScrollTouch: UITouch?
+    private var trackpadLastPoint = CGPoint.zero
+    private var trackpadStartPoint = CGPoint.zero
+    private var trackpadStartTime: CFTimeInterval = 0
+    private var trackpadMoved = false
+    private var trackpadDragging = false
+    private var trackpadGeneration = 0
+    private var trackpadTwoFinger = false
+    private var trackpadTwoFingerMoved = false
+    private var trackpadTwoFingerStartTime: CFTimeInterval = 0
+    private var trackpadLastTwoFingerY: CGFloat = 0
+    private var trackpadScrollAccum: CGFloat = 0
+    private var cursor = CGPoint.zero
+    private var cursorReady = false
+
+    private let F_MOVE: UInt32 = 0x1, F_LDOWN: UInt32 = 0x2, F_LUP: UInt32 = 0x4
+    private let F_RDOWN: UInt32 = 0x8, F_RUP: UInt32 = 0x10
+    private let F_WHEEL: UInt32 = 0x800, F_ABS: UInt32 = 0x8000
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -122,6 +149,14 @@ final class SessionSurfaceView: UIView {
 
     private var gameRect: CGRect { SessionSurfaceLayout.fittingRect(guest: guestSize, in: bounds) }
 
+    /// True when the engine is hosting a Windows desktop (Doz Dock or the full
+    /// Steam client). The compositor owns the mapping there, and a trackpad
+    /// cursor is drawn by it.
+    private var isDesktopSession: Bool {
+        guard let value = getenv("MADEIRA_DESKTOP") else { return false }
+        return value.pointee == 49   // '1'
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard let window else {
@@ -135,9 +170,14 @@ final class SessionSurfaceView: UIView {
             window.addSubview(host)
         }
         host.isHidden = false
+        // Re-show the compositor if a previous session hid it, then attach the
+        // overlays and publish the geometry before the guest's first frame.
+        winios_compositor_set_hidden(0)
         attachControls(to: window)
         attachHUD(to: window)
         applyLayout()
+        installDisplayObservers()
+        observeDrawableSize()
 
         // Register the layer exactly once per process, before the guest's
         // first swapchain — the engine's requirement, not an optimisation.
@@ -152,26 +192,129 @@ final class SessionSurfaceView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         applyLayout()
-        // The host re-adds itself on its own move events; the controls and the
-        // overlay are pinned back to the top on every layout so they cannot
-        // fall under it.
         if let window {
-            if stats.superview === window {
-                let safe = window.safeAreaInsets
-                stats.frame = CGRect(x: safe.left + 12, y: safe.top + 56, width: 208, height: 96)
-            }
-            if controls.superview === window { window.bringSubviewToFront(controls) }
-            if stats.superview === window { window.bringSubviewToFront(stats) }
-            if hud.superview === window { window.bringSubviewToFront(hud) }
+            layoutOverlays(in: window)
+            window.bringSubviewToFront(controls)
+            window.bringSubviewToFront(keyboard)
+            window.bringSubviewToFront(stats)
+            window.bringSubviewToFront(hud)
         }
     }
 
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        refreshDisplay(reason: "safe area")
+    }
+
+    /// The one place presentation geometry is published. The Metal host is
+    /// sized to the aspect-fit guest rect; the engine's desktop compositor is
+    /// told the whole session frame and the same guest rect, so it can letterbox
+    /// and map clicks exactly the way the host presents. DXMT owns the layer's
+    /// `drawableSize` — writing it here raced its off-main update and could
+    /// leave a stale frame presenting.
     private func applyLayout() {
         guard let window else { return }
         let host = WindozMetalHostView.shared
-        let windowRect = convert(gameRect, to: window)
-        host.frame = windowRect
-        host.applyDrawableSize(windowRect.size)
+        let rect = gameRect
+        let hostRect = convert(rect, to: window)
+        if host.frame != hostRect { host.frame = hostRect }
+
+        let frame = convert(bounds, to: window)
+        winios_set_compositor_frame(Double(frame.minX), Double(frame.minY),
+                                    Double(frame.width), Double(frame.height))
+        let local = rect.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
+        winios_set_desktop_rect(Double(local.minX), Double(local.minY),
+                                Double(local.width), Double(local.height), 1)
+    }
+
+    private func layoutOverlays(in window: UIWindow) {
+        let frame = window.bounds
+        if controls.superview === window, controls.frame != frame {
+            controls.frame = frame
+        }
+        if keyboard.superview === window, keyboard.frame != frame {
+            keyboard.frame = frame
+        }
+        if hud.superview === window, hud.frame != frame {
+            hud.frame = frame
+        }
+        if stats.superview === window {
+            let safe = window.safeAreaInsets
+            stats.frame = CGRect(x: frame.width - safe.right - 12 - 208,
+                                 y: safe.top + 54, width: 208, height: 96)
+        }
+    }
+
+    /// Re-publish after a rotation, a guest display-mode change, or a stall.
+    /// iOS reports the new orientation before the settled window bounds and
+    /// safe area exist, so run once now and once after a short settle.
+    private func refreshDisplay(reason: String) {
+        guard window != nil else { return }
+        applyLayout()
+        if let window { layoutOverlays(in: window) }
+        hud.setNeedsLayout()
+        hud.layoutIfNeeded()
+        controls.setNeedsLayout()
+        controls.layoutIfNeeded()
+        keyboard.setNeedsLayout()
+        keyboard.layoutIfNeeded()
+        settleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.applyLayout()
+            if let window = self.window { self.layoutOverlays(in: window) }
+        }
+        settleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        if reason != "safe area" {
+            EngineLogStream.shared.append("[session] display refresh: \(reason).")
+        }
+    }
+
+    private func installDisplayObservers() {
+        removeDisplayObservers()
+        let center = NotificationCenter.default
+        displayObservers.append(center.addObserver(forName: UIDevice.orientationDidChangeNotification,
+                                                   object: nil, queue: .main) { [weak self] _ in
+            self?.refreshDisplay(reason: "rotation")
+        })
+        displayObservers.append(center.addObserver(forName: Notification.Name(rawValue: MadeiraDisplayModeChangedNotification),
+                                                   object: nil, queue: .main) { [weak self] _ in
+            self?.refreshDisplay(reason: "guest display mode")
+        })
+        displayObservers.append(center.addObserver(forName: .windozSessionDisplayRefresh,
+                                                   object: nil, queue: .main) { [weak self] _ in
+            self?.refreshDisplay(reason: "frame stall")
+        })
+        displayObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                                   object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.window != nil else { return }
+            winios_compositor_set_hidden(0)
+            self.refreshDisplay(reason: "foreground")
+        })
+        displayObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                   object: nil, queue: .main) { [weak self] _ in
+            self?.releaseTrackpad()
+        })
+    }
+
+    private func removeDisplayObservers() {
+        let center = NotificationCenter.default
+        for observer in displayObservers { center.removeObserver(observer) }
+        displayObservers.removeAll()
+    }
+
+    /// DXMT resizes the drawable when the guest's swapchain or display mode
+    /// changes. The app must not write it, but it should re-run its own layout
+    /// when it changes so the host and compositor rects stay in step.
+    private func observeDrawableSize() {
+        drawableObservation?.invalidate()
+        drawableObservation = WindozMetalHostView.shared.metalLayer.observe(\.drawableSize, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, self.window != nil else { return }
+                self.applyLayout()
+            }
+        }
     }
 
     private func attachHUD(to window: UIWindow) {
@@ -192,6 +335,19 @@ final class SessionSurfaceView: UIView {
         hud.onControlLayoutChange = { [weak self] layout in self?.applyControlLayout(layout) }
         hud.performanceEnabled = { SessionPerformanceView.isEnabled }
         hud.onTogglePerformance = { [weak self] in self?.togglePerformance() }
+        hud.pointerMode = { [weak self] in self?.pointerMode ?? SessionPreferences.pointerMode }
+        hud.onPointerModeChange = { [weak self] mode in self?.applyPointerMode(mode) }
+        hud.ecoEnabled = { WindozEngine.shared.ecoEnabled }
+        hud.ecoAvailable = { WindozEngine.shared.ecoIsAvailable }
+        hud.onToggleEco = { WindozEngine.shared.setEco(!WindozEngine.shared.ecoEnabled) }
+        hud.directInput = { [weak self] in self?.sessionGameSettings()?.dinputPad ?? false }
+        hud.onToggleDirectInput = { [weak self] in
+            self?.updateGameSettings { $0.dinputPad.toggle() }
+        }
+        hud.gameResolution = { [weak self] in self?.sessionGameSettings()?.resolution ?? .scaled }
+        hud.onResolutionChange = { [weak self] resolution in
+            self?.updateGameSettings { $0.resolution = resolution }
+        }
         hud.dockStage = {
             let engine = WindozEngine.shared
             if let failure = engine.dockFailure { return (failure, true) }
@@ -208,6 +364,19 @@ final class SessionSurfaceView: UIView {
         return game.settings.controlLayout
     }
 
+    private func sessionGameSettings() -> GameSettings? {
+        guard let id = WindozEngine.shared.sessionGame?.id,
+              let game = GameLibrary.shared.game(withID: id) else { return nil }
+        return game.settings
+    }
+
+    private func updateGameSettings(_ change: (inout GameSettings) -> Void) {
+        guard let id = WindozEngine.shared.sessionGame?.id,
+              var game = GameLibrary.shared.game(withID: id) else { return }
+        change(&game.settings)
+        GameLibrary.shared.setSettings(game.settings, for: id)
+    }
+
     private func attachControls(to window: UIWindow) {
         if controls.superview !== window {
             controls.removeFromSuperview()
@@ -216,6 +385,16 @@ final class SessionSurfaceView: UIView {
         controls.frame = window.bounds
         controls.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         controls.layout = sessionLayout
+
+        if keyboard.superview !== window {
+            keyboard.removeFromSuperview()
+            window.addSubview(keyboard)
+        }
+        keyboard.frame = window.bounds
+        keyboard.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        keyboard.layout = sessionLayout
+        keyboard.isHidden = sessionLayout != .keyboardMouse
+
         SessionGamepad.shared.activate(layout: sessionLayout)
 
         if stats.superview !== window {
@@ -227,12 +406,18 @@ final class SessionSurfaceView: UIView {
 
     private func applyControlLayout(_ layout: ControlLayout) {
         controls.layout = layout
+        keyboard.layout = layout
         SessionGamepad.shared.setLayout(layout)
-        guard let id = WindozEngine.shared.sessionGame?.id,
-              let game = GameLibrary.shared.game(withID: id) else { return }
-        var settings = game.settings
-        settings.controlLayout = layout
-        GameLibrary.shared.setSettings(settings, for: id)
+        updateGameSettings { $0.controlLayout = layout }
+    }
+
+    private func applyPointerMode(_ mode: PointerMode) {
+        guard mode != pointerMode else { return }
+        endPrimaryTouch()
+        releaseTrackpad()
+        pointerMode = mode
+        SessionPreferences.pointerMode = mode
+        EngineLogStream.shared.append("[session] pointer mode: \(mode.title).")
     }
 
     private func togglePerformance() {
@@ -242,38 +427,251 @@ final class SessionSurfaceView: UIView {
     }
 
     private func teardown() {
+        removeDisplayObservers()
+        drawableObservation?.invalidate(); drawableObservation = nil
+        settleWork?.cancel(); settleWork = nil
+        endPrimaryTouch()
+        releaseTrackpad()
         WindozMetalHostView.shared.isHidden = true
+        winios_compositor_set_hidden(1)
         SessionGamepad.shared.deactivate()
+        keyboard.releaseAllKeys()
+        keyboard.removeFromSuperview()
         controls.removeFromSuperview()
         stats.stop()
         stats.removeFromSuperview()
         hud.removeFromSuperview()
     }
 
-    // MARK: Touch → guest (1:1, aspect-fit mapped)
+    // MARK: Touch → guest
+
+    private func activeTouches(_ event: UIEvent?) -> [UITouch] {
+        (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
+    }
+
+    /// Maps a view point to guest pixels. In a desktop session the engine's
+    /// compositor owns the letterbox mapping (including desktop-fit windows),
+    /// so ask it first; direct sessions use the same aspect-fit rectangle the
+    /// Metal host presents in.
+    private func guestPoint(for point: CGPoint) -> (Int32, Int32) {
+        if isDesktopSession, let window {
+            let windowPoint = convert(point, to: window)
+            var x: Int32 = 0, y: Int32 = 0
+            if winios_desktop_point_from_window(Double(windowPoint.x), Double(windowPoint.y), &x, &y) != 0 {
+                return (x, y)
+            }
+        }
+        return SessionSurfaceLayout.guestPoint(point, rect: gameRect, guest: guestSize)
+    }
+
+    private func endPrimaryTouch() {
+        guard let touch = primaryTouch else { return }
+        let (x, y) = guestPoint(for: touch.location(in: self))
+        winios_post_touch_up(x, y)
+        primaryTouch = nil
+    }
+
+    // MARK: Trackpad pointer
+
+    private func averagePoint(_ touches: [UITouch]) -> CGPoint {
+        var x: CGFloat = 0, y: CGFloat = 0
+        for touch in touches {
+            let point = touch.location(in: self)
+            x += point.x; y += point.y
+        }
+        let count = CGFloat(max(touches.count, 1))
+        return CGPoint(x: x / count, y: y / count)
+    }
+
+    private func prepareCursor() {
+        guard !cursorReady else { return }
+        let guest = guestSize
+        cursor = CGPoint(x: guest.width / 2, y: guest.height / 2)
+        cursorReady = true
+        winios_cursor_move(Int32(cursor.x), Int32(cursor.y))
+    }
+
+    private func postPointer(_ flags: UInt32, data: Int32 = 0) {
+        winios_pointer(Int32(cursor.x), Int32(cursor.y), flags, UInt32(bitPattern: data))
+    }
+
+    private func moveCursor(dx: CGFloat, dy: CGFloat) {
+        var width: Int32 = 0, height: Int32 = 0
+        winios_screen_size(&width, &height)
+        let maxX = CGFloat(max(Int(width), 1) - 1)
+        let maxY = CGFloat(max(Int(height), 1) - 1)
+        cursor.x = min(max(cursor.x + dx, 0), maxX)
+        cursor.y = min(max(cursor.y + dy, 0), maxY)
+        postPointer(F_MOVE | F_ABS)
+    }
+
+    /// Releases every button and forgets gesture state. Called on mode change,
+    /// teardown, backgrounding and cancellation — never leave a button down.
+    private func releaseTrackpad() {
+        trackpadGeneration += 1
+        if trackpadDragging { postPointer(F_LUP) }
+        trackpadDragging = false
+        trackpadTwoFinger = false
+        trackpadTwoFingerMoved = false
+        trackpadScrollAccum = 0
+        trackpadTouch = nil
+        trackpadScrollTouch = nil
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard primaryTouch == nil, let touch = touches.first else { return }
+        guard pointerMode == .touchscreen else {
+            beginTrackpad(touches, event: event)
+            return
+        }
+        guard primaryTouch == nil, let touch = touches.first,
+              gameRect.contains(touch.location(in: self)) else { return }
         primaryTouch = touch
-        let (x, y) = SessionSurfaceLayout.guestPoint(touch.location(in: self), rect: gameRect, guest: guestSize)
+        let (x, y) = guestPoint(for: touch.location(in: self))
         winios_post_touch_down(x, y)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard pointerMode == .touchscreen else {
+            moveTrackpad(touches, event: event)
+            return
+        }
         guard let touch = primaryTouch, touches.contains(touch) else { return }
-        let (x, y) = SessionSurfaceLayout.guestPoint(touch.location(in: self), rect: gameRect, guest: guestSize)
+        let (x, y) = guestPoint(for: touch.location(in: self))
         winios_post_touch_move(x, y)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard pointerMode == .touchscreen else {
+            endTrackpad(touches, event: event, cancelled: false)
+            return
+        }
         guard let touch = primaryTouch, touches.contains(touch) else { return }
-        let (x, y) = SessionSurfaceLayout.guestPoint(touch.location(in: self), rect: gameRect, guest: guestSize)
+        let (x, y) = guestPoint(for: touch.location(in: self))
         winios_post_touch_up(x, y)
         primaryTouch = nil
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard pointerMode == .touchscreen else {
+            endTrackpad(touches, event: event, cancelled: true)
+            return
+        }
         touchesEnded(touches, with: event)
+    }
+
+    private func beginTrackpad(_ touches: Set<UITouch>, event: UIEvent?) {
+        prepareCursor()
+        let now = CACurrentMediaTime()
+        let active = activeTouches(event)
+
+        if active.count >= 2 {
+            trackpadTwoFinger = true
+            trackpadTwoFingerMoved = false
+            trackpadTwoFingerStartTime = now
+            trackpadLastTwoFingerY = averagePoint(active).y
+            trackpadScrollAccum = 0
+            trackpadGeneration += 1
+            trackpadScrollTouch = touches.first(where: { $0 !== trackpadTouch }) ?? touches.first
+            if trackpadDragging {
+                postPointer(F_LUP)
+                trackpadDragging = false
+                trackpadTouch = nil
+            }
+            return
+        }
+
+        guard trackpadTouch == nil, let touch = touches.first else { return }
+        let point = touch.location(in: self)
+        trackpadTouch = touch
+        trackpadStartPoint = point
+        trackpadLastPoint = point
+        trackpadStartTime = now
+        trackpadMoved = false
+        trackpadDragging = false
+        trackpadTwoFinger = false
+        trackpadGeneration += 1
+        let generation = trackpadGeneration
+
+        // Hold still for 0.45 s to arm a drag; a quick tap is a click.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, self.trackpadGeneration == generation,
+                  !self.trackpadMoved, !self.trackpadTwoFinger,
+                  !self.trackpadDragging, self.trackpadTouch != nil else { return }
+            self.trackpadDragging = true
+            self.postPointer(self.F_LDOWN)
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }
+    }
+
+    private func moveTrackpad(_ touches: Set<UITouch>, event: UIEvent?) {
+        let active = activeTouches(event)
+        if trackpadTwoFinger {
+            guard active.count >= 2 else { return }
+            let y = averagePoint(active).y
+            let dy = y - trackpadLastTwoFingerY
+            trackpadLastTwoFingerY = y
+            if abs(dy) > 2 { trackpadTwoFingerMoved = true }
+            trackpadScrollAccum += dy
+            // 14 pt of finger travel is one Windows wheel notch. Dragging up
+            // scrolls down through the document, like a touch surface.
+            while trackpadScrollAccum <= -14 {
+                trackpadScrollAccum += 14
+                postPointer(F_WHEEL, data: -120)
+            }
+            while trackpadScrollAccum >= 14 {
+                trackpadScrollAccum -= 14
+                postPointer(F_WHEEL, data: 120)
+            }
+            return
+        }
+
+        guard let touch = trackpadTouch, touches.contains(touch) else { return }
+        let point = touch.location(in: self)
+        let dx = point.x - trackpadLastPoint.x
+        let dy = point.y - trackpadLastPoint.y
+        trackpadLastPoint = point
+        if hypot(point.x - trackpadStartPoint.x, point.y - trackpadStartPoint.y) > 10 {
+            trackpadMoved = true
+        }
+
+        // One finger moves the pointer relative to where it is, like a laptop
+        // pad. Scale the view delta to guest pixels so the pointer tracks what
+        // is drawn under the finger, with a little extra travel.
+        let rect = gameRect
+        guard rect.width > 0, rect.height > 0 else { return }
+        let scale = max(guestSize.width / rect.width, 0.5) * 1.3
+        moveCursor(dx: dx * scale, dy: dy * scale)
+    }
+
+    private func endTrackpad(_ touches: Set<UITouch>, event: UIEvent?, cancelled: Bool) {
+        let now = CACurrentMediaTime()
+        if trackpadTwoFinger {
+            if activeTouches(event).isEmpty {
+                if !cancelled, !trackpadTwoFingerMoved, now - trackpadTwoFingerStartTime < 0.40 {
+                    postPointer(F_RDOWN)
+                    postPointer(F_RUP)
+                }
+                trackpadTwoFinger = false
+                trackpadTwoFingerMoved = false
+                trackpadScrollAccum = 0
+                trackpadScrollTouch = nil
+            }
+            return
+        }
+
+        guard let touch = trackpadTouch, touches.contains(touch) else { return }
+        trackpadGeneration += 1
+        if trackpadDragging {
+            postPointer(F_LUP)
+            trackpadDragging = false
+            trackpadTouch = nil
+            return
+        }
+        if !cancelled, !trackpadMoved, now - trackpadStartTime < 0.5 {
+            postPointer(F_LDOWN)
+            postPointer(F_LUP)
+        }
+        trackpadTouch = nil
     }
 
     // MARK: Hardware keyboard → guest
@@ -399,6 +797,15 @@ final class SessionHUDView: UIView {
     var onControlLayoutChange: ((ControlLayout) -> Void)?
     var performanceEnabled: (() -> Bool)?
     var onTogglePerformance: (() -> Void)?
+    var pointerMode: (() -> PointerMode)?
+    var onPointerModeChange: ((PointerMode) -> Void)?
+    var ecoEnabled: (() -> Bool)?
+    var ecoAvailable: (() -> Bool)?
+    var onToggleEco: (() -> Void)?
+    var directInput: (() -> Bool)?
+    var onToggleDirectInput: (() -> Void)?
+    var gameResolution: (() -> GameResolution)?
+    var onResolutionChange: ((GameResolution) -> Void)?
     /// Doz Dock's live progress (or the honest refusal while the session still
     /// runs). Nil when the session is not a dock session.
     var dockStage: (() -> (text: String, failed: Bool)?)?
@@ -407,17 +814,15 @@ final class SessionHUDView: UIView {
     private let statusLabel = HUDInsetLabel()
     private let dockLabel = HUDInsetLabel()
     private let gearButton = UIButton(type: .system)
+    private let menuButton = UIButton(type: .system)
     private let launchPanel = UIStackView()
     private let launchHeader = UILabel()
     private let launchElapsed = UILabel()
     private let launchCancel = UIButton(type: .system)
     private let launchRows = UIStackView()
-    private let keyRow = UIStackView()
     private var stepRows: [(id: String, glyph: UILabel, detail: UILabel)] = []
-    private var keyButtons: [HUDKeyButton] = []
     private var timer: Timer?
-    private var settingsMenuLayout: ControlLayout?
-    private var settingsMenuPerformance: Bool?
+    private var settingsMenuSignature = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -441,47 +846,50 @@ final class SessionHUDView: UIView {
         } else {
             timer?.invalidate()
             timer = nil
-            releaseHeldKeys()
         }
     }
 
     private func setUp() {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = UIColor.white.withAlphaComponent(0.85)
+        titleLabel.textAlignment = .center
 
-        statusLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        statusLabel.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        statusLabel.textAlignment = .center
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.adjustsFontSizeToFitWidth = true
+        statusLabel.minimumScaleFactor = 0.7
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let textStack = UIStackView(arrangedSubviews: [titleLabel, statusLabel])
         textStack.axis = .vertical
-        textStack.spacing = 4
-        textStack.alignment = .leading
+        textStack.spacing = 3
+        textStack.alignment = .center
         textStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(textStack)
 
-        let menuButton = UIButton(type: .system)
-        var config = UIButton.Configuration.gray()
-        config.title = "Menu"
-        config.image = UIImage(systemName: "chevron.down")
-        config.imagePlacement = .trailing
-        config.imagePadding = 6
-        config.baseForegroundColor = .white
-        config.cornerStyle = .fixed
-        config.background.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-        menuButton.configuration = config
+        // Two compact icon buttons. The old "Menu ˅" text button grew with
+        // the content inset and could not be relied on after a rotation; a
+        // fixed 38-point target with no title does not depend on the title's
+        // intrinsic size.
+        var menuConfig = UIButton.Configuration.gray()
+        menuConfig.image = UIImage(systemName: "line.3.horizontal")
+        menuConfig.baseForegroundColor = .white
+        menuConfig.cornerStyle = .capsule
+        menuConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        menuButton.configuration = menuConfig
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.menu = makeMenu()
         menuButton.accessibilityLabel = "Session menu"
         menuButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(menuButton)
 
-        // The settings gear: control layout and the performance overlay,
-        // changeable while the game runs. It sits left of the Menu button.
         var gearConfig = UIButton.Configuration.gray()
         gearConfig.image = UIImage(systemName: "gearshape.fill")
         gearConfig.baseForegroundColor = .white
-        gearConfig.cornerStyle = .fixed
-        gearConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        gearConfig.cornerStyle = .capsule
+        gearConfig.background.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         gearButton.configuration = gearConfig
         gearButton.showsMenuAsPrimaryAction = true
         gearButton.accessibilityLabel = "Session settings"
@@ -489,35 +897,24 @@ final class SessionHUDView: UIView {
         addSubview(gearButton)
         refreshSettingsMenu()
 
-        // Bottom key row: movement on the left, actions on the right.
-        let arrows = UIStackView(arrangedSubviews: [
-            keyButton("←", 0x25), keyButton("↑", 0x26), keyButton("↓", 0x28), keyButton("→", 0x27),
-        ])
-        arrows.spacing = 8
-        let actions = UIStackView(arrangedSubviews: [
-            keyButton("ESC", 0x1B), keyButton("TAB", 0x09), keyButton("ENTER", 0x0D), keyButton("SPACE", 0x20),
-        ])
-        actions.spacing = 8
-        keyRow.addArrangedSubview(arrows)
-        keyRow.addArrangedSubview(actions)
-        keyRow.spacing = 22
-        keyRow.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(keyRow)
-
+        let textCenter = textStack.centerXAnchor.constraint(equalTo: centerXAnchor)
+        textCenter.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            textStack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            textCenter,
             textStack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8),
+            textStack.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 64),
+            textStack.trailingAnchor.constraint(lessThanOrEqualTo: gearButton.leadingAnchor, constant: -8),
+            textStack.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
 
             menuButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            menuButton.centerYAnchor.constraint(equalTo: textStack.centerYAnchor),
+            menuButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8),
+            menuButton.widthAnchor.constraint(equalToConstant: 38),
+            menuButton.heightAnchor.constraint(equalToConstant: 38),
 
             gearButton.trailingAnchor.constraint(equalTo: menuButton.leadingAnchor, constant: -8),
             gearButton.centerYAnchor.constraint(equalTo: menuButton.centerYAnchor),
-
-            keyRow.centerXAnchor.constraint(equalTo: centerXAnchor),
-            keyRow.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -8),
-            keyRow.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
-            keyRow.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            gearButton.widthAnchor.constraint(equalToConstant: 38),
+            gearButton.heightAnchor.constraint(equalToConstant: 38),
         ])
         setUpDockLabel(textStack: textStack)
         setUpLaunchPanel(textStack: textStack)
@@ -535,9 +932,11 @@ final class SessionHUDView: UIView {
         dockLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dockLabel)
         NSLayoutConstraint.activate([
-            dockLabel.leadingAnchor.constraint(equalTo: textStack.leadingAnchor),
+            dockLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             dockLabel.topAnchor.constraint(equalTo: textStack.bottomAnchor, constant: 8),
-            dockLabel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -80),
+            dockLabel.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            dockLabel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            dockLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
         ])
     }
 
@@ -574,20 +973,16 @@ final class SessionHUDView: UIView {
         launchPanel.addArrangedSubview(launchRows)
 
         NSLayoutConstraint.activate([
-            launchPanel.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            launchPanel.centerXAnchor.constraint(equalTo: centerXAnchor),
             launchPanel.topAnchor.constraint(equalTo: dockLabel.bottomAnchor, constant: 8),
+            launchPanel.leadingAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
             launchPanel.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            launchPanel.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
         ])
     }
 
     @objc private func cancelLaunch() {
         WindozEngine.shared.cancelLaunch()
-    }
-
-    private func keyButton(_ label: String, _ vk: Int32) -> HUDKeyButton {
-        let button = HUDKeyButton(label: label, vk: vk)
-        keyButtons.append(button)
-        return button
     }
 
     private func makeMenu() -> UIMenu {
@@ -618,10 +1013,6 @@ final class SessionHUDView: UIView {
     private func refresh() {
         let text = line?() ?? ""
         if statusLabel.text != text { statusLabel.text = text }
-        // The on-screen pad replaces the key row in the gamepad layouts; the
-        // hardware keyboard keeps working regardless.
-        let gamepad = controlLayout?().isGamepad ?? false
-        if keyRow.isHidden != gamepad { keyRow.isHidden = gamepad }
         refreshDock()
         refreshSettingsMenu()
         refreshLaunchPanel()
@@ -648,30 +1039,75 @@ final class SessionHUDView: UIView {
     private func refreshSettingsMenu() {
         let layout = controlLayout?() ?? .keyboardMouse
         let performance = performanceEnabled?() ?? false
-        guard layout != settingsMenuLayout || performance != settingsMenuPerformance else { return }
-        settingsMenuLayout = layout
-        settingsMenuPerformance = performance
-        gearButton.menu = makeSettingsMenu(layout: layout, performance: performance)
+        let pointer = pointerMode?() ?? .touchscreen
+        let eco = ecoEnabled?() ?? false
+        let ecoAvailable = ecoAvailable?() ?? false
+        let dinput = directInput?() ?? false
+        let resolution = gameResolution?() ?? .scaled
+        let signature = "\(layout.rawValue)|\(performance)|\(pointer.rawValue)|\(eco)|\(ecoAvailable)|\(dinput)|\(resolution.rawValue)"
+        guard signature != settingsMenuSignature else { return }
+        settingsMenuSignature = signature
+        gearButton.menu = makeSettingsMenu(layout: layout, performance: performance, pointer: pointer,
+                                          eco: eco, ecoAvailable: ecoAvailable, dinput: dinput,
+                                          resolution: resolution)
     }
 
-    private func makeSettingsMenu(layout: ControlLayout, performance: Bool) -> UIMenu {
+    private func makeSettingsMenu(layout: ControlLayout, performance: Bool, pointer: PointerMode,
+                                  eco: Bool, ecoAvailable: Bool, dinput: Bool,
+                                  resolution: GameResolution) -> UIMenu {
         let layoutActions = ControlLayout.allCases.map { choice in
             UIAction(title: choice.title, state: choice == layout ? .on : .off) { [weak self] _ in
                 self?.onControlLayoutChange?(choice)
-                self?.settingsMenuLayout = nil
+                self?.settingsMenuSignature = ""
                 self?.refreshSettingsMenu()
             }
         }
         let controls = UIMenu(title: "Controls", image: UIImage(systemName: "gamecontroller"),
                               options: .singleSelection, children: layoutActions)
+
+        let pointerActions = PointerMode.allCases.map { choice in
+            UIAction(title: choice.title, state: choice == pointer ? .on : .off) { [weak self] _ in
+                self?.onPointerModeChange?(choice)
+                self?.settingsMenuSignature = ""
+                self?.refreshSettingsMenu()
+            }
+        }
+        let pointerMenu = UIMenu(title: "Pointer", image: UIImage(systemName: "hand.point.up.left"),
+                                 options: .singleSelection, children: pointerActions)
+
+        let resolutionActions = GameResolution.allCases.map { choice in
+            UIAction(title: choice.shortTitle, state: choice == resolution ? .on : .off) { [weak self] _ in
+                self?.onResolutionChange?(choice)
+                self?.settingsMenuSignature = ""
+                self?.refreshSettingsMenu()
+            }
+        }
+        let resolutionMenu = UIMenu(title: "Resolution (next launch)", image: UIImage(systemName: "display"),
+                                    options: .singleSelection, children: resolutionActions)
+
         let overlay = UIAction(title: "Performance stats", image: UIImage(systemName: "speedometer"),
                                state: performance ? .on : .off) { [weak self] _ in
             self?.onTogglePerformance?()
-            self?.settingsMenuPerformance = nil
+            self?.settingsMenuSignature = ""
+            self?.refreshSettingsMenu()
+        }
+        let ecoAction = UIAction(title: "Eco mode", image: UIImage(systemName: "leaf"),
+                                 attributes: ecoAvailable ? [] : .disabled,
+                                 state: eco ? .on : .off) { [weak self] _ in
+            self?.onToggleEco?()
+            self?.settingsMenuSignature = ""
+            self?.refreshSettingsMenu()
+        }
+        let dinputAction = UIAction(title: "DirectInput joystick (next launch)",
+                                    image: UIImage(systemName: "gamecontroller.badge.plus"),
+                                    state: dinput ? .on : .off) { [weak self] _ in
+            self?.onToggleDirectInput?()
+            self?.settingsMenuSignature = ""
             self?.refreshSettingsMenu()
         }
         return UIMenu(title: "Session settings",
-                      children: [controls, UIMenu(options: .displayInline, children: [overlay])])
+                      children: [controls, pointerMenu, resolutionMenu,
+                                 UIMenu(options: .displayInline, children: [overlay, ecoAction, dinputAction])])
     }
 
     /// Live checklist while a launch is in flight; hidden otherwise. Runs on
@@ -744,10 +1180,6 @@ final class SessionHUDView: UIView {
         case .skipped: return UIColor.white.withAlphaComponent(0.4)
         }
     }
-
-    private func releaseHeldKeys() {
-        keyButtons.forEach { $0.releaseIfDown() }
-    }
 }
 
 /// What the start screen's checklist needs from the engine, read through a
@@ -786,7 +1218,7 @@ final class HUDKeyButton: UIButton {
     private static let idleColor = UIColor.black.withAlphaComponent(0.45)
     private static let heldColor = UIColor.white.withAlphaComponent(0.35)
 
-    init(label: String, vk: Int32) {
+    init(label: String, vk: Int32, width: CGFloat? = nil, height: CGFloat = 40, autoLayout: Bool = true) {
         self.vk = vk
         super.init(frame: .zero)
         setTitle(label, for: .normal)
@@ -796,11 +1228,13 @@ final class HUDKeyButton: UIButton {
         layer.cornerRadius = 10
         layer.borderWidth = 1
         layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
-        translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: label.count > 1 ? 58 : 46),
-            heightAnchor.constraint(equalToConstant: 40),
-        ])
+        if autoLayout {
+            translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                widthAnchor.constraint(equalToConstant: width ?? (label.count > 1 ? 58 : 46)),
+                heightAnchor.constraint(equalToConstant: height),
+            ])
+        }
         accessibilityLabel = "Key \(label)"
         addTarget(self, action: #selector(pressDown), for: [.touchDown, .touchDragEnter])
         addTarget(self, action: #selector(pressUp), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])

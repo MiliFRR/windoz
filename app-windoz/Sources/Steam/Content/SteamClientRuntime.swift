@@ -215,7 +215,8 @@ actor SteamClientInstaller {
         // Prepared already? The client is there and the registry was stamped by
         // the run that prepared it — nothing to do.
         if fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path),
-           fm.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path) {
+           fm.fileExists(atPath: root.appendingPathComponent("steamclient64.dll").path),
+           fm.fileExists(atPath: root.appendingPathComponent("steamclient.dll").path) {
             EngineLogStream.shared.append("[steam-runtime] already prepared at \(root.path)")
             await progress("Steam components are ready.")
             return
