@@ -185,9 +185,9 @@ final class SessionSurfaceView: UIView {
             window.addSubview(host)
         }
         host.isHidden = false
-        // Re-show the compositor if a previous session hid it, then attach the
-        // overlays and publish the geometry before the guest's first frame.
-        winios_compositor_set_hidden(0)
+        // Re-show the compositor only for a desktop session. A direct game
+        // must not inherit a previous desktop session's compositor view.
+        winios_compositor_set_hidden(isDesktopSession ? 0 : 1)
         attachControls(to: window)
         attachHUD(to: window)
         applyLayout()
@@ -303,7 +303,9 @@ final class SessionSurfaceView: UIView {
         displayObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                    object: nil, queue: .main) { [weak self] _ in
             guard let self, self.window != nil else { return }
-            winios_compositor_set_hidden(0)
+            // Only a desktop session owns the compositor; a direct game must
+            // not inherit the previous session's stale desktop above it.
+            winios_compositor_set_hidden(self.isDesktopSession ? 0 : 1)
             self.refreshDisplay(reason: "foreground")
         })
         displayObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification,
