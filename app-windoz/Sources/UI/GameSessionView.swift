@@ -1023,7 +1023,7 @@ final class SessionHUDView: UIView {
         panelContainer.addSubview(panelTitle)
 
         panelClose.setTitle("Done", for: .normal)
-        panelClose.setTitleColor(Theme.accent, for: .normal)
+        panelClose.setTitleColor(UIColor(Theme.accent), for: .normal)
         panelClose.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
         panelClose.addTarget(self, action: #selector(dismissPanel), for: .touchUpInside)
         panelClose.translatesAutoresizingMaskIntoConstraints = false
