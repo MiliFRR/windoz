@@ -210,8 +210,8 @@ struct GameDetailView: View {
                             }
                             DisclosureGroup("Engine details") {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    ForEach(Array(outcome.logTail.suffix(18).enumerated()), id: \.offset) { _, line in
-                                        Text(line)
+                                    ForEach(Array(outcome.logTail.suffix(18).indices), id: \.self) { index in
+                                        Text(outcome.logTail[index])
                                             .font(.system(.caption2, design: .monospaced))
                                             .foregroundStyle(.white.opacity(0.65))
                                             .textSelection(.enabled)
