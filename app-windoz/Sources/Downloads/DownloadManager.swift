@@ -319,6 +319,10 @@ final class DownloadManager: NSObject, ObservableObject {
     // MARK: - Persistence
 
     private struct PersistedItem: Codable {
+        /// The queue UUID is also the background task's `taskDescription`.
+        /// It must survive a relaunch or a restored transfer cannot be matched
+        /// back to its row. Optional for queues written before build 12.
+        var id: UUID?
         var title: String
         var remoteURL: URL
         var destination: URL
@@ -330,7 +334,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
     private func persist() {
         let snapshot = items.filter { !$0.state.isTerminal }.map {
-            PersistedItem(title: $0.title, remoteURL: $0.remoteURL, destination: $0.destination,
+            PersistedItem(id: $0.id, title: $0.title, remoteURL: $0.remoteURL, destination: $0.destination,
                           expectedSHA256: $0.expectedSHA256, totalBytes: $0.totalBytes,
                           receivedBytes: $0.receivedBytes, storeID: $0.storeID)
         }
@@ -363,7 +367,7 @@ final class DownloadManager: NSObject, ObservableObject {
         }
         guard let saved else { return }
         for s in saved where !items.contains(where: { $0.destination == s.destination }) {
-            items.append(DownloadItem(title: s.title, remoteURL: s.remoteURL, destination: s.destination,
+            items.append(DownloadItem(id: s.id ?? UUID(), title: s.title, remoteURL: s.remoteURL, destination: s.destination,
                                       expectedSHA256: s.expectedSHA256, totalBytes: s.totalBytes,
                                       receivedBytes: s.receivedBytes, state: .paused, storeID: s.storeID))
         }
