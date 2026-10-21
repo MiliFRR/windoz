@@ -104,6 +104,9 @@ targets:
       # runtimes shows, with the vendors' official URLs and the pinned hashes.
       - path: Resources/runtime-manifest.json
         buildPhase: resources
+      # The app icon (single 1024 px source; Xcode derives the device sizes).
+      - path: Resources/Assets.xcassets
+        buildPhase: resources
     info:
       path: Windoz/Info.plist
       properties:
@@ -128,9 +131,11 @@ targets:
         UIApplicationSupportsIndirectInputEvents: true
         LSApplicationCategoryType: public.app-category.games
         # JIT: StikDebug and LocalDevVPN are opened by URL; Live Activities show
-        # download progress; a processing task continues downloads in the
-        # background. (The identifier below is the build-time bundle id; a
-        # re-signed install derives the live one at run time.)
+        # download progress. Runtime downloads use a background URLSession, and
+        # Steam/Epic installs take a short processing window. The identifier
+        # below is the build-time bundle id: the plist is not rewritten when the
+        # app is re-signed, so BGTaskScheduler must be given this value, not the
+        # live bundle id composed at run time.
         LSApplicationQueriesSchemes:
           - stikdebug
           - localdevvpn
@@ -162,13 +167,14 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Signing entitlements (get-task-allow + dynamic-codesigning; the file
         # explains each key). The CI build is unsigned, so this only matters if
         # someone signs the project; the plist is kept honest by
         # scripts/generate-entitlements.sh --check, which CI runs.
         CODE_SIGN_ENTITLEMENTS: Config/Windoz.entitlements
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         MARKETING_VERSION: "0.9.1"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
@@ -259,7 +265,7 @@ targets:
         PRODUCT_NAME: WindozJITHelper
         PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER).jit-helper
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         MARKETING_VERSION: "0.9.1"
         # The app's bridging header (engine C glue) must not leak into the
         # helper, which links only StikJIT.

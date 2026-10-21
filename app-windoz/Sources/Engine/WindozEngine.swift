@@ -1431,9 +1431,11 @@ final class WindozEngine: ObservableObject {
             body = "\(title) has exited."
         }
         let message = body + (dockNote.map { " " + $0 } ?? "")
-            + " Wine can start only one game per app run — close Windoz from the app switcher and open it again to play another game."
+            + " Wine can start only one game per app run - close Windoz from the app switcher and open it again to play another game."
+        let engineTail = log.recent(40).map(\.text)
         lastSessionOutcome = SessionOutcome(gameTitle: sessionGame?.title ?? "", crashed: crashed,
-                                            status: status, seconds: seconds, message: message)
+                                            status: status, seconds: seconds, message: message,
+                                            logTail: engineTail)
         log.append("[session] \(message)")
         EngineLogFile.shared.appendEngineLogTail(reason: "the session ended")
         sessionGame = nil

@@ -86,6 +86,8 @@ final class DepotDownloader {
     func install(_ app: SteamAppInfo, steamApps: URL,
                  ownedDepots: @escaping () async -> Set<UInt32>? = { nil },
                  progress report: @escaping (SteamDownloadProgress) -> Void) async throws -> URL {
+        GameDownloadBackground.shared.begin()
+        defer { GameDownloadBackground.shared.end() }
         let depots = app.installDepots()
         guard !depots.isEmpty else { throw SteamError.depotNotFound(app.appID) }
         // Before the key requests, so a refused depot still has its selection logged.

@@ -58,6 +58,8 @@ enum EpicDownloader {
                         control: EpicProtocol.InstallControl? = nil,
                         options: EpicProtocol.Options = EpicProtocol.Options(),
                         progress: @escaping (EpicProtocol.Progress) async -> Void) async throws -> EpicProtocol.Result {
+        await MainActor.run { GameDownloadBackground.shared.begin() }
+        defer { Task { @MainActor in GameDownloadBackground.shared.end() } }
         let folder = try installFolder(named: folderName)
         return try await EpicProtocol.install(
             manifestURL: manifestURL,

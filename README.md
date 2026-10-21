@@ -213,6 +213,18 @@ on the released tree (#60). The automatic keeper release is
 proof; `docs/CHANGES.md` carries the case-by-case checklist and the reasons
 each change is expected to matter.
 
+**Build 0.9.1 (2026-10-21) — owner-fix build, device-verification pending:**
+this round carries the 0.9.0 device fixes (in-HUD gear/Menu panel, the native
+`aarch64-windows` farm for Doz Dock and Steam, per-launch swap cfg, direct eco
+symbols, runtime-manifest fallback, trackpad double-tap/sensitivity and the EA
+import lane), plus the supplied app icon, a real background `URLSession` for
+runtime downloads outside LiveContainer, a best-effort background window for
+Steam/Epic installs, and a shareable session report with engine details for
+standalone failures. The app bundle and helper are `0.9.1` build 11. The IPA
+gate now also refuses a bundle without the desktop runtime files or a compiled
+icon. **No device claims:** the owner's retest is the proof; the case-by-case
+checklist is in `docs/CHANGES.md`.
+
 ## app-windoz — the current app
 
 The app now lives in `app-windoz/`, an [XcodeGen](https://github.com/yonaskolb/XcodeGen)

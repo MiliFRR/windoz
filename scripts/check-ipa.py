@@ -170,6 +170,19 @@ def main() -> int:
             failures.append(f"the executable does not carry the version string {version} "
                             "(AppContainer.displayVersion out of sync with project.yml?)")
 
+    # The home-screen mark is part of the shipped app, not just the checkout.
+    # actool may name the primary icon through Info.plist, emit the derived
+    # PNGs at the bundle root, or both; accept either but never neither.
+    icon_name = info.get("CFBundleIconName")
+    icon_files = info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {}).get("CFBundleIconFiles", [])
+    icon_pngs = [name for name in names
+                 if name.startswith("Payload/Windoz.app/AppIcon") and name.endswith(".png")]
+    if icon_name == "AppIcon" or icon_files or icon_pngs:
+        print("FOUND   app icon", icon_name or icon_files or icon_pngs[:3])
+    else:
+        failures.append("no compiled app icon is in the bundle (AppIcon asset catalog "
+                        "or ASSETCATALOG_COMPILER_APPICON_NAME is missing)")
+
     if failures:
         print("\nFAILURES:")
         for failure in failures:

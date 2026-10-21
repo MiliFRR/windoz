@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct WindozApp: App {
+    @UIApplicationDelegateAdaptor(WindozAppDelegate.self) private var appDelegate
     @StateObject private var engine = WindozEngine.shared
     @StateObject private var library = GameLibrary.shared
 
@@ -13,6 +14,7 @@ struct WindozApp: App {
         AppContainer.bootstrap()
         EngineLogFile.shared.start()
         DozDock.Offline.begin()
+        GameDownloadBackground.shared.register()
         DownloadManager.shared.restore()
         #if DEBUG
         IdleMonitor.shared.start()

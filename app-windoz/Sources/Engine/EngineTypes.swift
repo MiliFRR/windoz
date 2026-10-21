@@ -662,4 +662,24 @@ struct SessionOutcome: Equatable {
     var status: UInt32
     var seconds: Double
     var message: String
+    /// The engine lines nearest the exit. Shown on demand and included in the
+    /// shareable report, so a guest crash can be diagnosed without asking the
+    /// owner to find Settings first.
+    var logTail: [String] = []
+
+    var reportText: String {
+        var lines = [
+            "Windoz session report",
+            "Game: \(gameTitle)",
+            "Crashed: \(crashed ? "yes" : "no")",
+            "Status: 0x\(String(status, radix: 16, uppercase: true))",
+            "Playtime: \(seconds.playtimeDescription)",
+            "",
+            message,
+            "",
+            "Engine tail:",
+        ]
+        lines.append(contentsOf: logTail)
+        return lines.joined(separator: "\n")
+    }
 }

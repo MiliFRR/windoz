@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 import Network
-import BackgroundTasks
+import UIKit
 
 /// One queued download. Value type so the UI can diff and render cheaply.
 struct DownloadItem: Identifiable, Equatable {
@@ -48,28 +48,57 @@ final class DownloadManager: NSObject, ObservableObject {
     @Published var wifiOnly: Bool
     @Published private(set) var onExpensiveConnection: Bool = false
 
-    /// iOS 26 continued-processing identifier; must be prefixed with the *live*
-    /// bundle id, which differs from the build-time one after a re-sign.
-    static var backgroundTaskIdentifier: String { AppEnvironment.bundleIdentifier + ".download" }
+    /// iOS hands a background `URLSession` back to the app when a transfer
+    /// finishes, even after the process was suspended or killed. The identifier
+    /// is per install and must not contain a slash. LiveContainer cannot host
+    /// a guest background session, so that path stays on the in-process queue.
+    static var backgroundSessionIdentifier: String { AppEnvironment.bundleIdentifier + ".background-downloads" }
 
     private var session: URLSession!
-    private var taskToItem: [Int: UUID] = [:]
+    private let usesBackgroundSession: Bool
     private var activeTask: [UUID: URLSessionDownloadTask] = [:]
     private var resumeData: [UUID: Data] = [:]
     private var maxConcurrent = 2
     private let pathMonitor = NWPathMonitor()
     private let persistenceURL: URL
     private let legacyPersistenceURL: URL
+    private var restored = false
+    private lazy var stagingDirectory: URL = {
+        let preferred = AppContainer.storageRoot.appendingPathComponent("windoz-staging", isDirectory: true)
+        if (try? FileManager.default.createDirectory(at: preferred, withIntermediateDirectories: true)) != nil {
+            return preferred
+        }
+        let fallback = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("windoz-staging", isDirectory: true)
+        try? FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
+        return fallback
+    }()
 
     private override init() {
         wifiOnly = UserDefaults.standard.bool(forKey: "windoz.downloads.wifiOnly")
         persistenceURL = AppContainer.storageRoot.appendingPathComponent("windoz-downloads.json")
         legacyPersistenceURL = AppContainer.downloadsFile
-        super.init()
-        let config = URLSessionConfiguration.default
+
+        // A background session is the only kind iOS keeps moving network
+        // traffic for after the app leaves the foreground. Inside
+        // LiveContainer the guest cannot register one, so the queue there
+        // stays a foreground session and the UI says so.
+        let config: URLSessionConfiguration
+        if AppEnvironment.isLiveContainer {
+            usesBackgroundSession = false
+            config = URLSessionConfiguration.default
+        } else {
+            usesBackgroundSession = true
+            config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
+            config.sessionSendsLaunchEvents = true
+            config.isDiscretionary = false
+        }
         config.waitsForConnectivity = true
         config.allowsExpensiveNetworkAccess = true
         config.allowsConstrainedNetworkAccess = true
+        config.httpMaximumConnectionsPerHost = 4
+
+        super.init()
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
@@ -79,7 +108,7 @@ final class DownloadManager: NSObject, ObservableObject {
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "windoz.netpath"))
-        registerBackgroundTask()
+        restore()
     }
 
     // MARK: - Queue control
@@ -123,7 +152,6 @@ final class DownloadManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.resumeData[id] = data
-                self.taskToItem[task.taskIdentifier] = nil
                 self.activeTask[id] = nil
                 self.setState(id, .paused)
                 self.persist()
@@ -139,7 +167,6 @@ final class DownloadManager: NSObject, ObservableObject {
 
     func cancel(_ id: UUID) {
         if let task = activeTask[id] {
-            taskToItem[task.taskIdentifier] = nil
             activeTask[id] = nil
             task.cancel()
         }
@@ -180,52 +207,67 @@ final class DownloadManager: NSObject, ObservableObject {
         } else {
             task = session.downloadTask(with: item.remoteURL)
         }
-        taskToItem[task.taskIdentifier] = item.id
+        // A background task outlives this process. The UUID in taskDescription
+        // is what lets the delegate find the queue item again after a relaunch.
+        task.taskDescription = item.id.uuidString
         activeTask[item.id] = task
         setState(item.id, .downloading, started: true)
         task.resume()
-        beginBackgroundContinuation()
     }
 
-    // MARK: - Background continuation
+    // MARK: - Background hand-off
 
-    /// Whether `BGTaskScheduler` accepts this app's identifier. Registering an
-    /// identifier that is not listed in `BGTaskSchedulerPermittedIdentifiers`
-    /// raises an uncatchable exception, and the live bundle id is not the
-    /// build-time one after a re-sign, so the list is read back first.
-    private var backgroundTaskPermitted = false
-
-    private func registerBackgroundTask() {
-        if AppEnvironment.isLiveContainer {
-            EngineLogStream.shared.append("Continued downloads in the background are unavailable inside LiveContainer (guest apps cannot register BGTaskScheduler identifiers). Keep Windoz open while a download runs.", level: .warning)
-            return
-        }
-        let identifier = Self.backgroundTaskIdentifier
-        let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
-        guard permitted.contains(identifier) else {
-            EngineLogStream.shared.append("Continued downloads in the background are unavailable: \(identifier) is not one of this build's permitted background-task identifiers, so a transfer is paused while Windoz is closed.", level: .warning)
-            return
-        }
-        backgroundTaskPermitted = true
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { [weak self] task in
-            self?.scheduleBackgroundContinuation()
-            self?.pump()
-            task.setTaskCompleted(success: true)
+    /// After a relaunch iOS reconnects the existing background tasks to the
+    /// new session. Walk them once so the UI shows real progress and Pause /
+    /// Cancel still have a task to talk to. `taskDescription` survives the
+    /// process, unlike task identifiers.
+    private func reattachBackgroundTasks() {
+        guard usesBackgroundSession else { return }
+        session.getAllTasks { [weak self] tasks in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for task in tasks {
+                    guard let id = self.itemID(for: task),
+                          let download = task as? URLSessionDownloadTask else { continue }
+                    self.activeTask[id] = download
+                    if let index = self.index(of: id), !self.items[index].state.isTerminal {
+                        self.items[index].state = .downloading
+                        self.items[index].startedAt = self.items[index].startedAt ?? Date()
+                    }
+                }
+                if !tasks.isEmpty {
+                    EngineLogStream.shared.append("[downloads] reattached to \(tasks.count) background transfer(s) after launch.")
+                }
+                self.persist()
+                self.pump()
+            }
         }
     }
 
-    private func beginBackgroundContinuation() {
-        guard backgroundTaskPermitted else { return }
-        scheduleBackgroundContinuation()
+    private func itemID(for task: URLSessionTask) -> UUID? {
+        guard let raw = task.taskDescription, let id = UUID(uuidString: raw),
+              index(of: id) != nil else { return nil }
+        return id
     }
 
-    private func scheduleBackgroundContinuation() {
-        guard backgroundTaskPermitted else { return }
-        let request = BGProcessingTaskRequest(identifier: Self.backgroundTaskIdentifier)
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 1)
-        try? BGTaskScheduler.shared.submit(request)
+    /// Move the system's temporary file somewhere this app controls while the
+    /// delegate callback still guarantees it exists. Reading the destination
+    /// record must happen on the main queue, but the temp file may be deleted
+    /// as soon as this delegate returns.
+    private func stage(_ location: URL) -> URL? {
+        let target = stagingDirectory.appendingPathComponent(UUID().uuidString + ".download")
+        do {
+            try FileManager.default.moveItem(at: location, to: target)
+            return target
+        } catch {
+            do {
+                try FileManager.default.copyItem(at: location, to: target)
+                return target
+            } catch {
+                EngineLogStream.shared.append("[downloads] the finished transfer could not be staged: \(error.localizedDescription)", level: .error)
+                return nil
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -303,6 +345,10 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     func restore() {
+        guard !restored else { return }
+        restored = true
+        defer { reattachBackgroundTasks() }
+
         var saved: [PersistedItem]?
         for url in [persistenceURL, legacyPersistenceURL] {
             if let data = try? Data(contentsOf: url),
@@ -325,8 +371,13 @@ extension DownloadManager: URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
+        guard let id = itemID(for: downloadTask) else { return }
         DispatchQueue.main.async {
-            guard let id = self.taskToItem[downloadTask.taskIdentifier], let i = self.index(of: id) else { return }
+            guard let i = self.index(of: id) else { return }
+            if self.items[i].state == .paused || self.items[i].state == .queued {
+                self.items[i].state = .downloading
+                self.items[i].startedAt = self.items[i].startedAt ?? Date()
+            }
             self.items[i].receivedBytes = totalBytesWritten
             if totalBytesExpectedToWrite > 0 { self.items[i].totalBytes = totalBytesExpectedToWrite }
             if let started = self.items[i].startedAt {
@@ -345,81 +396,97 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
-        let id = taskToItem[downloadTask.taskIdentifier]
-        taskToItem[downloadTask.taskIdentifier] = nil
-        if let id { activeTask[id] = nil }
-        guard let id, let i = index(of: id) else { return }
-        let item = items[i]
+        guard let id = itemID(for: downloadTask) else {
+            // A transfer from a session that no longer has a queue record:
+            // do not leave the system's temp file behind.
+            try? FileManager.default.removeItem(at: location)
+            EngineLogStream.shared.append("[downloads] an unclaimed background transfer finished; its temp file was removed.", level: .warning)
+            return
+        }
+        guard let staged = stage(location) else {
+            DispatchQueue.main.async {
+                self.activeTask[id] = nil
+                self.setState(id, .failed("the finished download could not be staged for saving."))
+                self.pump()
+            }
+            return
+        }
+        DispatchQueue.main.async {
+            self.activeTask[id] = nil
+            self.finishDownload(id: id, staged: staged)
+        }
+    }
 
-        // Move out of the temp location synchronously.
+    /// Main-thread half of a finished transfer: move the staged file into the
+    /// queue's destination, verify its hash, and start the next item.
+    private func finishDownload(id: UUID, staged: URL) {
+        guard let i = index(of: id) else {
+            try? FileManager.default.removeItem(at: staged)
+            return
+        }
+        let item = items[i]
+        let destination = item.destination
+
         do {
-            try FileManager.default.removeItem(at: item.destination)
+            try FileManager.default.removeItem(at: destination)
         } catch {
-            if FileManager.default.fileExists(atPath: item.destination.path) {
+            if FileManager.default.fileExists(atPath: destination.path) {
                 let raw = error as NSError
-                EngineLogStream.shared.append("[downloads] could not clear the previous \(item.destination.lastPathComponent): \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+                EngineLogStream.shared.append("[downloads] could not clear the previous \(destination.lastPathComponent): \(raw.domain) \(raw.code) - \(raw.localizedDescription)", level: .warning)
             }
         }
+
         var saved = false
         do {
-            try FileManager.default.moveItem(at: location, to: item.destination)
+            try FileManager.default.moveItem(at: staged, to: destination)
             saved = true
         } catch {
-            // Device test, 2026-10-17: moving CFNetwork's temp file into the
-            // container answered "you don't have permission". Fall back to a
-            // plain copy through Data, then to the C library's raw write.
             let raw = error as NSError
-            EngineLogStream.shared.append("[downloads] move failed for \(item.destination.lastPathComponent): \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+            EngineLogStream.shared.append("[downloads] move failed for \(destination.lastPathComponent): \(raw.domain) \(raw.code) - \(raw.localizedDescription)", level: .warning)
         }
         if !saved {
             do {
-                let data = try Data(contentsOf: location)
-                try data.write(to: item.destination)
+                try FileManager.default.copyItem(at: staged, to: destination)
                 saved = true
             } catch {
                 let raw = error as NSError
-                EngineLogStream.shared.append("[downloads] copy fallback failed: \(raw.domain) \(raw.code) — \(raw.localizedDescription)", level: .warning)
+                EngineLogStream.shared.append("[downloads] copy fallback failed: \(raw.domain) \(raw.code) - \(raw.localizedDescription)", level: .warning)
             }
         }
-        if !saved, let data = try? Data(contentsOf: location) {
-            let result = ContainerFS.writeFile(item.destination.path, data)
+        if !saved, let data = try? Data(contentsOf: staged) {
+            let result = ContainerFS.writeFile(destination.path, data)
             if result.ok {
                 saved = true
-                EngineLogStream.shared.append("[downloads] saved via the C library: \(item.destination.lastPathComponent)")
+                EngineLogStream.shared.append("[downloads] saved via the C library: \(destination.lastPathComponent)")
             } else {
                 EngineLogStream.shared.append("[downloads] C-library write refused: \(result.detail)", level: .error)
             }
         }
         if saved {
-            try? FileManager.default.removeItem(at: location)
+            try? FileManager.default.removeItem(at: staged)
         } else {
-            EngineLogStream.shared.append("[downloads] \(item.destination.lastPathComponent) could not be saved by any route", level: .error)
-            DispatchQueue.main.async {
-                self.setState(id, .failed("the downloaded file could not be saved — every route was refused, and the log names each errno."))
-            }
+            EngineLogStream.shared.append("[downloads] \(destination.lastPathComponent) could not be saved by any route", level: .error)
+            setState(id, .failed("the downloaded file could not be saved - every route was refused, and the log names each errno."))
+            pump()
             return
         }
 
-        DispatchQueue.main.async {
-            self.items[i].state = .verifying
-            if let problem = self.verify(item, at: item.destination) {
-                self.setState(id, .failed(problem))
-            } else {
-                self.setState(id, .completed)
-                DownloadActivity.shared.finish(for: id)
-            }
-            self.persist()
-            self.pump()
+        items[i].state = .verifying
+        if let problem = verify(item, at: destination) {
+            setState(id, .failed(problem))
+        } else {
+            setState(id, .completed)
+            DownloadActivity.shared.finish(for: id)
         }
+        persist()
+        pump()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let error else { return }
-        let id = taskToItem[task.taskIdentifier]
-        taskToItem[task.taskIdentifier] = nil
-        if let id { activeTask[id] = nil }
-        guard let id else { return }
+        guard let id = itemID(for: task) else { return }
         DispatchQueue.main.async {
+            self.activeTask[id] = nil
             if let resume = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 self.resumeData[id] = resume
                 self.setState(id, .paused)
@@ -427,6 +494,14 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 self.setState(id, .failed(error.localizedDescription))
             }
             self.pump()
+        }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        Task { @MainActor in
+            let handler = WindozAppDelegate.backgroundCompletionHandler
+            WindozAppDelegate.backgroundCompletionHandler = nil
+            handler?()
         }
     }
 }

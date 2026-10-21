@@ -190,6 +190,42 @@ struct GameDetailView: View {
                             Text("Recorded playtime: \(outcome.seconds.playtimeDescription)")
                                 .font(.caption2).foregroundStyle(.white.opacity(0.45))
                         }
+                        if outcome.crashed {
+                            if outcome.status == 0xC0000005,
+                               game.settings.launchMode == .direct,
+                               game.storeID == StoreID.steam.rawValue,
+                               game.storeItemID != nil {
+                                Text("A Steam title can fault in Direct mode when it expects Valve's client. Doz Dock starts it through Steam and is the supported path for those titles.")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.warn.opacity(0.95))
+                                Button("Switch this game to Doz Dock") {
+                                    var settings = game.settings
+                                    settings.launchMode = .dock
+                                    library.setSettings(settings, for: game.id)
+                                    message = "Launch mode set to Doz Dock. Close Windoz from the app switcher, open it again, then press Play."
+                                }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            DisclosureGroup("Engine details") {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    ForEach(Array(outcome.logTail.suffix(18).enumerated()), id: \.offset) { _, line in
+                                        Text(line)
+                                            .font(.system(.caption2, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.65))
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                .padding(.top, 4)
+                            }
+                            .font(.caption2)
+                            .tint(Theme.accent)
+                            ShareLink(item: outcome.reportText) {
+                                Label("Share session report", systemImage: "square.and.arrow.up")
+                            }
+                            .font(.caption2)
+                        }
                     }
                 }
             }

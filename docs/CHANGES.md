@@ -1,5 +1,128 @@
 # windoz — changes
 
+## 0.9.1 (2026-10-21) — owner-fix build: HUD, runtime farms, swap/eco, EA import, icon and background downloads
+
+Built on 0.9.0 (`main` = `7c8e8c8` before this round). Everything below is
+compiled and typechecked; the IPA gate checks the version, the desktop
+runtime files and the compiled app icon. **No device behaviour is claimed
+here.** The owner's iPhone run is the proof, and the checklist at the end says
+exactly what to try.
+
+### The 0.9.0 device report
+
+- **In-session gear and Menu now open.** 0.9.0 hung both controls off
+  `showsMenuAsPrimaryAction`; the HUD is added directly to the `UIWindow` with
+  no presenting view controller, so UIKit had no presenter. Both controls now
+  use target/action and open the custom in-HUD panel (menu, session settings,
+  pointer, trackpad sensitivity, eco, resolution, direct input, performance
+  overlay, close/leave/quit).
+- **Doz Dock and Steam can start their real clients.** 0.9.0 bundled only
+  `arm64ec-windows`; a desktop session needs the native `aarch64-windows`
+  farm for `explorer.exe`, `cmd.exe`, `conhost.exe`, `services.exe` and
+  `rpcss.exe`. A desktop and cursor could paint, but the client could not
+  start. 0.9.1 bundles both farms, and the IPA gate refuses a build without
+  the named desktop files and `arm64ec-windows/dockhost.exe`.
+- **Swap memory arms where the engine reads it.** 0.9.0 wrote only
+  `Documents/madeira.cfg`, which is not writable on the owner's device. 0.9.1
+  writes a per-launch `windoz-engine.cfg` under the writable storage root,
+  points `MADEIRA_CFG_GAME` at it, and pre-arms the swap file/size/coverage
+  variables. The engine reads the game cfg after `madeira.cfg`, so its keys
+  win even when Documents is read-only. The launch log names the cfg path and
+  applied values.
+- **Eco mode calls the engine symbol directly.** `madeira_set_eco` and
+  `madeira_get_eco` were hidden by the engine's visibility flags, so `dlsym`
+  never saw them. The bridging header now declares both, the app calls them,
+  and the HUD/Settings state plus the log report the engine's own answer.
+- **Windows runtimes read a fallback manifest.** The bundled JSON is tried
+  through the standard bundle paths, with an exact copy compiled into the
+  app. The IPA gate compares the packaged JSON with that copy.
+- **Trackpad double-tap and sensitivity.** The second tap alone produces the
+  second click (no triple-click pair); one-finger relative drag and the
+  controller right stick use the same persisted sensitivity, normalized so
+  the 0.9.0 controller speed is unchanged until the slider moves.
+- **EA import lane.** **Add EA game** accepts a self-contained 64-bit EA
+  title. EA Desktop itself remains unsupported: the official bootstrapper is
+  32-bit, there is no i386 farm or WoW64, and no DRM bypass is attempted.
+  Titles that require EA Desktop will not start.
+
+### Standalone launches and the `0xC0000005` report
+
+0.9.0 could not run a desktop session outside LiveContainer because the
+native ARM64 farm was missing; 0.9.1 includes it, so Doz Dock and the Steam
+desktop path can now load their system DLLs. A Steam title that faults with
+`0xC0000005` in **Direct** mode is usually a title that expects Valve's
+client; Direct mode deliberately does not run it. The game page now:
+
+- offers a one-tap **Switch this game to Doz Dock** action for a Steam title
+  that faulted in Direct mode (Windoz must be closed and reopened before the
+  next launch, as with every Wine session);
+- exposes an **Engine details** disclosure with the last engine lines;
+- adds **Share session report**, containing the status, playtime and those
+  engine lines, so a standalone failure can be diagnosed without hunting
+  through Settings.
+
+This is diagnostic and a supported-path correction, not a claim that a
+particular Unity title's `Windows.System.DispatcherQueue` dependency has been
+fixed in the engine. The report is what determines that.
+
+### Background downloads outside LiveContainer
+
+The runtime/launcher queue was a `URLSessionConfiguration.default` session
+with a `BGProcessingTask` that only called `pump()` and completed
+immediately. It now:
+
+- uses a real background `URLSession` (`sessionSendsLaunchEvents`) when the
+  app is **not** inside LiveContainer;
+- puts the queue item's UUID in `taskDescription`, so a relaunch can match
+  reconnected tasks back to the saved queue without trusting task numbers;
+- stages the system's finished temp file synchronously, then moves it to the
+  destination and verifies it on the main queue;
+- reattaches existing background tasks at launch and shows real progress;
+- implements the app delegate's
+  `handleEventsForBackgroundURLSession` and releases iOS's completion handler
+  from `urlSessionDidFinishEvents` after the queue has saved its work.
+
+Inside LiveContainer the guest cannot register a background URLSession, so
+that path deliberately stays on the foreground session; the existing host
+limits text says so.
+
+Steam depot chunks and Epic chunks are app-driven loops, not one file handed
+to the system. They now take the two windows iOS allows — a
+`beginBackgroundTask` grace period and one `BGProcessingTask` — but a
+multi-gigabyte install still needs Windoz kept alive. This is stated as a
+limit rather than presented as an indefinite background transfer.
+
+### The app icon
+
+The supplied blue four-quadrant mark with the black cross is now the app
+icon. It is a single opaque 1024×1024 source in
+`Resources/Assets.xcassets/AppIcon.appiconset`, with
+`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`; Xcode derives the device
+sizes. The IPA gate fails a bundle with no compiled icon.
+
+### What to retest
+
+1. Open a game. Tap the gear and the 3-line Menu. Change pointer mode and
+   trackpad sensitivity; confirm the panels open and rows respond.
+2. Doz Dock and Steam: launch each from the library. Confirm the real client
+   window/game starts, not only a desktop and cursor. If it still fails, send
+   the log lines containing `[engine]`, `[dock-report]`, `[dock]`, `[steam]`
+   and `desktop runtime`.
+3. Eco mode: toggle it in Settings or the HUD; the log should say the engine
+   reports eco on. Check phone heat.
+4. Swap: set 1 GB / 2 GB / 4 GB; the launch log should name the
+   `windoz-engine.cfg` path and the swap MB. Check stability.
+5. Windows runtimes: open the runtime screen; it should load without "The
+   runtime manifest could not be read." Start a runtime download, background
+   Windoz, and confirm it finishes.
+6. Trackpad: tap, double-tap, long-press drag, two-finger scroll, two-finger
+   tap right-click, and move the sensitivity slider.
+7. EA: use Add EA game only for a self-contained 64-bit EA title. EA Desktop
+   is not supported.
+8. Standalone: try the same game outside LiveContainer with Doz Dock. If a
+   Direct-mode Steam title still faults, use the new session report and send
+   it with the log.
+
 ## 0.9.0 (2026-10-20) — the owner round: picture, both Steam paths, pointer, power, display and input
 
 Built on 0.8.0 (`main` = `2a63552`). Everything below is compiled and
