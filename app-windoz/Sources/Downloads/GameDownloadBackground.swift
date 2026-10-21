@@ -32,7 +32,10 @@ final class GameDownloadBackground {
 
     func register() {
         guard !AppEnvironment.isLiveContainer else { return }
-        guard !registered, let identifier = Self.processingIdentifier else {
+        // SwiftUI's app init and the UIKit delegate both call this; the second
+        // call is a no-op, not a missing-identifier warning.
+        guard !registered else { return }
+        guard let identifier = Self.processingIdentifier else {
             EngineLogStream.shared.append("[downloads] game installs cannot take a background processing window: no permitted .download identifier is in this build.", level: .warning)
             return
         }
@@ -43,12 +46,19 @@ final class GameDownloadBackground {
                 return
             }
             Task { @MainActor in
-                self.processingTask = task as? BGProcessingTask
-                task.expirationHandler = { [weak self] in
+                guard let processing = task as? BGProcessingTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                self.processingTask = processing
+                processing.expirationHandler = { [weak self] in
                     Task { @MainActor in self?.expireProcessingTask() }
                 }
                 self.beginBackgroundTask()
-                if self.active == 0 { self.finishProcessingTask(success: true) }
+                if self.active == 0 {
+                    self.finishProcessingTask(success: true)
+                    self.endBackgroundTask()
+                }
             }
         }
     }

@@ -39,8 +39,9 @@ struct DownloadItem: Identifiable, Equatable {
 }
 
 /// A queue of resumable file downloads with free-space checks, an optional
-/// Wi-Fi-only rule and SHA-256 verification. Real `URLSession` transfers, with
-/// `resumeData` so a pause survives a relaunch (the data is persisted).
+/// Wi-Fi-only rule and SHA-256 verification. Real `URLSession` transfers; a
+/// background task is reattached to its queue item after a relaunch by the
+/// UUID in `taskDescription`.
 final class DownloadManager: NSObject, ObservableObject {
     static let shared = DownloadManager()
 
