@@ -19,7 +19,8 @@ concurrency:
 jobs:
   typecheck:
     name: swiftc -typecheck (iOS 26 SDK)
-    runs-on: macos-26
+    # Use the macos-15 arm64 pool while macos-26 capacity is exhausted.
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Check out windoz + Madeira
