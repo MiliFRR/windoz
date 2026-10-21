@@ -246,9 +246,12 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     private func itemID(for task: URLSessionTask) -> UUID? {
-        guard let raw = task.taskDescription, let id = UUID(uuidString: raw),
-              index(of: id) != nil else { return nil }
-        return id
+        // This runs on the URLSession delegate queue, not the main queue.
+        // Do not touch `items` here: the queue can be mutating on main at the
+        // same time. The task description is immutable metadata, and the
+        // main-queue caller checks that the item still exists.
+        guard let raw = task.taskDescription else { return nil }
+        return UUID(uuidString: raw)
     }
 
     /// Move the system's temporary file somewhere this app controls while the
