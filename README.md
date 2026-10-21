@@ -220,7 +220,7 @@ symbols, runtime-manifest fallback, trackpad double-tap/sensitivity and the EA
 import lane), plus the supplied app icon, a real background `URLSession` for
 runtime downloads outside LiveContainer, a best-effort background window for
 Steam/Epic installs, and a shareable session report with engine details for
-standalone failures. The app bundle and helper are `0.9.1` build 11. The IPA
+standalone failures. The app bundle and helper are `0.9.1` build 12. The IPA
 gate now also refuses a bundle without the desktop runtime files or a compiled
 icon. **No device claims:** the owner's retest is the proof; the case-by-case
 checklist is in `docs/CHANGES.md`.

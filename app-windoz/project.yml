@@ -174,7 +174,7 @@ targets:
         # scripts/generate-entitlements.sh --check, which CI runs.
         CODE_SIGN_ENTITLEMENTS: Config/Windoz.entitlements
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "11"
+        CURRENT_PROJECT_VERSION: "12"
         MARKETING_VERSION: "0.9.1"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
@@ -265,7 +265,7 @@ targets:
         PRODUCT_NAME: WindozJITHelper
         PRODUCT_BUNDLE_IDENTIFIER: $(WINDOZ_BUNDLE_IDENTIFIER).jit-helper
         GENERATE_INFOPLIST_FILE: "NO"
-        CURRENT_PROJECT_VERSION: "11"
+        CURRENT_PROJECT_VERSION: "12"
         MARKETING_VERSION: "0.9.1"
         # The app's bridging header (engine C glue) must not leak into the
         # helper, which links only StikJIT.
